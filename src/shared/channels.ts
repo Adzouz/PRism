@@ -43,6 +43,14 @@ export const ipcChannels = [
   'config:status',
   'onboarding:complete',
   'config:reset',
+  'prs:list',
+  'prs:detail',
+  'prs:setFlags',
+  'prs:setStage',
+  'sync:now',
+  'sync:status',
+  'board:getSettings',
+  'board:setSettings',
 ] as const
 
 export type IpcChannel = (typeof ipcChannels)[number]
@@ -51,7 +59,13 @@ export function isIpcChannel(value: unknown): value is IpcChannel {
   return typeof value === 'string' && (ipcChannels as readonly string[]).includes(value)
 }
 
-export const ipcEvents = ['theme:changed', 'source:log', 'skills:changed'] as const
+export const ipcEvents = [
+  'theme:changed',
+  'source:log',
+  'skills:changed',
+  'prs:changed',
+  'sync:status',
+] as const
 
 export type IpcEvent = (typeof ipcEvents)[number]
 

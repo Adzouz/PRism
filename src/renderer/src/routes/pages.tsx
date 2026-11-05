@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
-  Archive,
   ArrowUpRight,
   Bot,
   ChevronDown,
@@ -12,15 +11,29 @@ import {
 } from 'lucide-react'
 import { GithubIcon } from '@/components/github-icon'
 import { EmptyState, Page, QuickCard, Section } from '@/components/page'
+import { Switch } from '@/components/ui/switch'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ArchiveList } from '@/features/board/archive'
+import { Board } from '@/features/board/board'
+import { isNeedsMe } from '@/features/board/model'
+import { SyncIndicator } from '@/features/board/sync-indicator'
 import { RepoSetup } from '@/features/onboarding/repo-setup'
 import { ResetConfiguration } from '@/features/onboarding/reset'
 import { StepAgent } from '@/features/onboarding/step-agent'
 import { StepGithub } from '@/features/onboarding/step-github'
 import { StepRepos } from '@/features/onboarding/step-repos'
-import { useConfigStatus, useRepos, useSkillsChanged } from '@/lib/api'
+import {
+  invoke,
+  keys,
+  useAction,
+  useBoardSettings,
+  useConfigStatus,
+  usePrs,
+  useRepos,
+  useSkillsChanged,
+} from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 function greeting() {
@@ -32,6 +45,10 @@ function greeting() {
 
 export function DashboardPage() {
   const { data: status } = useConfigStatus()
+  const { data: prs = [] } = usePrs()
+  const active = prs.filter((pr) => pr.archivedAt === null && pr.state === 'OPEN')
+  const toReview = active.filter((pr) => pr.tab === 'reviews' && isNeedsMe(pr)).length
+  const mine = active.filter((pr) => pr.tab === 'mine').length
   return (
     <div className="pb-10">
       <div className="space-y-10">
@@ -72,14 +89,14 @@ export function DashboardPage() {
               icon={GitPullRequest}
               label="Reviews"
               description="Pull requests waiting for your review"
-              meta="0 to review"
+              meta={`${toReview} to review`}
             />
             <QuickCard
               to="/my-prs"
               icon={GitPullRequestArrow}
               label="My PRs"
               description="What you authored or took over"
-              meta="0 open"
+              meta={`${mine} open`}
             />
             <QuickCard
               to="/runs"
@@ -97,32 +114,16 @@ export function DashboardPage() {
 
 export function ReviewsPage() {
   return (
-    <Page
-      eyebrow="Pull requests"
-      title="Reviews"
-      description="Pull requests from others that need your review."
-    >
-      <EmptyState
-        icon={GitPullRequest}
-        title="No reviews"
-        description="Pull requests that request your review will show up here."
-      />
+    <Page eyebrow="Pull requests" title="Reviews" actions={<SyncIndicator />}>
+      <Board tab="reviews" />
     </Page>
   )
 }
 
 export function MyPrsPage() {
   return (
-    <Page
-      eyebrow="Pull requests"
-      title="My PRs"
-      description="Pull requests you authored or took over."
-    >
-      <EmptyState
-        icon={GitPullRequestArrow}
-        title="No pull requests"
-        description="Your open pull requests will show up here."
-      />
+    <Page eyebrow="Pull requests" title="My PRs" actions={<SyncIndicator />}>
+      <Board tab="mine" />
     </Page>
   )
 }
@@ -130,11 +131,7 @@ export function MyPrsPage() {
 export function ArchivePage() {
   return (
     <Page eyebrow="Pull requests" title="Archive" description="Kept out of the way, restorable.">
-      <EmptyState
-        icon={Archive}
-        title="Archive is empty"
-        description="Archived pull requests are kept here and can be restored."
-      />
+      <ArchiveList />
     </Page>
   )
 }
@@ -148,6 +145,28 @@ export function RunsPage() {
         description="Review and address-comments runs will stream here live."
       />
     </Page>
+  )
+}
+
+function BoardOptions() {
+  const { data: settings } = useBoardSettings()
+  const save = useAction(
+    (value: { autoArchiveDone: boolean }) => invoke('board:setSettings', value),
+    [keys.boardSettings],
+  )
+  return (
+    <label className="flex max-w-2xl items-center justify-between gap-4 rounded-2xl bg-surface p-5">
+      <div>
+        <p className="text-base font-medium">Archive done pull requests</p>
+        <p className="text-sm text-muted-foreground">
+          Merged or closed PRs move to the Archive 24 hours after they finish.
+        </p>
+      </div>
+      <Switch
+        checked={settings?.autoArchiveDone ?? true}
+        onCheckedChange={(autoArchiveDone) => save.mutate({ autoArchiveDone })}
+      />
+    </label>
   )
 }
 
@@ -217,6 +236,9 @@ export function SettingsPage() {
             </Link>
           </Button>
         </div>
+      </Section>
+      <Section title="Board">
+        <BoardOptions />
       </Section>
       <Section title="Appearance">
         <div className="flex max-w-2xl items-center justify-between gap-4 rounded-2xl bg-surface p-5">

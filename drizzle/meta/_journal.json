@@ -15,6 +15,20 @@
       "when": 1793887356113,
       "tag": "0001_overconfident_viper",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793890165298,
+      "tag": "0002_fine_nitro",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793892424492,
+      "tag": "0003_spotty_gamora",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,1 @@
+ALTER TABLE `pr_flags` ADD `restored_at` integer;

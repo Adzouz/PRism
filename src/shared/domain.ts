@@ -200,3 +200,152 @@ export const proposal = z.object({
 export type Proposal = z.infer<typeof proposal>
 
 export const commandResult = z.object({ ok: z.boolean(), output: z.string() })
+
+export const boardTabs = ['reviews', 'mine'] as const
+export const boardTab = z.enum(boardTabs)
+export type BoardTab = z.infer<typeof boardTab>
+
+export const boardStages = [
+  'to-review',
+  'reviewing',
+  'verdict-ready',
+  'waiting-on-author',
+  're-review',
+  'draft',
+  'waiting-for-review',
+  'changes-requested',
+  'addressing',
+  'ready-to-post',
+  'approved',
+  'done',
+] as const
+export const boardStage = z.enum(boardStages)
+export type BoardStage = z.infer<typeof boardStage>
+
+export type BoardColumn = {
+  stage: BoardStage
+  label: string
+  needsMe?: boolean
+  agent?: boolean
+}
+
+export const boardColumns: Record<BoardTab, BoardColumn[]> = {
+  reviews: [
+    { stage: 'to-review', label: 'To review', needsMe: true },
+    { stage: 'reviewing', label: 'Reviewing', agent: true },
+    { stage: 'verdict-ready', label: 'Verdict ready', needsMe: true, agent: true },
+    { stage: 'waiting-on-author', label: 'Waiting on author' },
+    { stage: 're-review', label: 'Re-review', needsMe: true },
+    { stage: 'approved', label: 'Approved' },
+    { stage: 'done', label: 'Done' },
+  ],
+  mine: [
+    { stage: 'draft', label: 'Draft' },
+    { stage: 'waiting-for-review', label: 'Waiting for review' },
+    { stage: 'changes-requested', label: 'Changes requested', needsMe: true },
+    { stage: 'addressing', label: 'Addressing', agent: true },
+    { stage: 'ready-to-post', label: 'Ready to post', needsMe: true, agent: true },
+    { stage: 'approved', label: 'Approved' },
+    { stage: 'done', label: 'Done' },
+  ],
+}
+
+export const prRole = z.enum(['reviewer', 'author', 'takeover'])
+export type PrRole = z.infer<typeof prRole>
+
+export const ciState = z.enum(['success', 'failure', 'pending', 'none'])
+export type CiState = z.infer<typeof ciState>
+
+export const prLabel = z.object({ name: z.string(), color: z.string() })
+export type PrLabel = z.infer<typeof prLabel>
+
+export const boardPr = z.object({
+  id: z.number(),
+  repoId: z.number(),
+  repo: z.string(),
+  number: z.number(),
+  title: z.string(),
+  url: z.string(),
+  author: z.string(),
+  authorAvatar: z.string().nullable(),
+  isDraft: z.boolean(),
+  state: z.enum(['OPEN', 'CLOSED', 'MERGED']),
+  ciState,
+  labels: z.array(prLabel),
+  additions: z.number(),
+  deletions: z.number(),
+  changedFiles: z.number(),
+  unresolvedThreads: z.number(),
+  reviewRequested: z.boolean(),
+  requestedTeam: z.string().nullable(),
+  myReviewState: z.string().nullable(),
+  role: prRole,
+  tab: boardTab,
+  derivedStage: boardStage,
+  stage: boardStage,
+  manual: z.boolean(),
+  stageSince: z.number(),
+  updatedAt: z.number(),
+  closedAt: z.number().nullable(),
+  starred: z.boolean(),
+  hidden: z.boolean(),
+  archivedAt: z.number().nullable(),
+})
+export type BoardPr = z.infer<typeof boardPr>
+
+export const checkState = z.enum(['success', 'failure', 'pending', 'neutral', 'skipped'])
+export type CheckState = z.infer<typeof checkState>
+
+export const prDetail = z.object({
+  id: z.number(),
+  bodyHtml: z.string(),
+  headRef: z.string(),
+  baseRef: z.string(),
+  headOwner: z.string().nullable(),
+  commits: z.number(),
+  createdAt: z.number(),
+  mergeable: z.string().nullable(),
+  labels: z.array(prLabel),
+  linkedIssues: z.array(
+    z.object({ number: z.number(), title: z.string(), url: z.string(), state: z.string() }),
+  ),
+  reviewers: z.array(
+    z.object({
+      name: z.string(),
+      avatar: z.string().nullable(),
+      kind: z.enum(['user', 'team']),
+      state: z.string(),
+    }),
+  ),
+  checks: z.array(
+    z.object({
+      name: z.string(),
+      state: checkState,
+      url: z.string().nullable(),
+      ignored: z.boolean(),
+    }),
+  ),
+  ciState,
+})
+export type PrDetail = z.infer<typeof prDetail>
+
+export const repoSyncState = z.object({
+  repoId: z.number(),
+  repo: z.string(),
+  state: z.enum(['idle', 'syncing', 'done', 'skipped', 'error']),
+  error: z.string().nullable(),
+  reviews: z.number(),
+  mine: z.number(),
+})
+
+export const syncStatus = z.object({
+  running: z.boolean(),
+  lastSyncAt: z.number().nullable(),
+  lastError: z.string().nullable(),
+  rate: z.object({ limit: z.number(), remaining: z.number(), resetAt: z.number() }).nullable(),
+  repos: z.array(repoSyncState),
+})
+export type SyncStatus = z.infer<typeof syncStatus>
+
+export const boardSettings = z.object({ autoArchiveDone: z.boolean() })
+export type BoardSettings = z.infer<typeof boardSettings>

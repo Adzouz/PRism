@@ -7,20 +7,25 @@ export function Page({
   eyebrow,
   title,
   description,
+  actions,
   children,
 }: {
   eyebrow: string
   title: string
   description?: string
+  actions?: ReactNode
   children: ReactNode
 }) {
   return (
     <div className="pb-10">
       <div>
-        <header className="drag mb-8 space-y-2 pt-9">
-          <p className="text-sm font-medium text-accent-foreground">{eyebrow}</p>
-          <h1 className="text-4xl font-semibold tracking-tight">{title}</h1>
-          {description && <p className="text-base text-muted-foreground">{description}</p>}
+        <header className="drag mb-8 flex items-end justify-between gap-6 pt-9">
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-accent-foreground">{eyebrow}</p>
+            <h1 className="text-4xl font-semibold tracking-tight">{title}</h1>
+            {description && <p className="text-base text-muted-foreground">{description}</p>}
+          </div>
+          {actions}
         </header>
         <div className="space-y-10">{children}</div>
       </div>
