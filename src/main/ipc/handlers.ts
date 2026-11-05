@@ -46,6 +46,7 @@ import {
   setIdentity,
   syncSource,
 } from '../services/sources'
+import type { BoardChannel } from './board-handlers'
 import type { registerIpc } from './register'
 
 type Handlers = Parameters<typeof registerIpc>[0]
@@ -60,7 +61,10 @@ async function pick(options: Electron.OpenDialogOptions) {
 
 export function onboardingHandlers(
   ctx: Ctx,
-): Omit<Handlers, 'app:info' | 'settings:getTheme' | 'settings:setTheme' | 'theme:isDark'> {
+): Omit<
+  Handlers,
+  'app:info' | 'settings:getTheme' | 'settings:setTheme' | 'theme:isDark' | BoardChannel
+> {
   return {
     'dialog:pickFolder': ({ title, defaultPath }) =>
       pick({ title, defaultPath, properties: ['openDirectory', 'createDirectory'] }),

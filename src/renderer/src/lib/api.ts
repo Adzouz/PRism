@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query'
+import type { BoardPr } from '@shared/domain'
 import type { IpcChannel, IpcInput, IpcOutput } from '@shared/ipc'
 
 export function invoke<C extends IpcChannel>(
@@ -40,6 +41,10 @@ export const keys = {
   proposals: (sourceId: number | null) => ['proposals', sourceId] as const,
   config: ['config'] as const,
   githubRepos: ['github', 'repos'] as const,
+  prs: ['prs'] as const,
+  prDetail: (id: number) => ['prs', id, 'detail'] as const,
+  sync: ['sync'] as const,
+  boardSettings: ['board', 'settings'] as const,
 }
 
 export const useGithubStatus = () =>
@@ -103,3 +108,83 @@ export function useSkillsChanged() {
     [client],
   )
 }
+
+export const usePrs = () => useQuery({ queryKey: keys.prs, queryFn: () => invoke('prs:list') })
+
+export const usePrDetail = (id: number | null) =>
+  useQuery({
+    queryKey: keys.prDetail(id ?? 0),
+    queryFn: () => invoke('prs:detail', id!),
+    enabled: id !== null,
+    staleTime: 30_000,
+  })
+
+export const useSyncStatus = () =>
+  useQuery({ queryKey: keys.sync, queryFn: () => invoke('sync:status') })
+
+export const useBoardSettings = () =>
+  useQuery({ queryKey: keys.boardSettings, queryFn: () => invoke('board:getSettings') })
+
+export function useBoardEvents() {
+  const client = useQueryClient()
+  useEffect(() => {
+    const offPrs = window.prism.on('prs:changed', () => {
+      void client.invalidateQueries({ queryKey: keys.prs, exact: true })
+    })
+    const offSync = window.prism.on('sync:status', (status) => {
+      client.setQueryData(keys.sync, status)
+    })
+    return () => {
+      offPrs()
+      offSync()
+    }
+  }, [client])
+}
+
+export function usePrMutation<I extends { id: number }>(
+  fn: (input: I) => Promise<BoardPr>,
+  optimistic: (pr: BoardPr, input: I) => BoardPr,
+) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onMutate: async (input) => {
+      await client.cancelQueries({ queryKey: keys.prs, exact: true })
+      const previous = client.getQueryData<BoardPr[]>(keys.prs)
+      client.setQueryData<BoardPr[]>(keys.prs, (list) =>
+        list?.map((pr) => (pr.id === input.id ? optimistic(pr, input) : pr)),
+      )
+      return { previous }
+    },
+    onError: (_error, _input, context) => {
+      if (context?.previous) client.setQueryData(keys.prs, context.previous)
+    },
+    onSuccess: (pr) => {
+      client.setQueryData<BoardPr[]>(keys.prs, (list) =>
+        list?.map((item) => (item.id === pr.id ? pr : item)),
+      )
+    },
+  })
+}
+
+type FlagInput = { id: number; starred?: boolean; hidden?: boolean; archived?: boolean }
+
+export const useSetFlags = () =>
+  usePrMutation(
+    (input: FlagInput) => invoke('prs:setFlags', input),
+    (pr, { starred, hidden, archived }) => ({
+      ...pr,
+      starred: starred ?? pr.starred,
+      hidden: hidden ?? pr.hidden,
+      archivedAt: archived === undefined ? pr.archivedAt : archived ? Date.now() : null,
+    }),
+  )
+
+export const useSetStage = () =>
+  usePrMutation(
+    (input: { id: number; stage: BoardPr['stage'] | null }) => invoke('prs:setStage', input),
+    (pr, { stage }) => {
+      const next = stage ?? pr.derivedStage
+      return { ...pr, stage: next, manual: next !== pr.derivedStage, stageSince: Date.now() }
+    },
+  )

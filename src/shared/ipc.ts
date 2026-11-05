@@ -4,11 +4,15 @@ import {
   agentConfig,
   agentId,
   agentStatus,
+  boardPr,
+  boardSettings,
+  boardStage,
   commandResult,
   configStatus,
   effectiveBinding,
   githubRepoSummary,
   githubStatus,
+  prDetail,
   proposal,
   repo,
   repoOptions,
@@ -17,6 +21,8 @@ import {
   skillSource,
   sourceKind,
   stage,
+  syncStatus,
+  type SyncStatus,
 } from './domain'
 
 export {
@@ -222,6 +228,43 @@ export const ipcContract = {
     input: z.void(),
     output: configStatus,
   },
+  'prs:list': {
+    input: z.void(),
+    output: z.array(boardPr),
+  },
+  'prs:detail': {
+    input: id,
+    output: prDetail,
+  },
+  'prs:setFlags': {
+    input: z.object({
+      id,
+      starred: z.boolean().optional(),
+      hidden: z.boolean().optional(),
+      archived: z.boolean().optional(),
+    }),
+    output: boardPr,
+  },
+  'prs:setStage': {
+    input: z.object({ id, stage: boardStage.nullable() }),
+    output: boardPr,
+  },
+  'sync:now': {
+    input: z.void(),
+    output: syncStatus,
+  },
+  'sync:status': {
+    input: z.void(),
+    output: syncStatus,
+  },
+  'board:getSettings': {
+    input: z.void(),
+    output: boardSettings,
+  },
+  'board:setSettings': {
+    input: boardSettings,
+    output: boardSettings,
+  },
 } satisfies Record<IpcChannel, { input: z.ZodType; output: z.ZodType }>
 
 export type IpcContract = typeof ipcContract
@@ -232,6 +275,8 @@ export interface IpcEventPayloads {
   'theme:changed': { dark: boolean }
   'source:log': { sourceId: number; chunk: string }
   'skills:changed': null
+  'prs:changed': null
+  'sync:status': SyncStatus
 }
 
 export type IpcEventPayload<E extends IpcEvent> = IpcEventPayloads[E]

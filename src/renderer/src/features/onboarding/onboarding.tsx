@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
 import { ArrowLeft, ArrowRight, Check, Loader2 } from 'lucide-react'
 import logo from '@/assets/logo.png'
 import { ErrorText } from '@/components/page'
@@ -15,6 +14,7 @@ import {
   useSkillsChanged,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { InitialScan } from './initial-scan'
 import { RepoSetup } from './repo-setup'
 import { StepAgent } from './step-agent'
 import { StepGithub } from './step-github'
@@ -72,9 +72,9 @@ function RepoTabs({
 
 export function OnboardingPage() {
   useSkillsChanged()
-  const navigate = useNavigate()
   const [step, setStep] = useState<StepId>('github')
   const [repoTab, setRepoTab] = useState<number | null>(null)
+  const [scanning, setScanning] = useState(false)
   const edit = (target: EditTarget) => {
     if (target.repoId) setRepoTab(target.repoId)
     setStep(target.step)
@@ -138,19 +138,25 @@ export function OnboardingPage() {
         <div className="mx-auto max-w-3xl space-y-8">
           <header className="space-y-2">
             <p className="text-sm font-medium text-accent-foreground">
-              Step {index + 1} of {steps.length}
+              {scanning ? 'Almost there' : `Step ${index + 1} of ${steps.length}`}
             </p>
-            <h1 className="text-4xl font-semibold tracking-tight">{current.title}</h1>
+            <h1 className="text-4xl font-semibold tracking-tight">
+              {scanning ? 'Scanning your pull requests' : current.title}
+            </h1>
           </header>
-          {step === 'github' && <StepGithub />}
-          {step === 'agent' && <StepAgent />}
-          {step === 'repos' && <StepRepos />}
-          {step === 'setup' && <RepoTabs selected={repoTab} onSelect={setRepoTab} />}
-          {step === 'finish' && <Summary onEdit={edit} />}
+          {scanning && <InitialScan />}
+          {!scanning && step === 'github' && <StepGithub />}
+          {!scanning && step === 'agent' && <StepAgent />}
+          {!scanning && step === 'repos' && <StepRepos />}
+          {!scanning && step === 'setup' && <RepoTabs selected={repoTab} onSelect={setRepoTab} />}
+          {!scanning && step === 'finish' && <Summary onEdit={edit} />}
           <ErrorText error={complete.error} />
         </div>
       </main>
-      <footer className="fixed right-0 bottom-0 left-64 flex justify-between border-t bg-background/90 px-10 py-4 backdrop-blur">
+      <footer
+        hidden={scanning}
+        className="fixed right-0 bottom-0 left-64 flex justify-between border-t bg-background/90 px-10 py-4 backdrop-blur"
+      >
         <Button
           variant="ghost"
           disabled={!previous}
@@ -167,9 +173,7 @@ export function OnboardingPage() {
         ) : (
           <Button
             disabled={!status?.valid || complete.isPending}
-            onClick={() =>
-              complete.mutate(undefined, { onSuccess: () => void navigate({ to: '/' }) })
-            }
+            onClick={() => complete.mutate(undefined, { onSuccess: () => setScanning(true) })}
           >
             {complete.isPending && <Loader2 className="animate-spin" />}
             Open PRism

@@ -5,6 +5,7 @@ import { RouterProvider } from '@tanstack/react-router'
 import '@fontsource-variable/geist'
 import '@fontsource-variable/geist-mono'
 import './styles.css'
+import { TooltipProvider } from './components/ui/tooltip'
 import { router } from './router'
 
 const queryClient = new QueryClient({
@@ -17,7 +18,9 @@ if (!root) throw new Error('Missing #root')
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <TooltipProvider delayDuration={400}>
+        <RouterProvider router={router} />
+      </TooltipProvider>
     </QueryClientProvider>
   </StrictMode>,
 )

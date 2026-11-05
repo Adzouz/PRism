@@ -10,7 +10,8 @@ import {
 } from 'lucide-react'
 import logo from '@/assets/logo.png'
 import { GithubIcon } from '@/components/github-icon'
-import { useGithubStatus } from '@/lib/api'
+import { isNeedsMe } from '@/features/board/model'
+import { useGithubStatus, usePrs } from '@/lib/api'
 
 type NavItem = { to: string; label: string; icon: LucideIcon }
 
@@ -30,11 +31,19 @@ const groups: { label?: string; items: NavItem[] }[] = [
 const itemClass =
   'flex h-10 items-center gap-3 rounded-xl px-3 text-[15px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground [&.active]:bg-foreground [&.active]:font-medium [&.active]:text-background outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar'
 
-function NavLink({ to, label, icon: Icon }: NavItem) {
+function NavLink({ to, label, icon: Icon, count }: NavItem & { count?: number }) {
   return (
     <Link to={to} className={itemClass} activeOptions={{ exact: to === '/' }}>
       <Icon className="size-[18px]" strokeWidth={1.75} />
       {label}
+      {count ? (
+        <span
+          aria-label={`${count} need you`}
+          className="ml-auto min-w-5 rounded-full bg-primary px-1.5 text-center text-xs leading-5 font-medium text-primary-foreground"
+        >
+          {count}
+        </span>
+      ) : null}
     </Link>
   )
 }
@@ -47,6 +56,12 @@ function githubLabel(status: ReturnType<typeof useGithubStatus>['data']) {
 
 export function AppSidebar() {
   const { data: github } = useGithubStatus()
+  const { data: prs = [] } = usePrs()
+  const needsMe = prs.filter((pr) => pr.archivedAt === null && !pr.hidden && isNeedsMe(pr))
+  const counts: Record<string, number> = {
+    '/reviews': needsMe.filter((pr) => pr.tab === 'reviews').length,
+    '/my-prs': needsMe.filter((pr) => pr.tab === 'mine').length,
+  }
   return (
     <aside className="flex w-60 shrink-0 flex-col rounded-2xl border border-sidebar-border bg-sidebar text-sidebar-foreground">
       <div className="drag h-12 shrink-0" />
@@ -63,7 +78,7 @@ export function AppSidebar() {
               </p>
             )}
             {group.items.map((item) => (
-              <NavLink key={item.to} {...item} />
+              <NavLink key={item.to} {...item} count={counts[item.to]} />
             ))}
           </div>
         ))}

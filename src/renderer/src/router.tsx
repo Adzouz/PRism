@@ -7,8 +7,9 @@ import {
   Outlet,
 } from '@tanstack/react-router'
 import { AppSidebar } from '@/components/app-sidebar'
+import { PrDrawer } from '@/features/board/drawer'
 import { OnboardingPage } from '@/features/onboarding/onboarding'
-import { useConfigStatus } from '@/lib/api'
+import { useBoardEvents, useConfigStatus } from '@/lib/api'
 import { useSyncDarkClass } from '@/lib/theme'
 import {
   ArchivePage,
@@ -21,6 +22,7 @@ import {
 
 function RootLayout() {
   useSyncDarkClass()
+  useBoardEvents()
   return <Outlet />
 }
 
@@ -34,6 +36,7 @@ function AppLayout() {
       <main className="min-w-0 flex-1 overflow-y-auto pt-3 pr-7 pl-10">
         <Outlet />
       </main>
+      <PrDrawer />
     </div>
   )
 }

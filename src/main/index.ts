@@ -5,10 +5,14 @@ import { themePreference } from '@shared/ipc'
 import { openDb } from './db/client'
 import { getSetting, setSetting } from './db/settings'
 import { emit } from './ipc/emit'
+import { boardHandlers } from './ipc/board-handlers'
 import { onboardingHandlers } from './ipc/handlers'
 import { registerIpc } from './ipc/register'
+import { cachedGithubStatus, isOnboarded } from './services/config'
 import type { Ctx } from './services/context'
+import { createGithubApi } from './services/gh-api'
 import { stopWatching, watchLinkedSkills } from './services/library'
+import { createSyncService } from './services/sync'
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -31,6 +35,12 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://')) void shell.openExternal(url)
     return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (event, url) => {
+    if (url === win.webContents.getURL()) return
+    if (url.startsWith(process.env.ELECTRON_RENDERER_URL ?? 'file://')) return
+    event.preventDefault()
+    if (url.startsWith('https://')) void shell.openExternal(url)
   })
 
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
@@ -60,6 +70,15 @@ void app.whenReady().then(() => {
   }
   watchLinkedSkills(ctx)
 
+  const api = createGithubApi()
+  const prsChanged = () => emit('prs:changed', null)
+  const sync = createSyncService(ctx, api, {
+    status: (status) => emit('sync:status', status),
+    changed: prsChanged,
+    login: async () => (await cachedGithubStatus()).login,
+    enabled: () => isOnboarded(ctx),
+  })
+
   registerIpc({
     'app:info': () => ({ version: app.getVersion(), platform: process.platform }),
     'settings:getTheme': () => getSetting(db, 'theme', themePreference, 'system'),
@@ -70,9 +89,12 @@ void app.whenReady().then(() => {
     },
     'theme:isDark': () => nativeTheme.shouldUseDarkColors,
     ...onboardingHandlers(ctx),
+    ...boardHandlers(ctx, api, sync, prsChanged),
   })
 
   createWindow()
+  sync.start()
+  app.on('browser-window-focus', () => sync.focus())
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

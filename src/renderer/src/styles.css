@@ -114,3 +114,60 @@
 @utility no-drag {
   -webkit-app-region: no-drag;
 }
+
+@layer components {
+  .markdown-body {
+    @apply space-y-3 text-sm leading-relaxed break-words;
+  }
+  .markdown-body :where(h1, h2, h3, h4) {
+    @apply mt-5 font-semibold;
+  }
+  .markdown-body h1 {
+    @apply text-lg;
+  }
+  .markdown-body h2 {
+    @apply text-base;
+  }
+  .markdown-body :where(ul, ol) {
+    @apply space-y-1 pl-5;
+  }
+  .markdown-body ul {
+    @apply list-disc;
+  }
+  .markdown-body ol {
+    @apply list-decimal;
+  }
+  .markdown-body a {
+    @apply text-accent-foreground underline-offset-2 hover:underline;
+  }
+  .markdown-body code {
+    @apply rounded bg-secondary px-1 py-0.5 font-mono text-[0.85em];
+  }
+  .markdown-body pre {
+    @apply overflow-x-auto rounded-lg bg-secondary p-3;
+  }
+  .markdown-body pre code {
+    @apply bg-transparent p-0;
+  }
+  .markdown-body blockquote {
+    @apply border-l-2 pl-3 text-muted-foreground;
+  }
+  .markdown-body img {
+    @apply inline-block max-w-full rounded;
+  }
+  .markdown-body table {
+    @apply block overflow-x-auto text-xs;
+  }
+  .markdown-body :where(th, td) {
+    @apply border px-2 py-1;
+  }
+  .markdown-body hr {
+    @apply my-4;
+  }
+  .markdown-body input[type='checkbox'] {
+    @apply mr-1.5 align-middle;
+  }
+  .markdown-body details > summary {
+    @apply cursor-pointer;
+  }
+}
