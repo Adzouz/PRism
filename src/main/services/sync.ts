@@ -374,10 +374,21 @@ export async function syncRepo(
   const gone: string[] = []
   for (let index = 0; index < stale.length; index += 50) {
     const ids = stale.slice(index, index + 50)
-    const refreshed = await api.graphql<{ nodes: (GqlPr | null)[] }>(nodesQuery, { login, ids })
+    const { data: refreshed, errors } = await api.graphqlPartial<{ nodes: (GqlPr | null)[] }>(
+      nodesQuery,
+      {
+        login,
+        ids,
+      },
+    )
+    const notFound = new Set(
+      errors
+        .filter((error) => error.type === 'NOT_FOUND' && error.path?.[0] === 'nodes')
+        .map((error) => error.path?.[1]),
+    )
     refreshed.nodes.forEach((pr, position) => {
       if (isPr(pr)) found.set(pr.id, { pr, takeover: false, refreshed: true })
-      else gone.push(ids[position]!)
+      else if (notFound.has(position)) gone.push(ids[position]!)
     })
   }
 
@@ -397,7 +408,9 @@ export async function syncRepo(
     if (!shouldTrack(flags, facts)) ctx.db.delete(prs).where(eq(prs.id, row.id)).run()
   }
 
-  await writeSnapshot(ctx, api, repo, now).catch(() => {})
+  await writeSnapshot(ctx, api, repo, now).catch((error: unknown) => {
+    console.warn(`Snapshot failed for ${repoSlug(repo)}:`, error)
+  })
 
   const rows = ctx.db
     .select({ role: prs.myRole })

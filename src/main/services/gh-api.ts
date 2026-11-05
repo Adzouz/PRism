@@ -2,8 +2,14 @@ import { run } from '../system/exec'
 
 export type RateInfo = { limit: number; remaining: number; resetAt: number }
 
+export type GraphqlError = { message: string; type?: string; path?: (string | number)[] }
+
 export type GithubApi = {
   graphql: <T>(query: string, variables?: Record<string, unknown>) => Promise<T>
+  graphqlPartial: <T>(
+    query: string,
+    variables?: Record<string, unknown>,
+  ) => Promise<{ data: T; errors: GraphqlError[] }>
   probe: (path: string) => Promise<{ unchanged: boolean; commit: () => void }>
   rate: () => RateInfo | null
 }
@@ -53,24 +59,29 @@ export function createGithubApi(): GithubApi {
     return response
   }
 
+  async function graphqlPartial<T>(query: string, variables: Record<string, unknown> = {}) {
+    const response = await request('/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables }),
+    })
+    const payload = (await response.json().catch(() => null)) as {
+      data?: T
+      errors?: GraphqlError[]
+      message?: string
+    } | null
+    if (!response.ok || !payload?.data) {
+      const message =
+        payload?.errors?.[0]?.message ?? payload?.message ?? `GitHub returned ${response.status}`
+      throw new Error(message)
+    }
+    return { data: payload.data, errors: payload.errors ?? [] }
+  }
+
   return {
+    graphqlPartial,
     async graphql<T>(query: string, variables: Record<string, unknown> = {}) {
-      const response = await request('/graphql', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, variables }),
-      })
-      const payload = (await response.json().catch(() => null)) as {
-        data?: T
-        errors?: { message: string; type?: string }[]
-        message?: string
-      } | null
-      if (!response.ok || !payload?.data) {
-        const message =
-          payload?.errors?.[0]?.message ?? payload?.message ?? `GitHub returned ${response.status}`
-        throw new Error(message)
-      }
-      return payload.data
+      return (await graphqlPartial<T>(query, variables)).data
     },
     async probe(path: string) {
       const etag = etags.get(path)

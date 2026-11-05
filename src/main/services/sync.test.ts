@@ -1,7 +1,7 @@
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { openDb } from '../db/client'
 import { repos, snapshots } from '../db/schema'
 import type { Ctx } from './context'
@@ -84,6 +84,7 @@ type Fixture = {
   auth?: GqlPr[]
   inv?: GqlPr[]
   nodes?: (GqlPr | null)[]
+  nodeErrors?: { type: string; index: number }[]
   countsFail?: boolean
 }
 
@@ -116,6 +117,15 @@ function fakeApi(fixture: () => Fixture) {
         } as T
       }
       return { openPrs: { issueCount: 3 }, awaitingMe: { issueCount: 1 } } as T
+    },
+    async graphqlPartial<T>(query: string, variables?: Record<string, unknown>) {
+      const data = await api.graphql<T>(query, variables)
+      const errors = (fixture().nodeErrors ?? []).map(({ type, index }) => ({
+        message: type,
+        type,
+        path: ['nodes', index],
+      }))
+      return { data, errors }
     },
     probe: async () => ({ unchanged: false, commit: () => {} }),
     rate: () => null,
@@ -203,9 +213,30 @@ describe('syncRepo', () => {
     await syncRepo(ctx, api, repo, me)
     expect(listPrs(ctx)[0]).toMatchObject({ stage: 'approved', manual: true })
 
+    const review = (state: string, at: string) => ({
+      state,
+      submittedAt: at,
+      commit: { oid: pr.headRefOid },
+    })
+    pr = { ...pr, reviews: { nodes: [review('COMMENTED', '2026-11-03T10:00:00Z')] } }
+    await syncRepo(ctx, api, repo, me)
+    const commented = listPrs(ctx)[0]!
+    setPrStage(ctx, { id: commented.id, stage: 'approved' })
+    pr = {
+      ...pr,
+      reviews: {
+        nodes: [
+          review('COMMENTED', '2026-11-03T10:00:00Z'),
+          review('COMMENTED', '2026-11-04T10:00:00Z'),
+        ],
+      },
+    }
+    await syncRepo(ctx, api, repo, me)
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'approved', manual: true })
+
     pr = { ...pr, headRefOid: 'head2' }
     await syncRepo(ctx, api, repo, me)
-    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'to-review', manual: false })
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 're-review', manual: false })
   })
 
   it('refreshes PRs that left the searches and archives done ones', async () => {
@@ -334,9 +365,28 @@ describe('review and check edge cases', () => {
     await syncRepo(ctx, api, repo, me)
     const kept = listPrs(ctx).find((pr) => pr.number === second.number)!
     setPrFlags(ctx, { id: kept.id, starred: true })
-    fixture = { nodes: [null, null] }
+    fixture = {
+      nodes: [null, null],
+      nodeErrors: [
+        { type: 'NOT_FOUND', index: 0 },
+        { type: 'NOT_FOUND', index: 1 },
+      ],
+    }
     await syncRepo(ctx, api, repo, me)
     expect(listPrs(ctx).map((pr) => pr.number)).toEqual([second.number])
+  })
+
+  it('keeps PRs and flags when access is refused', async () => {
+    const { ctx, repo } = await makeCtx()
+    const pr = makePr({ author: { login: me, avatarUrl: '' } })
+    let fixture: Fixture = { auth: [pr] }
+    const { api } = fakeApi(() => fixture)
+    await syncRepo(ctx, api, repo, me)
+    const [row] = listPrs(ctx)
+    setPrFlags(ctx, { id: row!.id, hidden: true })
+    fixture = { nodes: [null], nodeErrors: [{ type: 'FORBIDDEN', index: 0 }] }
+    await syncRepo(ctx, api, repo, me)
+    expect(listPrs(ctx)).toMatchObject([{ number: pr.number, hidden: true }])
   })
 
   it('does not fail the repo sync when the snapshot fails', async () => {
@@ -396,6 +446,35 @@ describe('sync service', () => {
     fail = false
     await sync.syncNow(true)
     expect(commits).toHaveLength(1)
+  })
+
+  it('syncs on focus without forcing, at most every 15s', async () => {
+    const { ctx } = await makeCtx()
+    const { api, calls } = fakeApi(() => ({}))
+    let probes = 0
+    api.probe = async () => {
+      probes += 1
+      return { unchanged: true, commit: () => {} }
+    }
+    const sync = createSyncService(ctx, api, hooks)
+    await sync.syncNow(true)
+    const settle = () => new Promise((done) => setTimeout(done, 0))
+    calls.length = 0
+    probes = 0
+
+    sync.focus()
+    await settle()
+    expect(probes).toBe(0)
+
+    vi.useFakeTimers({ now: Date.now() + 20_000, toFake: ['Date'] })
+    try {
+      sync.focus()
+      await settle()
+      expect(probes).toBe(1)
+      expect(calls).not.toContain('Board')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('runs a forced sync after an in-flight light one', async () => {
