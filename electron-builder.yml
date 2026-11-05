@@ -8,6 +8,9 @@ files:
   - out/**
   - drizzle/**
   - package.json
+extraResources:
+  - from: resources/skills
+    to: skills
 asarUnpack:
   - '**/*.node'
 mac:

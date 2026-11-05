@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import logo from '@/assets/logo.png'
 import { GithubIcon } from '@/components/github-icon'
+import { useGithubStatus } from '@/lib/api'
 
 type NavItem = { to: string; label: string; icon: LucideIcon }
 
@@ -38,7 +39,14 @@ function NavLink({ to, label, icon: Icon }: NavItem) {
   )
 }
 
+function githubLabel(status: ReturnType<typeof useGithubStatus>['data']) {
+  if (!status) return 'Checking…'
+  if (!status.loggedIn) return 'Not connected'
+  return status.login ? `@${status.login}` : 'Connected'
+}
+
 export function AppSidebar() {
+  const { data: github } = useGithubStatus()
   return (
     <aside className="flex w-60 shrink-0 flex-col rounded-2xl border border-sidebar-border bg-sidebar text-sidebar-foreground">
       <div className="drag h-12 shrink-0" />
@@ -65,11 +73,13 @@ export function AppSidebar() {
       </div>
       <div className="m-3 flex items-center gap-3 rounded-xl bg-sidebar-accent p-2.5">
         <div className="flex size-9 items-center justify-center rounded-full bg-background">
-          <GithubIcon className="size-4 text-muted-foreground" />
+          <GithubIcon
+            className={github?.loggedIn ? 'size-4 text-foreground' : 'size-4 text-muted-foreground'}
+          />
         </div>
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">GitHub</p>
-          <p className="truncate text-xs text-muted-foreground">Not connected</p>
+          <p className="truncate text-xs text-muted-foreground">{githubLabel(github)}</p>
         </div>
       </div>
     </aside>

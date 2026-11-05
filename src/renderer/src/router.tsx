@@ -3,9 +3,12 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  Navigate,
   Outlet,
 } from '@tanstack/react-router'
 import { AppSidebar } from '@/components/app-sidebar'
+import { OnboardingPage } from '@/features/onboarding/onboarding'
+import { useConfigStatus } from '@/lib/api'
 import { useSyncDarkClass } from '@/lib/theme'
 import {
   ArchivePage,
@@ -18,6 +21,12 @@ import {
 
 function RootLayout() {
   useSyncDarkClass()
+  return <Outlet />
+}
+
+function AppLayout() {
+  const { data: status } = useConfigStatus()
+  if (status && !status.onboarded) return <Navigate to="/onboarding" />
   return (
     <div className="flex h-full p-3">
       <div className="drag fixed inset-x-0 top-0 z-50 h-3" />
@@ -31,17 +40,25 @@ function RootLayout() {
 
 const rootRoute = createRootRoute({ component: RootLayout })
 
-const routes = [
-  createRoute({ getParentRoute: () => rootRoute, path: '/', component: DashboardPage }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/reviews', component: ReviewsPage }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/my-prs', component: MyPrsPage }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/archive', component: ArchivePage }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/runs', component: RunsPage }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: SettingsPage }),
+const appRoute = createRoute({ getParentRoute: () => rootRoute, id: 'app', component: AppLayout })
+
+const appRoutes = [
+  createRoute({ getParentRoute: () => appRoute, path: '/', component: DashboardPage }),
+  createRoute({ getParentRoute: () => appRoute, path: '/reviews', component: ReviewsPage }),
+  createRoute({ getParentRoute: () => appRoute, path: '/my-prs', component: MyPrsPage }),
+  createRoute({ getParentRoute: () => appRoute, path: '/archive', component: ArchivePage }),
+  createRoute({ getParentRoute: () => appRoute, path: '/runs', component: RunsPage }),
+  createRoute({ getParentRoute: () => appRoute, path: '/settings', component: SettingsPage }),
 ]
 
+const onboardingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/onboarding',
+  component: OnboardingPage,
+})
+
 export const router = createRouter({
-  routeTree: rootRoute.addChildren(routes),
+  routeTree: rootRoute.addChildren([appRoute.addChildren(appRoutes), onboardingRoute]),
   history: createHashHistory(),
 })
 

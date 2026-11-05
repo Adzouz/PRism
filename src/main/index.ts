@@ -5,7 +5,10 @@ import { themePreference } from '@shared/ipc'
 import { openDb } from './db/client'
 import { getSetting, setSetting } from './db/settings'
 import { emit } from './ipc/emit'
+import { onboardingHandlers } from './ipc/handlers'
 import { registerIpc } from './ipc/register'
+import type { Ctx } from './services/context'
+import { stopWatching, watchLinkedSkills } from './services/library'
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -46,6 +49,17 @@ void app.whenReady().then(() => {
   nativeTheme.themeSource = getSetting(db, 'theme', themePreference, 'system')
   nativeTheme.on('updated', () => emit('theme:changed', { dark: nativeTheme.shouldUseDarkColors }))
 
+  const ctx: Ctx = {
+    db,
+    userData: app.getPath('userData'),
+    builtinSkillsDir: app.isPackaged
+      ? join(process.resourcesPath, 'skills')
+      : join(app.getAppPath(), 'resources/skills'),
+    log: (sourceId, chunk) => emit('source:log', { sourceId, chunk }),
+    skillsChanged: () => emit('skills:changed', null),
+  }
+  watchLinkedSkills(ctx)
+
   registerIpc({
     'app:info': () => ({ version: app.getVersion(), platform: process.platform }),
     'settings:getTheme': () => getSetting(db, 'theme', themePreference, 'system'),
@@ -55,6 +69,7 @@ void app.whenReady().then(() => {
       return theme
     },
     'theme:isDark': () => nativeTheme.shouldUseDarkColors,
+    ...onboardingHandlers(ctx),
   })
 
   createWindow()
@@ -62,6 +77,8 @@ void app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
+
+app.on('will-quit', stopWatching)
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

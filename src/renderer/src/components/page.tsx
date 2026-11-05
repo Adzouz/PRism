@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ArrowUpRight, type LucideIcon } from 'lucide-react'
+import { errorMessage } from '@/lib/api'
 
 export function Page({
   eyebrow,
@@ -94,5 +95,44 @@ export function QuickCard({
         {meta && <p className="text-sm text-muted-foreground">{meta}</p>}
       </div>
     </Link>
+  )
+}
+
+export function Panel({
+  title,
+  description,
+  status,
+  disabled = false,
+  children,
+}: {
+  title: string
+  description?: ReactNode
+  status?: ReactNode
+  disabled?: boolean
+  children?: ReactNode
+}) {
+  return (
+    <section
+      aria-disabled={disabled}
+      className="space-y-4 rounded-2xl bg-surface p-5 aria-disabled:pointer-events-none aria-disabled:opacity-50"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <h3 className="text-base font-medium">{title}</h3>
+          {description && <p className="text-sm text-muted-foreground">{description}</p>}
+        </div>
+        {status}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+export function ErrorText({ error }: { error: unknown }) {
+  if (!error) return null
+  return (
+    <p role="alert" className="text-sm text-destructive select-text">
+      {errorMessage(error)}
+    </p>
   )
 }
