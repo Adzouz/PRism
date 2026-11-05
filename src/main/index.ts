@@ -37,8 +37,8 @@ function createWindow() {
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (event, url) => {
-    if (url === win.webContents.getURL()) return
-    if (url.startsWith(process.env.ELECTRON_RENDERER_URL ?? 'file://')) return
+    const page = (value: string) => value.split('#')[0]
+    if (page(url) === page(win.webContents.getURL())) return
     event.preventDefault()
     if (url.startsWith('https://')) void shell.openExternal(url)
   })

@@ -97,7 +97,10 @@ export function setPrFlags(
   const set: Partial<typeof prFlags.$inferInsert> = {}
   if (input.starred !== undefined) set.starred = input.starred
   if (input.hidden !== undefined) set.hidden = input.hidden
-  if (input.archived !== undefined) set.archivedAt = input.archived ? Date.now() : null
+  if (input.archived !== undefined) {
+    set.archivedAt = input.archived ? Date.now() : null
+    set.restoredAt = input.archived ? null : Date.now()
+  }
   if (Object.keys(set).length > 0) upsertFlags(ctx, input.id, set)
   return getPr(ctx, input.id)
 }

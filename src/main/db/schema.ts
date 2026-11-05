@@ -110,6 +110,7 @@ export const prFlags = sqliteTable('pr_flags', {
   starred: integer('starred', { mode: 'boolean' }).notNull().default(false),
   hidden: integer('hidden', { mode: 'boolean' }).notNull().default(false),
   archivedAt: integer('archived_at'),
+  restoredAt: integer('restored_at'),
   manualStage: text('manual_stage'),
   manualStageBasis: text('manual_stage_basis'),
 })

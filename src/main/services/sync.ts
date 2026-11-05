@@ -42,7 +42,15 @@ export type GqlPr = {
   }
   reviewThreads: { nodes: { isResolved: boolean }[] }
   commits: { nodes: { commit: { statusCheckRollup: { contexts: CheckCounts } | null } }[] }
-  recent?: { nodes: { commit: { authors: { nodes: { user: { login: string } | null }[] } } }[] }
+  recent?: {
+    nodes: {
+      commit: {
+        parents: { totalCount: number }
+        committer: { user: { login: string } | null } | null
+        authors: { nodes: { user: { login: string } | null }[] }
+      }
+    }[]
+  }
 }
 
 const prFields = `
@@ -67,7 +75,11 @@ const searchQuery = `
     auth: search(query: $auth, type: ISSUE, first: 50) { nodes { ... on PullRequest { ${prFields} } } }
     inv: search(query: $inv, type: ISSUE, first: 30) { nodes { ... on PullRequest {
       ${prFields}
-      recent: commits(last: 20) { nodes { commit { authors(first: 3) { nodes { user { login } } } } } }
+      recent: commits(last: 20) { nodes { commit {
+        parents { totalCount }
+        committer { user { login } }
+        authors(first: 3) { nodes { user { login } } }
+      } } }
     } } }
   }
 `
@@ -107,8 +119,11 @@ async function ciOf(api: GithubApi, repo: Repo, pr: GqlPr) {
 }
 
 export function hasTakeoverCommits(pr: GqlPr, login: string) {
-  return (pr.recent?.nodes ?? []).some((node) =>
-    node.commit.authors.nodes.some((author) => same(author.user?.login, login)),
+  return (pr.recent?.nodes ?? []).some(
+    ({ commit }) =>
+      commit.parents.totalCount === 1 &&
+      same(commit.committer?.user?.login, login) &&
+      commit.authors.nodes.some((author) => same(author.user?.login, login)),
   )
 }
 
@@ -122,6 +137,7 @@ export function applyPr(
   options: {
     login: string
     inRequestSearch: boolean
+    refreshed: boolean
     takeover: boolean
     ci: CiState
     now: number
@@ -138,16 +154,21 @@ export function applyPr(
   const teams = requests.flatMap((reviewer) =>
     reviewer?.__typename === 'Team' && reviewer.slug ? [reviewer.slug] : [],
   )
-  const reviewRequested = direct || options.inRequestSearch
   const review = pr.reviews.nodes[0]
   const myReview =
     review && review.submittedAt
       ? { state: review.state, oid: review.commit?.oid ?? null, at: Date.parse(review.submittedAt) }
       : null
+  const teamRequestKept =
+    options.refreshed &&
+    teams.length > 0 &&
+    !!prev?.reviewRequested &&
+    (myReview?.at ?? null) === prev.myReviewAt
+  const reviewRequested = direct || options.inRequestSearch || teamRequestKept
   const author = pr.author?.login ?? 'ghost'
   const role = same(author, login)
     ? 'author'
-    : options.takeover || prev?.myRole === 'takeover'
+    : options.takeover || (!pr.recent && prev?.myRole === 'takeover')
       ? 'takeover'
       : 'reviewer'
   const facts: PrFacts = {
@@ -230,7 +251,7 @@ function shouldTrack(flags: FlagRow | undefined, facts: PrFacts) {
 
 const repoSlug = (repo: Repo) => `${repo.owner}/${repo.name}`
 
-const today = (now: number) => new Date(now).toLocaleDateString('en-CA')
+const today = (now: number) => new Date(now).toISOString().slice(0, 10)
 
 async function writeSnapshot(ctx: Ctx, api: GithubApi, repo: Repo, now: number) {
   const day = today(now)
@@ -288,7 +309,7 @@ export async function syncRepo(
     inv: `${r} involves:@me -author:@me`,
   })
   const requested = new Set(data.req.nodes.filter(isPr).map((pr) => pr.id))
-  const found = new Map<string, { pr: GqlPr; takeover: boolean }>()
+  const found = new Map<string, { pr: GqlPr; takeover: boolean; refreshed?: boolean }>()
   for (const key of ['req', 'rev', 'auth'] as const) {
     for (const pr of data[key].nodes.filter(isPr)) found.set(pr.id, { pr, takeover: false })
   }
@@ -317,15 +338,20 @@ export async function syncRepo(
   for (let index = 0; index < stale.length; index += 50) {
     const ids = stale.slice(index, index + 50)
     const refreshed = await api.graphql<{ nodes: (GqlPr | null)[] }>(nodesQuery, { login, ids })
-    for (const pr of refreshed.nodes.filter(isPr)) found.set(pr.id, { pr, takeover: false })
+    for (const pr of refreshed.nodes.filter(isPr)) {
+      found.set(pr.id, { pr, takeover: false, refreshed: true })
+    }
   }
 
-  for (const { pr, takeover } of found.values()) {
+  const entries = [...found.values()]
+  const cis = await Promise.all(entries.map(({ pr }) => ciOf(api, repo, pr)))
+  for (const [index, { pr, takeover, refreshed }] of entries.entries()) {
     const { row, facts, flags } = applyPr(ctx, repo, pr, {
       login,
       inRequestSearch: requested.has(pr.id),
+      refreshed: refreshed ?? false,
       takeover,
-      ci: await ciOf(api, repo, pr),
+      ci: cis[index] ?? 'none',
       now,
     })
     if (!shouldTrack(flags, facts)) ctx.db.delete(prs).where(eq(prs.id, row.id)).run()
@@ -352,7 +378,12 @@ export function autoArchiveDone(ctx: Ctx, now = Date.now()) {
     .from(prs)
     .leftJoin(prFlags, eq(prFlags.prId, prs.id))
     .where(
-      and(ne(prs.state, 'OPEN'), lt(prs.closedAt, now - 24 * 3600_000), isNull(prFlags.archivedAt)),
+      and(
+        ne(prs.state, 'OPEN'),
+        lt(prs.closedAt, now - 24 * 3600_000),
+        isNull(prFlags.archivedAt),
+        isNull(prFlags.restoredAt),
+      ),
     )
     .all()
     .map((row) => row.id)
@@ -375,7 +406,18 @@ export type SyncHooks = {
 }
 
 const fullEvery = 5 * 60_000
+const fullWhilePending = 2 * 60_000
 const lightEvery = 10 * 60_000
+const focusEvery = 60_000
+
+function hasPendingCi(ctx: Ctx) {
+  return !!ctx.db
+    .select({ id: prs.id })
+    .from(prs)
+    .leftJoin(prFlags, eq(prFlags.prId, prs.id))
+    .where(and(eq(prs.state, 'OPEN'), eq(prs.ciState, 'pending'), isNull(prFlags.archivedAt)))
+    .get()
+}
 
 export function createSyncService(ctx: Ctx, api: GithubApi, hooks: SyncHooks) {
   let status: SyncStatus = {
@@ -386,6 +428,8 @@ export function createSyncService(ctx: Ctx, api: GithubApi, hooks: SyncHooks) {
     repos: [],
   }
   let current: Promise<SyncStatus> | null = null
+  let currentForced = false
+  let followUp: Promise<SyncStatus> | null = null
   let timer: NodeJS.Timeout | null = null
   let lastFullAt = 0
   let lastLightAt = 0
@@ -410,7 +454,10 @@ export function createSyncService(ctx: Ctx, api: GithubApi, hooks: SyncHooks) {
       return
     }
     const now = Date.now()
-    const full = force || now - lastFullAt > fullEvery
+    const full =
+      force ||
+      now - lastFullAt > fullEvery ||
+      (now - lastFullAt > fullWhilePending && hasPendingCi(ctx))
     const lightCheck = now - lastLightAt > lightEvery
     const repoList = listRepos(ctx)
     const previous = new Map(status.repos.map((entry) => [entry.repoId, entry]))
@@ -430,11 +477,13 @@ export function createSyncService(ctx: Ctx, api: GithubApi, hooks: SyncHooks) {
     for (const repo of repoList) {
       try {
         const path = `/repos/${repoSlug(repo)}/pulls?state=all&sort=updated&direction=desc&per_page=1`
-        if (!full && (await api.unchanged(path).catch(() => false))) {
+        const probe = await api.probe(path).catch(() => null)
+        if (!full && probe?.unchanged) {
           setRepo(repo.id, { state: 'skipped' })
           continue
         }
         const counts = await syncRepo(ctx, api, repo, login, { lightCheck, now })
+        probe?.commit()
         setRepo(repo.id, { state: 'done', ...counts })
       } catch (error) {
         failed = error instanceof Error ? error.message : String(error)
@@ -449,8 +498,17 @@ export function createSyncService(ctx: Ctx, api: GithubApi, hooks: SyncHooks) {
     hooks.changed()
   }
 
-  function syncNow(force = false) {
-    current ??= runOnce(force)
+  function syncNow(force = false): Promise<SyncStatus> {
+    if (current) {
+      if (!force || currentForced) return current
+      followUp ??= current.then(() => {
+        followUp = null
+        return syncNow(true)
+      })
+      return followUp
+    }
+    currentForced = force
+    current = runOnce(force)
       .catch((error: unknown) =>
         publish({
           running: false,
@@ -480,7 +538,7 @@ export function createSyncService(ctx: Ctx, api: GithubApi, hooks: SyncHooks) {
     },
     focus() {
       if (!hooks.enabled()) return
-      if (status.lastSyncAt && Date.now() - status.lastSyncAt < 15_000) return
+      if (Date.now() - lastFullAt < focusEvery) return
       if (budgetAllows(Date.now())) void syncNow(true)
     },
     start(intervalMs = 60_000) {

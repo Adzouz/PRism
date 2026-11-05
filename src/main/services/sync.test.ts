@@ -9,7 +9,7 @@ import type { GithubApi } from './gh-api'
 import { deriveStage, type PrFacts } from './pr-stage'
 import { listPrs, setPrFlags, setPrStage } from './prs'
 import { getRepo } from './repos'
-import { autoArchiveDone, syncRepo, type GqlPr } from './sync'
+import { autoArchiveDone, createSyncService, syncRepo, type GqlPr } from './sync'
 
 const migrations = resolve(__dirname, '../../../drizzle')
 const me = 'octocat'
@@ -67,6 +67,16 @@ function makePr(overrides: Partial<GqlPr> = {}): GqlPr {
   }
 }
 
+function commitBy(author: string, committer: string, parents = 1) {
+  return {
+    commit: {
+      parents: { totalCount: parents },
+      committer: { user: { login: committer } },
+      authors: { nodes: [{ user: { login: author } }] },
+    },
+  }
+}
+
 type Fixture = { req?: GqlPr[]; rev?: GqlPr[]; auth?: GqlPr[]; inv?: GqlPr[]; nodes?: GqlPr[] }
 
 function fakeApi(fixture: () => Fixture) {
@@ -98,7 +108,7 @@ function fakeApi(fixture: () => Fixture) {
       }
       return { openPrs: { issueCount: 3 }, awaitingMe: { issueCount: 1 } } as T
     },
-    unchanged: async () => false,
+    probe: async () => ({ unchanged: false, commit: () => {} }),
     rate: () => null,
   }
   return { api, calls }
@@ -145,15 +155,14 @@ describe('syncRepo', () => {
     })
     const authored = makePr({ author: { login: me, avatarUrl: '' }, isDraft: true })
     const takeover = makePr({
-      recent: {
-        nodes: [{ commit: { authors: { nodes: [{ user: { login: 'OctoCat' } }] } } }],
-      },
+      recent: { nodes: [commitBy('OctoCat', 'OctoCat')] },
     })
+    const suggested = makePr({ recent: { nodes: [commitBy(me, 'web-flow')] } })
     const mentioned = makePr()
     const { api } = fakeApi(() => ({
       req: [requested],
       auth: [authored],
-      inv: [takeover, mentioned],
+      inv: [takeover, suggested, mentioned],
     }))
 
     const counts = await syncRepo(ctx, api, repo, me)
@@ -170,6 +179,7 @@ describe('syncRepo', () => {
     expect(byNumber.get(authored.number)).toMatchObject({ tab: 'mine', stage: 'draft' })
     expect(byNumber.get(takeover.number)).toMatchObject({ role: 'takeover', tab: 'mine' })
     expect(byNumber.has(mentioned.number)).toBe(false)
+    expect(byNumber.has(suggested.number)).toBe(false)
     expect(ctx.db.select().from(snapshots).all()).toMatchObject([{ openPrs: 3, awaitingMe: 1 }])
   })
 
@@ -233,5 +243,75 @@ describe('syncRepo', () => {
     await syncRepo(ctx, api, repo, me)
     expect(calls).toContain('Checks')
     expect(listPrs(ctx)[0]?.ciState).toBe('success')
+  })
+
+  it('keeps a restored done PR out of auto-archive', async () => {
+    const { ctx, repo } = await makeCtx()
+    const pr = makePr({ state: 'MERGED', closedAt: '2026-11-01T10:00:00Z' })
+    const { api } = fakeApi(() => ({
+      nodes: [],
+      auth: [{ ...pr, author: { login: me, avatarUrl: '' } }],
+    }))
+    await syncRepo(ctx, api, repo, me)
+    const now = Date.parse('2026-11-05T10:00:00Z')
+    expect(autoArchiveDone(ctx, now)).toBe(1)
+    const [row] = listPrs(ctx)
+    setPrFlags(ctx, { id: row!.id, archived: false })
+    expect(autoArchiveDone(ctx, now + 60_000)).toBe(0)
+    expect(listPrs(ctx)[0]?.archivedAt).toBeNull()
+  })
+
+  it('keeps a team request when the PR is only refreshed by id', async () => {
+    const { ctx, repo } = await makeCtx()
+    const pr = makePr({
+      reviewRequests: { nodes: [{ requestedReviewer: { __typename: 'Team', slug: 'core' } }] },
+    })
+    let fixture: Fixture = { req: [pr] }
+    const { api } = fakeApi(() => fixture)
+    await syncRepo(ctx, api, repo, me)
+    fixture = { nodes: [pr] }
+    await syncRepo(ctx, api, repo, me)
+    expect(listPrs(ctx)).toMatchObject([{ number: pr.number, stage: 'to-review' }])
+  })
+})
+
+describe('sync service', () => {
+  const hooks = {
+    status: () => {},
+    changed: () => {},
+    login: async () => me,
+    enabled: () => true,
+  }
+
+  it('keeps the ETag uncommitted when a repo sync fails', async () => {
+    const { ctx } = await makeCtx()
+    const commits: number[] = []
+    let fail = true
+    const { api } = fakeApi(() => {
+      if (fail) throw new Error('GitHub is down')
+      return {}
+    })
+    api.probe = async () => ({ unchanged: false, commit: () => commits.push(1) })
+    const sync = createSyncService(ctx, api, hooks)
+    const failed = await sync.syncNow(true)
+    expect(failed.repos[0]).toMatchObject({ state: 'error', error: 'GitHub is down' })
+    expect(commits).toHaveLength(0)
+    fail = false
+    await sync.syncNow(true)
+    expect(commits).toHaveLength(1)
+  })
+
+  it('runs a forced sync after an in-flight light one', async () => {
+    const { ctx } = await makeCtx()
+    const { api, calls } = fakeApi(() => ({}))
+    api.probe = async () => ({ unchanged: true, commit: () => {} })
+    const sync = createSyncService(ctx, api, hooks)
+    await sync.syncNow(true)
+    calls.length = 0
+    const light = sync.syncNow(false)
+    const forced = sync.syncNow(true)
+    expect(forced).not.toBe(light)
+    await forced
+    expect(calls.filter((name) => name === 'Board')).toHaveLength(1)
   })
 })

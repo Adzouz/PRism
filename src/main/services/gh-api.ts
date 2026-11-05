@@ -4,7 +4,7 @@ export type RateInfo = { limit: number; remaining: number; resetAt: number }
 
 export type GithubApi = {
   graphql: <T>(query: string, variables?: Record<string, unknown>) => Promise<T>
-  unchanged: (path: string) => Promise<boolean>
+  probe: (path: string) => Promise<{ unchanged: boolean; commit: () => void }>
   rate: () => RateInfo | null
 }
 
@@ -72,14 +72,17 @@ export function createGithubApi(): GithubApi {
       }
       return payload.data
     },
-    async unchanged(path: string) {
+    async probe(path: string) {
       const etag = etags.get(path)
       const response = await request(path, { headers: etag ? { 'If-None-Match': etag } : {} })
-      if (response.status === 304) return true
-      const next = response.headers.get('etag')
-      if (response.ok && next) etags.set(path, next)
       await response.body?.cancel()
-      return false
+      const next = response.headers.get('etag')
+      return {
+        unchanged: response.status === 304,
+        commit: () => {
+          if (response.ok && next) etags.set(path, next)
+        },
+      }
     },
     rate: () => rate,
   }
