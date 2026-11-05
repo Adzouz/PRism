@@ -1,0 +1,29 @@
+appId: io.github.adzouz.prism
+productName: PRism
+copyright: Copyright © 2026 PRism contributors
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - drizzle/**
+  - package.json
+asarUnpack:
+  - '**/*.node'
+mac:
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  target:
+    - target: dmg
+      arch: universal
+    - target: zip
+      arch: universal
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+publish:
+  provider: github
+  owner: Adzouz
+  repo: prism
