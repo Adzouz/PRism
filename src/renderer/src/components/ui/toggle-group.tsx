@@ -8,7 +8,7 @@ export function ToggleGroup({
 }: ComponentProps<typeof ToggleGroupPrimitive.Root>) {
   return (
     <ToggleGroupPrimitive.Root
-      className={cn('inline-flex items-center gap-0.5 rounded-md bg-muted p-0.5', className)}
+      className={cn('inline-flex items-center gap-0.5 rounded-lg bg-background p-1', className)}
       {...props}
     />
   )
@@ -21,7 +21,7 @@ export function ToggleGroupItem({
   return (
     <ToggleGroupPrimitive.Item
       className={cn(
-        "inline-flex h-7 items-center justify-center gap-1.5 rounded-sm px-2 text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[state=on]:bg-surface data-[state=on]:text-foreground data-[state=on]:shadow-sm [&_svg:not([class*='size-'])]:size-3.5",
+        "inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[state=on]:bg-secondary data-[state=on]:text-foreground data-[state=on]:shadow-sm [&_svg:not([class*='size-'])]:size-3.5",
         className,
       )}
       {...props}

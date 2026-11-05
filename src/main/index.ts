@@ -15,7 +15,7 @@ function createWindow() {
     minHeight: 600,
     show: false,
     titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 18 },
+    trafficLightPosition: { x: 28, y: 28 },
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0B0D13' : '#F7F7FA',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -39,6 +39,7 @@ function createWindow() {
 
 void app.whenReady().then(() => {
   electronApp.setAppUserModelId('io.github.adzouz.prism')
+  if (is.dev) app.dock?.setIcon(join(app.getAppPath(), 'build/icon.png'))
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
 
   const db = openDb(join(app.getPath('userData'), 'prism.db'), join(app.getAppPath(), 'drizzle'))

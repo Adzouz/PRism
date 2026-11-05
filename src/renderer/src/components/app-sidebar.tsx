@@ -8,42 +8,68 @@ import {
   Settings,
   type LucideIcon,
 } from 'lucide-react'
-import { ThemeSwitch } from '@/components/theme-switch'
+import logo from '@/assets/logo.png'
+import { GithubIcon } from '@/components/github-icon'
 
-const nav: { to: string; label: string; icon: LucideIcon }[] = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/reviews', label: 'Reviews', icon: GitPullRequest },
-  { to: '/my-prs', label: 'My PRs', icon: GitPullRequestArrow },
-  { to: '/archive', label: 'Archive', icon: Archive },
-  { to: '/runs', label: 'Runs', icon: Bot },
+type NavItem = { to: string; label: string; icon: LucideIcon }
+
+const groups: { label?: string; items: NavItem[] }[] = [
+  { items: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard }] },
+  {
+    label: 'Pull requests',
+    items: [
+      { to: '/reviews', label: 'Reviews', icon: GitPullRequest },
+      { to: '/my-prs', label: 'My PRs', icon: GitPullRequestArrow },
+      { to: '/archive', label: 'Archive', icon: Archive },
+    ],
+  },
+  { label: 'Agents', items: [{ to: '/runs', label: 'Runs', icon: Bot }] },
 ]
 
 const itemClass =
-  'flex h-8 items-center gap-2.5 rounded-md px-2.5 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground [&.active]:bg-sidebar-accent [&.active]:font-medium [&.active]:text-sidebar-accent-foreground'
+  'flex h-10 items-center gap-3 rounded-xl px-3 text-[15px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground [&.active]:bg-foreground [&.active]:font-medium [&.active]:text-background outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar'
+
+function NavLink({ to, label, icon: Icon }: NavItem) {
+  return (
+    <Link to={to} className={itemClass} activeOptions={{ exact: to === '/' }}>
+      <Icon className="size-[18px]" strokeWidth={1.75} />
+      {label}
+    </Link>
+  )
+}
 
 export function AppSidebar() {
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      <div className="drag h-13 shrink-0" />
-      <div className="flex items-center gap-2 px-4 pb-4">
-        <div className="size-5 rounded-md bg-gradient-to-br from-primary to-accent-foreground" />
-        <span className="text-[15px] font-semibold tracking-tight">PRism</span>
+    <aside className="flex w-60 shrink-0 flex-col rounded-2xl border border-sidebar-border bg-sidebar text-sidebar-foreground">
+      <div className="drag h-12 shrink-0" />
+      <div className="flex items-center gap-2 px-4 pb-5">
+        <img src={logo} alt="" className="size-8" draggable={false} />
+        <span className="text-base font-semibold tracking-tight">PRism</span>
       </div>
-      <nav className="flex flex-1 flex-col gap-0.5 px-2">
-        {nav.map(({ to, label, icon: Icon }) => (
-          <Link key={to} to={to} className={itemClass} activeOptions={{ exact: to === '/' }}>
-            <Icon className="size-4" />
-            {label}
-          </Link>
+      <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 py-1">
+        {groups.map((group, index) => (
+          <div key={group.label ?? index} className="flex flex-col gap-1">
+            {group.label && (
+              <p className="px-3 pb-1 text-[11px] font-medium tracking-[0.12em] text-muted-foreground uppercase">
+                {group.label}
+              </p>
+            )}
+            {group.items.map((item) => (
+              <NavLink key={item.to} {...item} />
+            ))}
+          </div>
         ))}
       </nav>
-      <div className="flex flex-col gap-2 border-t border-sidebar-border p-2">
-        <Link to="/settings" className={itemClass}>
-          <Settings className="size-4" />
-          Settings
-        </Link>
-        <div className="px-1 pb-1">
-          <ThemeSwitch />
+      <div className="mx-3 border-t border-sidebar-border pt-3">
+        <NavLink to="/settings" label="Settings" icon={Settings} />
+      </div>
+      <div className="m-3 flex items-center gap-3 rounded-xl bg-sidebar-accent p-2.5">
+        <div className="flex size-9 items-center justify-center rounded-full bg-background">
+          <GithubIcon className="size-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">GitHub</p>
+          <p className="truncate text-xs text-muted-foreground">Not connected</p>
         </div>
       </div>
     </aside>

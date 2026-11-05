@@ -19,9 +19,10 @@ import {
 function RootLayout() {
   useSyncDarkClass()
   return (
-    <div className="flex h-full">
+    <div className="flex h-full p-3">
+      <div className="drag fixed inset-x-0 top-0 z-50 h-3" />
       <AppSidebar />
-      <main className="min-w-0 flex-1">
+      <main className="min-w-0 flex-1 overflow-y-auto pt-3 pr-7 pl-10">
         <Outlet />
       </main>
     </div>

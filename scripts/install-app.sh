@@ -5,8 +5,11 @@ cd "$(dirname "$0")/.."
 pnpm build
 pnpm exec electron-builder --mac dir --arm64 -c.mac.notarize=false -c.mac.identity=-
 
-DEST="$HOME/Applications/PRism.app"
-mkdir -p "$HOME/Applications"
+DIR="${PRISM_INSTALL_DIR:-/Applications}"
+[[ -w "$DIR" ]] || DIR="$HOME/Applications"
+mkdir -p "$DIR"
+DEST="$DIR/PRism.app"
 rm -rf "$DEST"
 ditto dist/mac-arm64/PRism.app "$DEST"
+touch "$DEST"
 echo "Installed $DEST"
