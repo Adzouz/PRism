@@ -12,6 +12,7 @@ import { prFlags, prs, repos } from '../db/schema'
 import { getSetting, setSetting } from '../db/settings'
 import type { Ctx } from './context'
 import type { GithubApi } from './gh-api'
+import { getRepo } from './repos'
 import { ciOfChecks, fetchChecks } from './checks'
 import { stageAllowedIn, stageBasis, tabOf } from './pr-stage'
 
@@ -182,13 +183,12 @@ type DetailNode = {
 
 export async function prDetail(ctx: Ctx, api: GithubApi, id: number): Promise<PrDetail> {
   const row = ctx.db
-    .select({ nodeId: prs.nodeId, ignored: repos.ignoredChecksJson })
+    .select({ nodeId: prs.nodeId, repoId: prs.repoId })
     .from(prs)
-    .innerJoin(repos, eq(repos.id, prs.repoId))
     .where(eq(prs.id, id))
     .get()
   if (!row) throw new Error(`Pull request ${id} not found`)
-  const ignored = z.array(z.string()).catch([]).parse(JSON.parse(row.ignored))
+  const ignored = getRepo(ctx, row.repoId).ignoredChecks
   const [{ node }, checks] = await Promise.all([
     api.graphql<{ node: DetailNode | null }>(detailQuery, { id: row.nodeId }),
     fetchChecks(api, row.nodeId, ignored),

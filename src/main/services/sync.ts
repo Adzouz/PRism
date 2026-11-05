@@ -61,7 +61,7 @@ const prFields = `
   reviewRequests(first: 30) {
     nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } }
   }
-  reviews(last: 1, author: $login, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+  reviews(last: 10, author: $login, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
     nodes { state submittedAt commit { oid } }
   }
   reviewThreads(first: 100) { nodes { isResolved } }
@@ -114,8 +114,23 @@ const same = (a: string | undefined, b: string) => a?.toLowerCase() === b.toLowe
 async function ciOf(api: GithubApi, repo: Repo, pr: GqlPr) {
   const counts = pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts
   const ci = ciFromCounts(counts)
-  if (ci !== 'failure' || repo.ignoredChecks.length === 0 || pr.state !== 'OPEN') return ci
+  if (ci === 'success' || ci === 'none') return ci
+  if (repo.ignoredChecks.length === 0 || pr.state !== 'OPEN') return ci
   return ciOfChecks(await fetchChecks(api, pr.id, repo.ignoredChecks))
+}
+
+const verdicts = new Set(['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'])
+
+export function myReviewOf(pr: GqlPr) {
+  const submitted = pr.reviews.nodes.filter((review) => review.submittedAt)
+  const latest = submitted.at(-1)
+  if (!latest?.submittedAt) return null
+  const verdict = submitted.findLast((review) => verdicts.has(review.state))
+  const state =
+    latest.state === 'COMMENTED' && verdict && verdict.state !== 'DISMISSED'
+      ? verdict.state
+      : latest.state
+  return { state, oid: latest.commit?.oid ?? null, at: Date.parse(latest.submittedAt) }
 }
 
 export function hasTakeoverCommits(pr: GqlPr, login: string) {
@@ -154,11 +169,7 @@ export function applyPr(
   const teams = requests.flatMap((reviewer) =>
     reviewer?.__typename === 'Team' && reviewer.slug ? [reviewer.slug] : [],
   )
-  const review = pr.reviews.nodes[0]
-  const myReview =
-    review && review.submittedAt
-      ? { state: review.state, oid: review.commit?.oid ?? null, at: Date.parse(review.submittedAt) }
-      : null
+  const myReview = myReviewOf(pr)
   const teamRequestKept =
     options.refreshed &&
     teams.length > 0 &&
@@ -249,6 +260,31 @@ function shouldTrack(flags: FlagRow | undefined, facts: PrFacts) {
   return !!flags?.starred || !!flags?.archivedAt
 }
 
+function dropUnreachable(ctx: Ctx, nodeId: string) {
+  const row = ctx.db
+    .select({ id: prs.id, flags: prFlags })
+    .from(prs)
+    .leftJoin(prFlags, eq(prFlags.prId, prs.id))
+    .where(eq(prs.nodeId, nodeId))
+    .get()
+  if (row && !row.flags?.starred && !row.flags?.archivedAt) {
+    ctx.db.delete(prs).where(eq(prs.id, row.id)).run()
+  }
+}
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>) {
+  const results: R[] = []
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++
+      results[index] = await fn(items[index]!)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
 const repoSlug = (repo: Repo) => `${repo.owner}/${repo.name}`
 
 const today = (now: number) => new Date(now).toISOString().slice(0, 10)
@@ -303,10 +339,10 @@ export async function syncRepo(
   const r = `repo:${repoSlug(repo)} is:pr is:open`
   const data = await api.graphql<Record<'req' | 'rev' | 'auth' | 'inv', Search>>(searchQuery, {
     login,
-    req: `${r} review-requested:@me`,
-    rev: `${r} reviewed-by:@me -author:@me`,
-    auth: `${r} author:@me`,
-    inv: `${r} involves:@me -author:@me`,
+    req: `${r} review-requested:@me sort:updated-desc`,
+    rev: `${r} reviewed-by:@me -author:@me sort:updated-desc`,
+    auth: `${r} author:@me sort:updated-desc`,
+    inv: `${r} involves:@me -author:@me sort:updated-desc`,
   })
   const requested = new Set(data.req.nodes.filter(isPr).map((pr) => pr.id))
   const found = new Map<string, { pr: GqlPr; takeover: boolean; refreshed?: boolean }>()
@@ -335,16 +371,20 @@ export async function syncRepo(
     .all()
     .map((row) => row.nodeId)
     .filter((id) => !found.has(id) && (options.lightCheck || !archived.has(id)))
+  const gone: string[] = []
   for (let index = 0; index < stale.length; index += 50) {
     const ids = stale.slice(index, index + 50)
     const refreshed = await api.graphql<{ nodes: (GqlPr | null)[] }>(nodesQuery, { login, ids })
-    for (const pr of refreshed.nodes.filter(isPr)) {
-      found.set(pr.id, { pr, takeover: false, refreshed: true })
-    }
+    refreshed.nodes.forEach((pr, position) => {
+      if (isPr(pr)) found.set(pr.id, { pr, takeover: false, refreshed: true })
+      else gone.push(ids[position]!)
+    })
   }
 
+  for (const nodeId of gone) dropUnreachable(ctx, nodeId)
+
   const entries = [...found.values()]
-  const cis = await Promise.all(entries.map(({ pr }) => ciOf(api, repo, pr)))
+  const cis = await mapLimit(entries, 4, ({ pr }) => ciOf(api, repo, pr))
   for (const [index, { pr, takeover, refreshed }] of entries.entries()) {
     const { row, facts, flags } = applyPr(ctx, repo, pr, {
       login,
@@ -357,7 +397,7 @@ export async function syncRepo(
     if (!shouldTrack(flags, facts)) ctx.db.delete(prs).where(eq(prs.id, row.id)).run()
   }
 
-  await writeSnapshot(ctx, api, repo, now)
+  await writeSnapshot(ctx, api, repo, now).catch(() => {})
 
   const rows = ctx.db
     .select({ role: prs.myRole })
@@ -408,7 +448,7 @@ export type SyncHooks = {
 const fullEvery = 5 * 60_000
 const fullWhilePending = 2 * 60_000
 const lightEvery = 10 * 60_000
-const focusEvery = 60_000
+const focusEvery = 15_000
 
 function hasPendingCi(ctx: Ctx) {
   return !!ctx.db
@@ -538,8 +578,8 @@ export function createSyncService(ctx: Ctx, api: GithubApi, hooks: SyncHooks) {
     },
     focus() {
       if (!hooks.enabled()) return
-      if (Date.now() - lastFullAt < focusEvery) return
-      if (budgetAllows(Date.now())) void syncNow(true)
+      if (status.lastSyncAt && Date.now() - status.lastSyncAt < focusEvery) return
+      if (budgetAllows(Date.now())) void syncNow(false)
     },
     start(intervalMs = 60_000) {
       timer ??= setInterval(() => this.tick(), intervalMs)

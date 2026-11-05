@@ -47,7 +47,7 @@ export function checkState(check: GqlCheck): { name: string; state: CheckState }
     return { name: check.context, state: contextStates[check.state] ?? 'pending' }
   }
   if (check.status !== 'COMPLETED') return { name: check.name, state: 'pending' }
-  return { name: check.name, state: runStates[check.conclusion ?? ''] ?? 'failure' }
+  return { name: check.name, state: runStates[check.conclusion ?? ''] ?? 'pending' }
 }
 
 export function rollupCi(states: CheckState[]): CiState {

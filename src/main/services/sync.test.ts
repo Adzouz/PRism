@@ -9,7 +9,8 @@ import type { GithubApi } from './gh-api'
 import { deriveStage, type PrFacts } from './pr-stage'
 import { listPrs, setPrFlags, setPrStage } from './prs'
 import { getRepo } from './repos'
-import { autoArchiveDone, createSyncService, syncRepo, type GqlPr } from './sync'
+import { checkState } from './checks'
+import { autoArchiveDone, createSyncService, myReviewOf, syncRepo, type GqlPr } from './sync'
 
 const migrations = resolve(__dirname, '../../../drizzle')
 const me = 'octocat'
@@ -77,7 +78,14 @@ function commitBy(author: string, committer: string, parents = 1) {
   }
 }
 
-type Fixture = { req?: GqlPr[]; rev?: GqlPr[]; auth?: GqlPr[]; inv?: GqlPr[]; nodes?: GqlPr[] }
+type Fixture = {
+  req?: GqlPr[]
+  rev?: GqlPr[]
+  auth?: GqlPr[]
+  inv?: GqlPr[]
+  nodes?: (GqlPr | null)[]
+  countsFail?: boolean
+}
 
 function fakeApi(fixture: () => Fixture) {
   const calls: string[] = []
@@ -96,6 +104,7 @@ function fakeApi(fixture: () => Fixture) {
         } as T
       }
       if (name === 'Refresh') return { nodes: data.nodes ?? [] } as T
+      if (name === 'Counts' && data.countsFail) throw new Error('search limit')
       if (name === 'Checks') {
         const nodes = [
           { __typename: 'CheckRun', name: 'flaky-e2e', status: 'COMPLETED', conclusion: 'FAILURE' },
@@ -272,6 +281,94 @@ describe('syncRepo', () => {
     fixture = { nodes: [pr] }
     await syncRepo(ctx, api, repo, me)
     expect(listPrs(ctx)).toMatchObject([{ number: pr.number, stage: 'to-review' }])
+  })
+})
+
+describe('review and check edge cases', () => {
+  it('keeps my verdict when I comment after approving', () => {
+    const review = (state: string, at: string, oid = 'head1') => ({
+      state,
+      submittedAt: at,
+      commit: { oid },
+    })
+    const pr = makePr({
+      reviews: {
+        nodes: [
+          review('APPROVED', '2026-11-02T10:00:00Z'),
+          review('COMMENTED', '2026-11-03T10:00:00Z'),
+        ],
+      },
+    })
+    expect(myReviewOf(pr)).toMatchObject({
+      state: 'APPROVED',
+      at: Date.parse('2026-11-03T10:00:00Z'),
+    })
+    const dismissed = makePr({
+      reviews: {
+        nodes: [
+          review('DISMISSED', '2026-11-02T10:00:00Z'),
+          review('COMMENTED', '2026-11-03T10:00:00Z'),
+        ],
+      },
+    })
+    expect(myReviewOf(dismissed)?.state).toBe('COMMENTED')
+  })
+
+  it('treats unknown check conclusions as pending', () => {
+    expect(
+      checkState({
+        __typename: 'CheckRun',
+        name: 'x',
+        status: 'COMPLETED',
+        conclusion: 'NEW_VALUE',
+      }),
+    ).toEqual({ name: 'x', state: 'pending' })
+  })
+
+  it('drops PRs GitHub no longer returns, keeps starred ones', async () => {
+    const { ctx, repo } = await makeCtx()
+    const first = makePr({ author: { login: me, avatarUrl: '' } })
+    const second = makePr({ author: { login: me, avatarUrl: '' } })
+    let fixture: Fixture = { auth: [first, second] }
+    const { api } = fakeApi(() => fixture)
+    await syncRepo(ctx, api, repo, me)
+    const kept = listPrs(ctx).find((pr) => pr.number === second.number)!
+    setPrFlags(ctx, { id: kept.id, starred: true })
+    fixture = { nodes: [null, null] }
+    await syncRepo(ctx, api, repo, me)
+    expect(listPrs(ctx).map((pr) => pr.number)).toEqual([second.number])
+  })
+
+  it('does not fail the repo sync when the snapshot fails', async () => {
+    const { ctx, repo } = await makeCtx()
+    const { api } = fakeApi(() => ({ req: [makePr()], countsFail: true }))
+    await expect(syncRepo(ctx, api, repo, me)).resolves.toEqual({ reviews: 1, mine: 0 })
+  })
+
+  it('resolves pending CI when only ignored checks are pending', async () => {
+    const { ctx, repo } = await makeCtx()
+    const counts = {
+      checkRunCountsByState: [{ state: 'IN_PROGRESS', count: 1 }],
+      statusContextCountsByState: [{ state: 'SUCCESS', count: 1 }],
+    }
+    const pr = makePr({
+      commits: { nodes: [{ commit: { statusCheckRollup: { contexts: counts } } }] },
+    })
+    const { api } = fakeApi(() => ({ req: [pr] }))
+    const original = api.graphql
+    api.graphql = (async (query: string, variables?: Record<string, unknown>) => {
+      if (query.includes('query Checks')) {
+        const nodes = [
+          { __typename: 'CheckRun', name: 'flaky-e2e', status: 'IN_PROGRESS', conclusion: null },
+          { __typename: 'StatusContext', context: 'build', state: 'SUCCESS' },
+        ]
+        const contexts = { pageInfo: { hasNextPage: false, endCursor: null }, nodes }
+        return { node: { commits: { nodes: [{ commit: { statusCheckRollup: { contexts } } }] } } }
+      }
+      return original(query, variables)
+    }) as typeof api.graphql
+    await syncRepo(ctx, api, repo, me)
+    expect(listPrs(ctx)[0]?.ciState).toBe('success')
   })
 })
 

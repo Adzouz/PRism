@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react'
+import DOMPurify from 'dompurify'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import {
   Archive,
@@ -47,6 +48,9 @@ const checkDot: Record<PrDetail['checks'][number]['state'], string> = {
   neutral: 'bg-muted-foreground/50',
   skipped: 'bg-muted-foreground/30',
 }
+
+const sanitize = (html: string) =>
+  DOMPurify.sanitize(html, { FORBID_TAGS: ['style', 'form'], FORBID_ATTR: ['style'] })
 
 function Block({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -277,7 +281,7 @@ function Overview({ pr }: { pr: BoardPr }) {
             {detail.bodyHtml.trim() ? (
               <div
                 className="markdown-body select-text"
-                dangerouslySetInnerHTML={{ __html: detail.bodyHtml }}
+                dangerouslySetInnerHTML={{ __html: sanitize(detail.bodyHtml) }}
               />
             ) : (
               <p className="text-sm text-muted-foreground">No description.</p>

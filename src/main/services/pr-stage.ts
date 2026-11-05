@@ -40,7 +40,7 @@ export function stageBasis(facts: PrFacts) {
     facts.headOid,
     facts.reviewRequested,
     facts.myReview?.state ?? null,
-    facts.myReview?.at ?? null,
+    facts.myReview?.oid ?? null,
     facts.unresolvedThreads > 0,
     facts.role,
   ]
