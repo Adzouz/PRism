@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query'
-import type { BoardPr } from '@shared/domain'
+import type { AppPreferences, BoardPr, InstalledApps, Run, RunEvent, Stage } from '@shared/domain'
 import type { IpcChannel, IpcInput, IpcOutput } from '@shared/ipc'
 
 export function invoke<C extends IpcChannel>(
@@ -45,6 +45,12 @@ export const keys = {
   prDetail: (id: number) => ['prs', id, 'detail'] as const,
   sync: ['sync'] as const,
   boardSettings: ['board', 'settings'] as const,
+  runs: ['runs'] as const,
+  prRuns: (prId: number) => ['runs', 'pr', prId] as const,
+  runEvents: (runId: number) => ['runs', runId, 'events'] as const,
+  runFindings: (runId: number) => ['runs', runId, 'findings'] as const,
+  prThreads: (prId: number) => ['prs', prId, 'threads'] as const,
+  apps: ['apps'] as const,
 }
 
 export const useGithubStatus = () =>
@@ -134,9 +140,26 @@ export function useBoardEvents() {
     const offSync = window.prism.on('sync:status', (status) => {
       client.setQueryData(keys.sync, status)
     })
+    const offRun = window.prism.on('runs:changed', (run) => {
+      const merge = (list: Run[] | undefined) =>
+        list &&
+        (list.some((item) => item.id === run.id)
+          ? list.map((item) => (item.id === run.id ? run : item))
+          : [run, ...list])
+      client.setQueryData<Run[]>(keys.prRuns(run.prId), merge)
+      client.setQueryData<Run[]>(keys.runs, merge)
+      if (run.report) void client.invalidateQueries({ queryKey: keys.runFindings(run.id) })
+    })
+    const offEvent = window.prism.on('runs:event', (event) => {
+      client.setQueryData<RunEvent[]>(keys.runEvents(event.runId), (list) =>
+        list && !list.some((item) => item.id === event.id) ? [...list, event] : list,
+      )
+    })
     return () => {
       offPrs()
       offSync()
+      offRun()
+      offEvent()
     }
   }, [client])
 }
@@ -188,3 +211,83 @@ export const useSetStage = () =>
       return { ...pr, stage: next, manual: next !== pr.derivedStage, stageSince: Date.now() }
     },
   )
+
+export const useRuns = () => useQuery({ queryKey: keys.runs, queryFn: () => invoke('runs:list') })
+
+export const usePrRuns = (prId: number) =>
+  useQuery({ queryKey: keys.prRuns(prId), queryFn: () => invoke('runs:forPr', prId) })
+
+export const useRunEvents = (runId: number | null) =>
+  useQuery({
+    queryKey: keys.runEvents(runId ?? 0),
+    queryFn: () => invoke('runs:events', { runId: runId! }),
+    enabled: runId !== null,
+    staleTime: Infinity,
+  })
+
+export const useRunFindings = (runId: number | null) =>
+  useQuery({
+    queryKey: keys.runFindings(runId ?? 0),
+    queryFn: () => invoke('runs:findings', runId!),
+    enabled: runId !== null,
+  })
+
+function useRunMutation<I>(fn: (input: I) => Promise<Run>) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (run) => {
+      void client.invalidateQueries({ queryKey: keys.prRuns(run.prId) })
+      void client.invalidateQueries({ queryKey: keys.prs, exact: true })
+    },
+  })
+}
+
+export const useStartRun = () =>
+  useRunMutation((input: { prId: number; stage: Stage; threadIds?: string[] }) =>
+    invoke('runs:start', input),
+  )
+
+export const useFollowUp = () =>
+  useRunMutation((input: { runId: number; message: string }) => invoke('runs:followUp', input))
+
+export const usePrThreads = (prId: number, enabled = true) =>
+  useQuery({
+    queryKey: keys.prThreads(prId),
+    queryFn: () => invoke('prs:threads', prId),
+    enabled,
+    staleTime: 30_000,
+  })
+
+export const useApps = () =>
+  useQuery({ queryKey: keys.apps, queryFn: () => invoke('apps:list'), staleTime: 5 * 60_000 })
+
+export function useSetApps() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (patch: Partial<AppPreferences>) => invoke('apps:setPreferred', patch),
+    onSuccess: (preferred) =>
+      client.setQueryData<InstalledApps>(keys.apps, (apps) => apps && { ...apps, preferred }),
+  })
+}
+
+export const useOpenWorktree = () =>
+  useMutation({
+    mutationFn: (input: { runId: number; target: 'editor' | 'terminal' }) =>
+      invoke('runs:openWorktree', input),
+  })
+
+export const useResumeInTerminal = () =>
+  useMutation({ mutationFn: (runId: number) => invoke('runs:resumeInTerminal', runId) })
+
+export const useCancelRun = () => useRunMutation((runId: number) => invoke('runs:cancel', runId))
+
+export const useDismissRun = () => useRunMutation((runId: number) => invoke('runs:dismiss', runId))
+
+export const useAnswer = () =>
+  useRunMutation((input: { askId: number; answer: string }) => invoke('runs:answer', input))
+
+export function runStageFor(pr: Pick<BoardPr, 'tab' | 'derivedStage' | 'myReviewState'>): Stage {
+  if (pr.tab === 'mine') return 'address'
+  return pr.derivedStage === 're-review' || pr.myReviewState ? 're-review' : 'review'
+}

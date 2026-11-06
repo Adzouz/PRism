@@ -8,11 +8,16 @@ import { emit } from './ipc/emit'
 import { boardHandlers } from './ipc/board-handlers'
 import { onboardingHandlers } from './ipc/handlers'
 import { registerIpc } from './ipc/register'
+import { runHandlers } from './ipc/run-handlers'
+import { claudeAdapter } from './agents/claude'
 import { cachedGithubStatus, isOnboarded } from './services/config'
 import type { Ctx } from './services/context'
 import { createGithubApi } from './services/gh-api'
 import { stopWatching, watchLinkedSkills } from './services/library'
+import { createRunner, type AgentRunner } from './services/runner'
 import { createSyncService } from './services/sync'
+
+let runner: AgentRunner | null = null
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -79,6 +84,17 @@ void app.whenReady().then(() => {
     enabled: () => isOnboarded(ctx),
   })
 
+  runner = createRunner({
+    ctx,
+    api,
+    adapters: { claude: claudeAdapter },
+    emit: {
+      run: (run) => emit('runs:changed', run),
+      event: (event) => emit('runs:event', event),
+      prsChanged,
+    },
+  })
+
   registerIpc({
     'app:info': () => ({ version: app.getVersion(), platform: process.platform }),
     'settings:getTheme': () => getSetting(db, 'theme', themePreference, 'system'),
@@ -90,17 +106,22 @@ void app.whenReady().then(() => {
     'theme:isDark': () => nativeTheme.shouldUseDarkColors,
     ...onboardingHandlers(ctx),
     ...boardHandlers(ctx, api, sync, prsChanged),
+    ...runHandlers(ctx, api, runner),
   })
 
   createWindow()
   sync.start()
+  runner.resumeAll()
   app.on('browser-window-focus', () => sync.focus())
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
-app.on('will-quit', stopWatching)
+app.on('will-quit', () => {
+  stopWatching()
+  runner?.shutdown()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

@@ -2,7 +2,7 @@
 
 PRism is a macOS app for reviewing GitHub pull requests with AI agents. You watch repositories and get a kanban board of the PRs that involve you. You run review / address-comments skills in parallel and watch each one live. Every action that touches git history or GitHub waits for your go.
 
-Status: **planning** (2026-11-05). Nothing built yet. The repo will be public (MIT), so this document, the code and the defaults stay generic: no private repo names, no internal tooling, no personal data.
+Status: phases 0–2 done, phase 3 in review (see [AGENTS.md](AGENTS.md#status)). The repo is public (MIT), so this document, the code and the defaults stay generic: no private repo names, no internal tooling, no personal data.
 
 ---
 
@@ -356,7 +356,7 @@ Plus:
 | 0 | Scaffold: electron-vite, shadcn, tokens dark/light, Geist, typed IPC, SQLite, lint/test, signed dev build, secret-denylist CI | Empty signed app opens, theme switches |
 | 1 | Onboarding + skill sources: gh/agent detection, repos, worktree folder, source locate/install/bootstrap/manifest, import copy/link/custom, stage validation | Fresh machine reaches a validated config |
 | 2 | Sync + Board: stage derivation, kanban dnd, star/hide/archive, overrides, filters, Archive section, PR drawer Overview | Board mirrors GitHub within 60s |
-| 3 | Agent runner (Claude): worktrees, MCP tools, guardrails, live transcript, Needs-you, resume | Review runs in parallel on 3 PRs |
+| 3 | Agent runner (Claude): worktrees, MCP tools, guardrails, live transcript, Needs-you, resume, any stage from the drawer (incl. test plan, draft replies), review-thread picker, follow-up messages, dismiss, open worktree in editor/terminal, resume in terminal | Review runs in parallel on 3 PRs |
 | 4 | Post gate + actions: findings editing, submit/draft review, commit, push + verify, replies, ledger linking | Full review→post and address→push→reply loops on real PRs |
 | 5 | Re-review ledger: prior-findings pass, delta + range-diff, escalation | Re-review posts only new findings |
 | 6 | Dashboard | Δ% correct on day 2 |

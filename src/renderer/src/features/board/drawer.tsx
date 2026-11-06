@@ -22,8 +22,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { usePrDetail, usePrs, useSetFlags, useSetStage } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { RunsPanel } from '../runs/runs-panel'
+import { WorktreeFooter } from '../runs/worktree-footer'
 import { Avatar } from './card'
-import { age, prSize, stageLabel, useBoardStore, useNow } from './model'
+import { age, prSize, stageLabel, useBoardStore, useNow, type DrawerTab } from './model'
 
 const reviewTone: Record<string, 'success' | 'destructive' | 'default' | 'accent'> = {
   APPROVED: 'success',
@@ -296,6 +298,8 @@ function Overview({ pr }: { pr: BoardPr }) {
 export function PrDrawer() {
   const openPrId = useBoardStore((state) => state.openPrId)
   const openPr = useBoardStore((state) => state.openPr)
+  const drawerTab = useBoardStore((state) => state.drawerTab)
+  const setDrawerTab = useBoardStore((state) => state.setDrawerTab)
   const { data: prs } = usePrs()
   const setFlags = useSetFlags()
   const pr = prs?.find((item) => item.id === openPrId) ?? null
@@ -356,9 +360,44 @@ export function PrDrawer() {
                   </Button>
                 </div>
               </header>
-              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-                <Overview pr={pr} />
+              <div
+                role="tablist"
+                aria-label="Pull request sections"
+                className="flex gap-1 border-b px-5"
+              >
+                {(
+                  [
+                    ['overview', 'Overview'],
+                    ['runs', 'Runs'],
+                  ] as [DrawerTab, string][]
+                ).map(([tab, label]) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    role="tab"
+                    aria-selected={drawerTab === tab}
+                    onClick={() => setDrawerTab(tab)}
+                    className={cn(
+                      '-mb-px flex items-center gap-1.5 border-b-2 border-transparent px-2 py-2.5 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
+                      drawerTab === tab && 'border-primary text-foreground',
+                    )}
+                  >
+                    {label}
+                    {tab === 'runs' && pr.run?.status === 'needs_you' && (
+                      <span className="size-1.5 rounded-full bg-warning" />
+                    )}
+                    {tab === 'runs' &&
+                      pr.run &&
+                      ['queued', 'preparing', 'running'].includes(pr.run.status) && (
+                        <Loader2 className="size-3 animate-spin" />
+                      )}
+                  </button>
+                ))}
               </div>
+              <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                {drawerTab === 'runs' ? <RunsPanel pr={pr} /> : <Overview pr={pr} />}
+              </div>
+              <WorktreeFooter pr={pr} />
               <DialogPrimitive.Close className="absolute top-5 right-5 rounded-md p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
                 <X className="size-4" />
                 <span className="sr-only">Close</span>

@@ -47,6 +47,7 @@ import {
   syncSource,
 } from '../services/sources'
 import type { BoardChannel } from './board-handlers'
+import type { RunChannel } from './run-handlers'
 import type { registerIpc } from './register'
 
 type Handlers = Parameters<typeof registerIpc>[0]
@@ -63,7 +64,12 @@ export function onboardingHandlers(
   ctx: Ctx,
 ): Omit<
   Handlers,
-  'app:info' | 'settings:getTheme' | 'settings:setTheme' | 'theme:isDark' | BoardChannel
+  | 'app:info'
+  | 'settings:getTheme'
+  | 'settings:setTheme'
+  | 'theme:isDark'
+  | BoardChannel
+  | RunChannel
 > {
   return {
     'dialog:pickFolder': ({ title, defaultPath }) =>

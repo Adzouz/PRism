@@ -51,6 +51,20 @@ export const ipcChannels = [
   'sync:status',
   'board:getSettings',
   'board:setSettings',
+  'runs:start',
+  'runs:cancel',
+  'runs:answer',
+  'runs:dismiss',
+  'runs:list',
+  'runs:forPr',
+  'runs:events',
+  'runs:findings',
+  'runs:followUp',
+  'runs:openWorktree',
+  'runs:resumeInTerminal',
+  'prs:threads',
+  'apps:list',
+  'apps:setPreferred',
 ] as const
 
 export type IpcChannel = (typeof ipcChannels)[number]
@@ -65,6 +79,8 @@ export const ipcEvents = [
   'skills:changed',
   'prs:changed',
   'sync:status',
+  'runs:changed',
+  'runs:event',
 ] as const
 
 export type IpcEvent = (typeof ipcEvents)[number]

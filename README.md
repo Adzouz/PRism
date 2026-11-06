@@ -11,7 +11,8 @@ Status: early development. See [Status](AGENTS.md#status) for what works today a
 - **Board:** a Reviews tab (pull requests you review) and a My PRs tab (authored or taken over), with stages derived from GitHub and kept in sync every 60 seconds and on focus.
 - **Card actions:** star, hide, archive, drag to override a stage. A manual stage holds until GitHub's state changes.
 - **Skills:** pick a skill source per repository (a public or private git repo, or a local folder), import or link skills, and bind one to each stage (review, re-review, test plan, address comments, draft replies).
-- **Agent runs (in progress):** review runs in a dedicated git worktree per pull request, with a live transcript and questions when the agent needs you. Agents never commit, push or post.
+- **Agent runs:** drag a card into Reviewing (or Addressing), or pick a stage in the drawer (review, re-review, test plan, address comments, draft replies), to run the bound skill with Claude in a dedicated git worktree per pull request. Address and draft-replies runs work on the review threads you pick. Runs go in parallel, stream a live transcript, report a verdict, findings, changes or draft replies, and pause in a Needs you column with an inline answer form when the agent has a question. Sessions resume after an answer or an app restart, take follow-up messages, and open in your terminal (`claude --resume`) or editor.
+- **Guardrails:** agents read and edit the worktree only. A command guard, a read-only `gh` shim, a pre-push hook and a prompt contract keep them from committing, pushing or posting.
 
 ## Requirements
 
@@ -51,6 +52,7 @@ src/
   preload/      contextBridge with a channel allowlist
   renderer/     React app: board, drawer, onboarding, settings
   shared/       Domain types and the zod-validated IPC contract
+  main/agents/  Agent adapters, PRism MCP tools, guardrails
 drizzle/        SQL migrations
 resources/      Built-in starter skills
 scripts/        Denylist check, local install

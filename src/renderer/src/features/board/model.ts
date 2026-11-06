@@ -21,13 +21,19 @@ const emptyFilters: Filters = {
   search: '',
 }
 
+export type DrawerTab = 'overview' | 'runs'
+
 type BoardStore = {
   filters: Record<BoardTab, Filters>
   density: Density
   openPrId: number | null
+  drawerTab: DrawerTab
+  agentDropConfirmed: boolean
   setFilters: (tab: BoardTab, patch: Partial<Filters>) => void
   setDensity: (density: Density) => void
-  openPr: (id: number | null) => void
+  openPr: (id: number | null, tab?: DrawerTab) => void
+  setDrawerTab: (tab: DrawerTab) => void
+  confirmAgentDrop: () => void
 }
 
 export const useBoardStore = create<BoardStore>()(
@@ -36,17 +42,23 @@ export const useBoardStore = create<BoardStore>()(
       filters: { reviews: emptyFilters, mine: emptyFilters },
       density: 'comfortable',
       openPrId: null,
+      drawerTab: 'overview',
+      agentDropConfirmed: false,
       setFilters: (tab, patch) =>
         set((state) => ({
           filters: { ...state.filters, [tab]: { ...state.filters[tab], ...patch } },
         })),
       setDensity: (density) => set({ density }),
-      openPr: (openPrId) => set({ openPrId }),
+      openPr: (openPrId, drawerTab) =>
+        set((state) => ({ openPrId, drawerTab: drawerTab ?? state.drawerTab })),
+      setDrawerTab: (drawerTab) => set({ drawerTab }),
+      confirmAgentDrop: () => set({ agentDropConfirmed: true }),
     }),
     {
       name: 'prism-board',
-      partialize: ({ filters, density }) => ({
+      partialize: ({ filters, density, agentDropConfirmed }) => ({
         density,
+        agentDropConfirmed,
         filters: {
           reviews: { ...filters.reviews, search: '' },
           mine: { ...filters.mine, search: '' },
@@ -60,8 +72,13 @@ const needsMeStages = (tab: BoardTab) =>
   new Set(boardColumns[tab].filter((column) => column.needsMe).map((column) => column.stage))
 
 export function isNeedsMe(pr: BoardPr) {
-  return pr.state === 'OPEN' && needsMeStages(pr.tab).has(pr.stage)
+  return (
+    pr.run?.status === 'needs_you' || (pr.state === 'OPEN' && needsMeStages(pr.tab).has(pr.stage))
+  )
 }
+
+export const hasLiveRun = (pr: BoardPr) =>
+  pr.run !== null && ['queued', 'preparing', 'running', 'needs_you'].includes(pr.run.status)
 
 export function matchesSearch(pr: BoardPr, search: string) {
   const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean)

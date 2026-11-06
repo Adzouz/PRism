@@ -3,15 +3,27 @@ import { useDraggable } from '@dnd-kit/core'
 import {
   Archive,
   ArrowUpRight,
+  Bot,
   Eye,
   EyeOff,
+  Loader2,
   MessageSquare,
   MoveRight,
+  Play,
   RotateCcw,
+  Square,
   Star,
   Users,
+  X,
 } from 'lucide-react'
-import { boardColumns, type BoardPr, type BoardStage } from '@shared/domain'
+import {
+  boardColumns,
+  runStagesByTab,
+  stageLabels,
+  type BoardPr,
+  type BoardStage,
+  type Stage,
+} from '@shared/domain'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -23,8 +35,10 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { Tooltip } from '@/components/ui/tooltip'
+import { runStageFor } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { age, prSize, type Density } from './model'
+import { AnswerForm, verdictLabel } from '../runs/parts'
+import { age, hasLiveRun, prSize, type Density } from './model'
 
 export type CardActions = {
   open: (pr: BoardPr) => void
@@ -32,6 +46,62 @@ export type CardActions = {
   hide: (pr: BoardPr) => void
   archive: (pr: BoardPr) => void
   move: (pr: BoardPr, stage: BoardStage | null) => void
+  run: (pr: BoardPr, stage?: Stage) => void
+  cancel: (pr: BoardPr) => void
+  dismiss: (pr: BoardPr) => void
+}
+
+function RunStrip({ pr, interactive }: { pr: BoardPr; interactive: boolean }) {
+  const run = pr.run
+  if (!run) return null
+  if (run.status === 'needs_you' && run.ask) {
+    return interactive ? (
+      <div className="rounded-lg border border-warning/40 bg-warning/5 p-2">
+        <AnswerForm ask={run.ask} compact />
+      </div>
+    ) : (
+      <p className="line-clamp-2 text-xs text-warning">{run.ask.prompt}</p>
+    )
+  }
+  if (run.status === 'queued' || run.status === 'preparing' || run.status === 'running') {
+    return (
+      <p className="flex items-center gap-1.5 text-xs text-primary">
+        <Loader2 className="size-3 shrink-0 animate-spin" />
+        <span className="truncate">{run.progress ?? `${stageLabels[run.stage]} starting`}</span>
+      </p>
+    )
+  }
+  if (
+    run.status === 'done' &&
+    run.verdict &&
+    (pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post')
+  ) {
+    return (
+      <p className="text-xs">
+        <span
+          className={cn(
+            'font-medium',
+            run.verdict === 'approve' && 'text-success',
+            run.verdict === 'request_changes' && 'text-destructive',
+          )}
+        >
+          {verdictLabel[run.verdict]}
+        </span>
+        <span className="text-muted-foreground">
+          {' '}
+          · {run.findings} finding{run.findings === 1 ? '' : 's'}
+        </span>
+      </p>
+    )
+  }
+  if (run.status === 'failed') {
+    return (
+      <Tooltip content={run.error ?? 'Run failed'}>
+        <p className="truncate text-xs text-destructive">{stageLabels[run.stage]} run failed</p>
+      </Tooltip>
+    )
+  }
+  return null
 }
 
 const ciColor: Record<BoardPr['ciState'], string> = {
@@ -107,7 +177,17 @@ function IconAction({
   )
 }
 
-function CardBody({ pr, now, density }: { pr: BoardPr; now: number; density: Density }) {
+function CardBody({
+  pr,
+  now,
+  density,
+  interactive = false,
+}: {
+  pr: BoardPr
+  now: number
+  density: Density
+  interactive?: boolean
+}) {
   const repoName = pr.repo.split('/')[1] ?? pr.repo
   return (
     <>
@@ -146,6 +226,7 @@ function CardBody({ pr, now, density }: { pr: BoardPr; now: number; density: Den
           )}
         </div>
       )}
+      <RunStrip pr={pr} interactive={interactive} />
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Avatar src={pr.authorAvatar} name={pr.author} />
         {density === 'comfortable' && <span className="truncate">{pr.author}</span>}
@@ -208,7 +289,11 @@ export const PrCard = memo(function PrCard({
     id: pr.id,
     data: { pr },
   })
-  const needsMe = pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post'
+  const needsMe =
+    pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post' || pr.stage === 'needs-you'
+  const live = hasLiveRun(pr)
+  const defaultStage = runStageFor(pr)
+  const finished = pr.run !== null && ['done', 'failed', 'cancelled'].includes(pr.run.status)
   const columns = boardColumns[pr.tab].filter((column) => !column.agent)
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -247,7 +332,7 @@ export const PrCard = memo(function PrCard({
             needsMe && 'shadow-[0_0_0_1px_var(--primary),0_0_18px_-4px_var(--primary)]',
           )}
         >
-          <CardBody pr={pr} now={now} density={density} />
+          <CardBody pr={pr} now={now} density={density} interactive />
           <div className="absolute top-2 right-2 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
             <IconAction
               label={pr.starred ? 'Unstar (s)' : 'Star (s)'}
@@ -278,6 +363,42 @@ export const PrCard = memo(function PrCard({
           Open on GitHub
         </ContextMenuItem>
         <ContextMenuSeparator />
+        {live ? (
+          <ContextMenuItem onSelect={() => actions.cancel(pr)}>
+            <Square />
+            Stop {stageLabels[pr.run!.stage].toLowerCase()} run
+          </ContextMenuItem>
+        ) : (
+          pr.state === 'OPEN' && (
+            <>
+              <ContextMenuItem onSelect={() => actions.run(pr)}>
+                <Play />
+                Run {stageLabels[defaultStage].toLowerCase()}
+              </ContextMenuItem>
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <Bot />
+                  Other runs
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  {runStagesByTab[pr.tab]
+                    .filter((stage) => stage !== defaultStage)
+                    .map((stage) => (
+                      <ContextMenuItem key={stage} onSelect={() => actions.run(pr, stage)}>
+                        {stageLabels[stage]}
+                      </ContextMenuItem>
+                    ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            </>
+          )
+        )}
+        {finished && (
+          <ContextMenuItem onSelect={() => actions.dismiss(pr)}>
+            <X />
+            Dismiss {pr.run?.verdict && pr.stage === 'verdict-ready' ? 'verdict' : 'run'}
+          </ContextMenuItem>
+        )}
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <MoveRight />

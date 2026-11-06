@@ -7,6 +7,7 @@ import {
   type BoardSettings,
   type BoardStage,
   type PrDetail,
+  type ReviewThread,
 } from '@shared/domain'
 import { prFlags, prs, repos } from '../db/schema'
 import { getSetting, setSetting } from '../db/settings'
@@ -15,6 +16,13 @@ import type { GithubApi } from './gh-api'
 import { getRepo } from './repos'
 import { ciOfChecks, fetchChecks } from './checks'
 import { stageAllowedIn, stageBasis, tabOf } from './pr-stage'
+import {
+  boardRunFor,
+  dismissRunsForPr,
+  latestBoardRuns,
+  type BoardRunInfo,
+  type PrRuns,
+} from './runs'
 
 const labelList = z.array(prLabel)
 
@@ -36,9 +44,23 @@ function selectBoard(ctx: Ctx) {
 
 type BoardRow = Awaited<ReturnType<ReturnType<typeof selectBoard>['all']>>[number]
 
-function toBoardPr({ pr, flags, owner, name }: BoardRow): BoardPr {
+const boardRunOf = (run: BoardRunInfo): BoardPr['run'] => ({
+  id: run.id,
+  stage: run.stage,
+  status: run.status,
+  progress: run.progress,
+  error: run.error,
+  verdict: run.verdict,
+  findings: run.findings,
+  ask: run.ask,
+})
+
+function toBoardPr({ pr, flags, owner, name }: BoardRow, set?: PrRuns): BoardPr {
   const derived = pr.derivedStage as BoardStage
   const manual = (flags?.manualStage as BoardStage | null | undefined) ?? null
+  const tab = tabOf(pr.myRole)
+  const picked = set ? boardRunFor(tab, set, { state: pr.state, myReviewAt: pr.myReviewAt }) : null
+  const overlay = picked?.stage ?? null
   return {
     id: pr.id,
     repoId: pr.repoId,
@@ -60,27 +82,31 @@ function toBoardPr({ pr, flags, owner, name }: BoardRow): BoardPr {
     requestedTeam: pr.requestedTeam,
     myReviewState: pr.myReviewState,
     role: pr.myRole,
-    tab: tabOf(pr.myRole),
+    tab,
     derivedStage: derived,
-    stage: manual ?? derived,
-    manual: manual !== null,
+    stage: overlay ?? manual ?? derived,
+    manual: overlay === null && manual !== null,
     stageSince: pr.stageSince,
     updatedAt: pr.updatedAt,
     closedAt: pr.closedAt,
     starred: flags?.starred ?? false,
     hidden: flags?.hidden ?? false,
     archivedAt: flags?.archivedAt ?? null,
+    run: picked ? boardRunOf(picked.run) : null,
   }
 }
 
 export function listPrs(ctx: Ctx) {
-  return selectBoard(ctx).all().map(toBoardPr)
+  const latest = latestBoardRuns(ctx)
+  return selectBoard(ctx)
+    .all()
+    .map((row) => toBoardPr(row, latest.get(row.pr.id)))
 }
 
 export function getPr(ctx: Ctx, id: number) {
   const row = selectBoard(ctx).where(eq(prs.id, id)).get()
   if (!row) throw new Error(`Pull request ${id} not found`)
-  return toBoardPr(row)
+  return toBoardPr(row, latestBoardRuns(ctx).get(id))
 }
 
 function upsertFlags(ctx: Ctx, prId: number, set: Partial<typeof prFlags.$inferInsert>) {
@@ -124,6 +150,7 @@ export function setPrStage(ctx: Ctx, input: { id: number; stage: BoardStage | nu
     unresolvedThreads: row.unresolvedThreads,
     role: row.myRole,
   })
+  dismissRunsForPr(ctx, row.id)
   upsertFlags(ctx, row.id, { manualStage: stage, manualStageBasis: stage ? basis : null })
   ctx.db.update(prs).set({ stageSince: Date.now() }).where(eq(prs.id, row.id)).run()
   return getPr(ctx, row.id)
@@ -232,4 +259,61 @@ export async function prDetail(ctx: Ctx, api: GithubApi, id: number): Promise<Pr
     checks,
     ciState: ciOfChecks(checks),
   }
+}
+
+const threadsQuery = `
+  query Threads($id: ID!) {
+    node(id: $id) { ... on PullRequest {
+      reviewThreads(first: 100) { nodes {
+        id isResolved isOutdated path line originalLine
+        comments(first: 30) { totalCount nodes {
+          id body createdAt url author { login avatarUrl }
+        } }
+      } }
+    } }
+  }
+`
+
+type ThreadNode = {
+  id: string
+  isResolved: boolean
+  isOutdated: boolean
+  path: string
+  line: number | null
+  originalLine: number | null
+  comments: {
+    totalCount: number
+    nodes: {
+      id: string
+      body: string
+      createdAt: string
+      url: string
+      author: { login: string; avatarUrl: string } | null
+    }[]
+  }
+}
+
+export async function prThreads(ctx: Ctx, api: GithubApi, id: number): Promise<ReviewThread[]> {
+  const row = ctx.db.select({ nodeId: prs.nodeId }).from(prs).where(eq(prs.id, id)).get()
+  if (!row) throw new Error(`Pull request ${id} not found`)
+  const { node } = await api.graphql<{
+    node: { reviewThreads: { nodes: ThreadNode[] } } | null
+  }>(threadsQuery, { id: row.nodeId })
+  if (!node) throw new Error('Pull request not found on GitHub')
+  return node.reviewThreads.nodes.map((thread) => ({
+    id: thread.id,
+    path: thread.path,
+    line: thread.line ?? thread.originalLine,
+    isResolved: thread.isResolved,
+    isOutdated: thread.isOutdated,
+    totalComments: thread.comments.totalCount,
+    comments: thread.comments.nodes.map((comment) => ({
+      id: comment.id,
+      author: comment.author?.login ?? 'ghost',
+      avatar: comment.author?.avatarUrl ?? null,
+      body: comment.body,
+      createdAt: Date.parse(comment.createdAt),
+      url: comment.url,
+    })),
+  }))
 }

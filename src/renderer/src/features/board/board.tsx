@@ -6,6 +6,7 @@ import {
   PointerSensor,
   pointerWithin,
   rectIntersection,
+  useDndContext,
   useDroppable,
   useSensor,
   useSensors,
@@ -15,13 +16,32 @@ import {
   type KeyboardCoordinateGetter,
 } from '@dnd-kit/core'
 import { Bot, GitPullRequest, Loader2 } from 'lucide-react'
-import { boardColumns, type BoardColumn, type BoardPr, type BoardTab } from '@shared/domain'
-import { EmptyState } from '@/components/page'
+import {
+  boardColumns,
+  stageLabels,
+  type BoardColumn,
+  type BoardPr,
+  type BoardTab,
+  type Stage,
+} from '@shared/domain'
+import { EmptyState, ErrorText } from '@/components/page'
 import { Badge } from '@/components/ui/badge'
-import { useSetFlags, useSetStage, usePrs } from '@/lib/api'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
+import {
+  runStageFor,
+  useCancelRun,
+  useDismissRun,
+  useSetFlags,
+  useSetStage,
+  useStartRun,
+  usePrs,
+} from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { CardPreview, PrCard, type CardActions } from './card'
-import { boardView, useBoardStore, useNow, type Density } from './model'
+import { boardView, hasLiveRun, useBoardStore, useNow, type Density } from './model'
+
+const runColumns = new Set(['reviewing', 'addressing'])
 import { Toolbar } from './toolbar'
 
 const collision: CollisionDetection = (args) => {
@@ -73,25 +93,31 @@ function Column({
   density: Density
   actions: CardActions
 }) {
-  const disabled = Boolean(column.agent)
-  const { setNodeRef, isOver, active } = useDroppable({ id: column.stage, disabled })
-  const fromHere = (active?.data.current?.pr as BoardPr | undefined)?.stage === column.stage
+  const { active } = useDndContext()
+  const dragged = active?.data.current?.pr as BoardPr | undefined
+  const disabled =
+    Boolean(column.agent) &&
+    !(runColumns.has(column.stage) && dragged && !hasLiveRun(dragged) && dragged.state === 'OPEN')
+  const { setNodeRef, isOver } = useDroppable({ id: column.stage, disabled })
+  const fromHere = dragged?.stage === column.stage
   return (
     <section
       ref={setNodeRef}
       aria-label={column.label}
       className={cn(
         'flex w-72 shrink-0 flex-col gap-2 rounded-2xl bg-secondary/50 p-2 transition-colors',
-        active && !disabled && !fromHere && 'bg-accent/50',
+        dragged && !disabled && !fromHere && 'bg-accent/50',
         isOver && !disabled && !fromHere && 'bg-accent ring-2 ring-primary/40',
-        active && disabled && 'opacity-50',
+        dragged && disabled && 'opacity-50',
       )}
     >
       <header className="flex h-8 items-center gap-2 px-2">
         <h3 className="text-sm font-medium">{column.label}</h3>
         <span className="font-mono text-xs text-muted-foreground">{prs.length}</span>
-        {column.agent && <Bot className="ml-auto size-3.5 text-muted-foreground" />}
-        {column.needsMe && !column.agent && prs.length > 0 && (
+        {column.agent && column.stage !== 'needs-you' && (
+          <Bot className="ml-auto size-3.5 text-muted-foreground" />
+        )}
+        {column.needsMe && (!column.agent || column.stage === 'needs-you') && prs.length > 0 && (
           <Badge variant="accent" className="ml-auto">
             Needs you
           </Badge>
@@ -103,7 +129,13 @@ function Column({
         ))}
         {prs.length === 0 && (
           <p className="px-2 py-6 text-center text-xs text-muted-foreground">
-            {column.agent ? 'Agent runs land here' : tab === 'reviews' ? 'Nothing here' : 'Empty'}
+            {runColumns.has(column.stage)
+              ? 'Drop a card here to start a run'
+              : column.agent
+                ? 'Agent runs land here'
+                : tab === 'reviews'
+                  ? 'Nothing here'
+                  : 'Empty'}
           </p>
         )}
       </div>
@@ -119,6 +151,12 @@ export function Board({ tab }: { tab: BoardTab }) {
   const now = useNow()
   const setFlags = useSetFlags()
   const setStage = useSetStage()
+  const startRun = useStartRun()
+  const cancelRun = useCancelRun()
+  const dismissRun = useDismissRun()
+  const agentDropConfirmed = useBoardStore((state) => state.agentDropConfirmed)
+  const confirmAgentDrop = useBoardStore((state) => state.confirmAgentDrop)
+  const [pendingRun, setPendingRun] = useState<BoardPr | null>(null)
   const [dragging, setDragging] = useState<BoardPr | null>(null)
   const justDropped = useRef(false)
 
@@ -140,17 +178,33 @@ export function Board({ tab }: { tab: BoardTab }) {
 
   const { mutate: flag } = setFlags
   const { mutate: stage } = setStage
+  const { mutate: start } = startRun
+  const { mutate: cancel } = cancelRun
+  const { mutate: dismiss } = dismissRun
+  const launch = useCallback(
+    (pr: BoardPr, runAs?: Stage) => start({ prId: pr.id, stage: runAs ?? runStageFor(pr) }),
+    [start],
+  )
   const actions = useMemo<CardActions>(
     () => ({
       open: (pr) => {
-        if (!justDropped.current) openPr(pr.id)
+        if (justDropped.current) return
+        const live =
+          pr.run && (hasLiveRun(pr) || pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post')
+        openPr(pr.id, live ? 'runs' : undefined)
       },
+      run: (pr, runAs) => {
+        launch(pr, runAs)
+        openPr(pr.id, 'runs')
+      },
+      cancel: (pr) => pr.run && cancel(pr.run.id),
+      dismiss: (pr) => pr.run && dismiss(pr.run.id),
       star: (pr) => flag({ id: pr.id, starred: !pr.starred }),
       hide: (pr) => flag({ id: pr.id, hidden: !pr.hidden }),
       archive: (pr) => flag({ id: pr.id, archived: true }),
       move: (pr, target) => stage({ id: pr.id, stage: target }),
     }),
-    [flag, stage, openPr],
+    [flag, stage, openPr, launch, cancel, dismiss],
   )
 
   const onDragStart = useCallback((event: DragStartEvent) => {
@@ -168,10 +222,17 @@ export function Board({ tab }: { tab: BoardTab }) {
       const target = event.over?.id
       if (!pr || typeof target !== 'string' || target === pr.stage) return
       const column = boardColumns[tab].find((item) => item.stage === target)
-      if (!column || column.agent) return
+      if (!column) return
+      if (runColumns.has(column.stage)) {
+        if (hasLiveRun(pr) || pr.state !== 'OPEN') return
+        if (agentDropConfirmed) launch(pr)
+        else setPendingRun(pr)
+        return
+      }
+      if (column.agent) return
       stage({ id: pr.id, stage: column.stage })
     },
-    [stage, tab],
+    [stage, tab, agentDropConfirmed, launch],
   )
 
   const announcements = useMemo(
@@ -222,23 +283,59 @@ export function Board({ tab }: { tab: BoardTab }) {
           autoScroll={{ threshold: { x: 0.08, y: 0.15 }, acceleration: 6 }}
         >
           <div className="-mx-1 flex items-start gap-3 overflow-x-auto px-1 pb-4">
-            {boardColumns[tab].map((column) => (
-              <Column
-                key={column.stage}
-                tab={tab}
-                column={column}
-                prs={view.byStage.get(column.stage) ?? []}
-                now={now}
-                density={density}
-                actions={actions}
-              />
-            ))}
+            {boardColumns[tab]
+              .filter(
+                (column) => !column.hideEmpty || (view.byStage.get(column.stage)?.length ?? 0) > 0,
+              )
+              .map((column) => (
+                <Column
+                  key={column.stage}
+                  tab={tab}
+                  column={column}
+                  prs={view.byStage.get(column.stage) ?? []}
+                  now={now}
+                  density={density}
+                  actions={actions}
+                />
+              ))}
           </div>
           <DragOverlay dropAnimation={null}>
             {dragging && <CardPreview pr={dragging} now={now} density={density} />}
           </DragOverlay>
         </DndContext>
       )}
+      <ErrorText error={startRun.error ?? cancelRun.error ?? dismissRun.error} />
+      <Dialog open={pendingRun !== null} onOpenChange={(open) => !open && setPendingRun(null)}>
+        {pendingRun && (
+          <DialogContent
+            title={`Start a ${stageLabels[runStageFor(pendingRun)].toLowerCase()} run?`}
+            description={`${pendingRun.repo} #${pendingRun.number}`}
+            className="w-[min(480px,calc(100vw-48px))]"
+          >
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Dropping a card here runs the bound skill with your default agent in a worktree for
+                this pull request. The agent reads and reports; it never commits, pushes or posts.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setPendingRun(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  autoFocus
+                  onClick={() => {
+                    confirmAgentDrop()
+                    launch(pendingRun)
+                    setPendingRun(null)
+                  }}
+                >
+                  Start run
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        )}
+      </Dialog>
     </div>
   )
 }

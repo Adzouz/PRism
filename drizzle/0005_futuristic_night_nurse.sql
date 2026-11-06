@@ -1,0 +1,1 @@
+ALTER TABLE `runs` ADD `threads_json` text;

@@ -1,4 +1,12 @@
-import { integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import {
+  index,
+  integer,
+  primaryKey,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core'
 
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
@@ -133,4 +141,102 @@ export const snapshots = sqliteTable(
     takenAt: integer('taken_at').notNull(),
   },
   (t) => [primaryKey({ columns: [t.repoId, t.day] })],
+)
+
+export const runs = sqliteTable(
+  'runs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    prId: integer('pr_id')
+      .notNull()
+      .references(() => prs.id, { onDelete: 'cascade' }),
+    stage: text('stage').notNull(),
+    skillId: integer('skill_id').references(() => skills.id, { onDelete: 'set null' }),
+    skillName: text('skill_name'),
+    agent: text('agent').notNull(),
+    model: text('model').notNull(),
+    sessionId: text('session_id'),
+    worktreePath: text('worktree_path'),
+    status: text('status', {
+      enum: ['queued', 'preparing', 'running', 'needs_you', 'done', 'failed', 'cancelled'],
+    }).notNull(),
+    progress: text('progress'),
+    reviewedHeadOid: text('reviewed_head_oid'),
+    reviewedBaseOid: text('reviewed_base_oid'),
+    reportJson: text('report_json'),
+    changesJson: text('changes_json'),
+    repliesJson: text('replies_json'),
+    threadsJson: text('threads_json'),
+    createdAt: integer('created_at').notNull(),
+    startedAt: integer('started_at'),
+    endedAt: integer('ended_at'),
+    dismissedAt: integer('dismissed_at'),
+    tokensIn: integer('tokens_in').notNull().default(0),
+    tokensOut: integer('tokens_out').notNull().default(0),
+    costUsd: real('cost_usd').notNull().default(0),
+    error: text('error'),
+  },
+  (t) => [index('runs_pr').on(t.prId), index('runs_status').on(t.status)],
+)
+
+export const runEvents = sqliteTable(
+  'run_events',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    runId: integer('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
+    ts: integer('ts').notNull(),
+    kind: text('kind').notNull(),
+    payloadJson: text('payload_json').notNull(),
+  },
+  (t) => [index('run_events_run').on(t.runId)],
+)
+
+export const findings = sqliteTable(
+  'findings',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    prId: integer('pr_id')
+      .notNull()
+      .references(() => prs.id, { onDelete: 'cascade' }),
+    runId: integer('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
+    anchorPath: text('anchor_path').notNull(),
+    anchorLine: integer('anchor_line'),
+    side: text('side', { enum: ['LEFT', 'RIGHT'] }).notNull(),
+    hunkHash: text('hunk_hash'),
+    severity: text('severity', { enum: ['blocking', 'nit', 'refactor'] }).notNull(),
+    nitDecision: text('nit_decision', { enum: ['address', 'followup', 'skip'] }),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    suggestion: text('suggestion'),
+    priorFindingId: integer('prior_finding_id'),
+    included: integer('included', { mode: 'boolean' }).notNull().default(true),
+    editedBody: text('edited_body'),
+    status: text('status', {
+      enum: ['open', 'resolved', 'still_open', 'disputed', 'obsolete'],
+    })
+      .notNull()
+      .default('open'),
+    ghCommentId: text('gh_comment_id'),
+  },
+  (t) => [index('findings_run').on(t.runId), index('findings_pr').on(t.prId)],
+)
+
+export const asks = sqliteTable(
+  'asks',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    runId: integer('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
+    prompt: text('prompt').notNull(),
+    schemaJson: text('schema_json').notNull().default('{}'),
+    answerJson: text('answer_json'),
+    createdAt: integer('created_at').notNull(),
+    answeredAt: integer('answered_at'),
+  },
+  (t) => [index('asks_run').on(t.runId)],
 )
