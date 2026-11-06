@@ -62,6 +62,7 @@ function makePr(overrides: Partial<GqlPr> = {}): GqlPr {
     labels: { nodes: [] },
     reviewRequests: { nodes: [] },
     reviews: { nodes: [] },
+    latestOpinionatedReviews: { nodes: [] },
     reviewThreads: { nodes: [] },
     commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
     ...overrides,
@@ -317,32 +318,44 @@ describe('syncRepo', () => {
 
 describe('review and check edge cases', () => {
   it('keeps my verdict when I comment after approving', () => {
-    const review = (state: string, at: string, oid = 'head1') => ({
-      state,
-      submittedAt: at,
-      commit: { oid },
+    const commented = {
+      reviews: {
+        nodes: [{ state: 'COMMENTED', submittedAt: '2026-11-03T10:00:00Z', commit: { oid: 'h2' } }],
+      },
+    }
+    const opinion = (state: string, login = me) => ({ nodes: [{ state, author: { login } }] })
+    const pr = makePr({ ...commented, latestOpinionatedReviews: opinion('APPROVED') })
+    expect(myReviewOf(pr, me)).toEqual({
+      state: 'APPROVED',
+      oid: 'h2',
+      at: Date.parse('2026-11-03T10:00:00Z'),
     })
+    expect(
+      myReviewOf(
+        makePr({ ...commented, latestOpinionatedReviews: opinion('APPROVED', 'someone') }),
+        me,
+      )?.state,
+    ).toBe('COMMENTED')
+    expect(
+      myReviewOf(makePr({ ...commented, latestOpinionatedReviews: opinion('DISMISSED') }), me)
+        ?.state,
+    ).toBe('COMMENTED')
+    expect(myReviewOf(makePr(), me)).toBeNull()
+  })
+
+  it('keeps my verdict after many later comments', async () => {
+    const { ctx, repo } = await makeCtx()
     const pr = makePr({
       reviews: {
         nodes: [
-          review('APPROVED', '2026-11-02T10:00:00Z'),
-          review('COMMENTED', '2026-11-03T10:00:00Z'),
+          { state: 'COMMENTED', submittedAt: '2026-11-04T10:00:00Z', commit: { oid: 'head1' } },
         ],
       },
+      latestOpinionatedReviews: { nodes: [{ state: 'APPROVED', author: { login: 'OctoCat' } }] },
     })
-    expect(myReviewOf(pr)).toMatchObject({
-      state: 'APPROVED',
-      at: Date.parse('2026-11-03T10:00:00Z'),
-    })
-    const dismissed = makePr({
-      reviews: {
-        nodes: [
-          review('DISMISSED', '2026-11-02T10:00:00Z'),
-          review('COMMENTED', '2026-11-03T10:00:00Z'),
-        ],
-      },
-    })
-    expect(myReviewOf(dismissed)?.state).toBe('COMMENTED')
+    const { api } = fakeApi(() => ({ rev: [pr] }))
+    await syncRepo(ctx, api, repo, me)
+    expect(listPrs(ctx)[0]).toMatchObject({ myReviewState: 'APPROVED', stage: 'approved' })
   })
 
   it('treats unknown check conclusions as pending', () => {

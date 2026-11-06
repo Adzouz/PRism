@@ -40,6 +40,7 @@ export type GqlPr = {
   reviews: {
     nodes: { state: string; submittedAt: string | null; commit: { oid: string } | null }[]
   }
+  latestOpinionatedReviews: { nodes: { state: string; author: { login: string } | null }[] }
   reviewThreads: { nodes: { isResolved: boolean }[] }
   commits: { nodes: { commit: { statusCheckRollup: { contexts: CheckCounts } | null } }[] }
   recent?: {
@@ -61,9 +62,10 @@ const prFields = `
   reviewRequests(first: 30) {
     nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } }
   }
-  reviews(last: 10, author: $login, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+  reviews(last: 1, author: $login, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
     nodes { state submittedAt commit { oid } }
   }
+  latestOpinionatedReviews(first: 100) { nodes { state author { login } } }
   reviewThreads(first: 100) { nodes { isResolved } }
   commits(last: 1) { nodes { commit { statusCheckRollup { ${checkCountsFields} } } } }
 `
@@ -119,15 +121,16 @@ async function ciOf(api: GithubApi, repo: Repo, pr: GqlPr) {
   return ciOfChecks(await fetchChecks(api, pr.id, repo.ignoredChecks))
 }
 
-const verdicts = new Set(['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'])
+const verdicts = new Set(['APPROVED', 'CHANGES_REQUESTED'])
 
-export function myReviewOf(pr: GqlPr) {
-  const submitted = pr.reviews.nodes.filter((review) => review.submittedAt)
-  const latest = submitted.at(-1)
+export function myReviewOf(pr: GqlPr, login: string) {
+  const latest = pr.reviews.nodes.findLast((review) => review.submittedAt)
   if (!latest?.submittedAt) return null
-  const verdict = submitted.findLast((review) => verdicts.has(review.state))
+  const verdict = pr.latestOpinionatedReviews.nodes.find((review) =>
+    same(review.author?.login, login),
+  )
   const state =
-    latest.state === 'COMMENTED' && verdict && verdict.state !== 'DISMISSED'
+    latest.state === 'COMMENTED' && verdict && verdicts.has(verdict.state)
       ? verdict.state
       : latest.state
   return { state, oid: latest.commit?.oid ?? null, at: Date.parse(latest.submittedAt) }
@@ -169,7 +172,7 @@ export function applyPr(
   const teams = requests.flatMap((reviewer) =>
     reviewer?.__typename === 'Team' && reviewer.slug ? [reviewer.slug] : [],
   )
-  const myReview = myReviewOf(pr)
+  const myReview = myReviewOf(pr, login)
   const teamRequestKept =
     options.refreshed &&
     teams.length > 0 &&

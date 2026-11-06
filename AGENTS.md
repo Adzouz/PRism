@@ -88,7 +88,3 @@ Agents run by PRism, and agents working on this repo, never commit, push, or pos
 | 2 Sync + board               | Done                  |
 | 3 Agent runner (Claude)      | Next                  |
 | 4–8                          | Planned (PLAN.md §15) |
-
-Known follow-ups:
-
-- The sync reads my verdict from `reviews(last: 10)`; more than ten comments after approving loses it. Switch to `latestOpinionatedReviews`.
