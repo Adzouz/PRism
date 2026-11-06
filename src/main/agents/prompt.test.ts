@@ -18,6 +18,7 @@ const context: PromptContext = {
   skill: '# Re-review\n\nCheck the delta.',
   worktreeWarning: null,
   priorFindings: ['#4 [blocking] src/a.ts:3 Null check (open)'],
+  lastReviewedHead: 'fedcba9876543210',
   threads: [],
 }
 
@@ -30,6 +31,7 @@ describe('prompt', () => {
     expect(prompt).toContain('- #4 [blocking] src/a.ts:3 Null check (open)')
     expect(prompt).toContain('Check the delta.')
     expect(prompt).toContain('relative to /skills/pr-re-review')
+    expect(prompt).toContain('`git diff fedcba9876543210..HEAD`')
     expect(prompt).not.toMatch(/\n{3,}/)
   })
 
@@ -38,6 +40,7 @@ describe('prompt', () => {
     expect(prompt).toContain('prism_report_findings')
     expect(prompt).not.toContain('## Skill')
     expect(prompt).not.toContain('Earlier PRism findings')
+    expect(prompt).not.toContain('Last PRism review')
   })
 
   it('keeps the contract strict and answers readable', () => {

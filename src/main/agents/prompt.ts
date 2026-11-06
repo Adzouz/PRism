@@ -31,6 +31,7 @@ export type PromptContext = {
   skill: string | null
   worktreeWarning: string | null
   priorFindings: string[]
+  lastReviewedHead: string | null
   threads: ReviewThread[]
 }
 
@@ -63,6 +64,11 @@ export function buildPrompt(context: PromptContext) {
     `- \`gh api repos/${context.repo}/pulls/${context.number}/comments --paginate\` for review threads`,
     `- \`git diff ${context.baseRemote}/${context.baseRef}...HEAD\` for the full change`,
   ]
+  if (context.stage === 're-review' && context.lastReviewedHead) {
+    lines.push(
+      `- Last PRism review was at ${context.lastReviewedHead.slice(0, 12)}: \`git diff ${context.lastReviewedHead}..HEAD\` shows what changed since (after a force-push that commit may be gone; then use \`git range-diff\` or the full diff)`,
+    )
+  }
   if (context.worktreeWarning) lines.push('', `Note: ${context.worktreeWarning}.`)
   lines.push('', '## Reporting', '', reportSteps[context.stage])
   if (context.stage === 'address' || context.stage === 'draft-replies') {

@@ -22,6 +22,7 @@ export type SegmentInput = {
   prompt: string
   resume: string | null
   cwd: string
+  projectRoot: string | null
   model: string
   stage: Stage
   readOnly: boolean
@@ -42,6 +43,8 @@ export type SegmentResult = {
   costUsd: number
   error: string | null
 }
+
+export type SessionTotals = Pick<SegmentResult, 'tokensIn' | 'tokensOut' | 'costUsd'>
 
 export interface AgentAdapter {
   run(input: SegmentInput): Promise<SegmentResult>

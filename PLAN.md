@@ -89,11 +89,13 @@ Dark uses the given palette. Light is derived from it, and the app follows macOS
 
 ### Guardrails (layered, so they hold for every agent)
 
-1. **Claude:** `canUseTool` + PreToolUse hook deny `git commit|push|reset --hard`, `gh pr review|comment|merge`, and `gh api` with a write method.
+1. **Claude:** `canUseTool` + PreToolUse hook check every command: git by a subcommand allowlist, `gh` read-only (`gh api` parsed flag by flag, no writes or mutations), dynamic commands (`$(…)`, `eval`, piping into a shell) refused, edits only inside the worktree.
 2. **All agents:** a `gh` shim first on the agent's `PATH`, read subcommands only.
-3. **All agents:** a `pre-push` hook in every PRism worktree that refuses unless `PRISM_PUSH_NONCE` is set. Only ActionService sets it.
+3. **All agents:** a `pre-push` hook in every PRism worktree that refuses unless `PRISM_PUSH_NONCE` is set (only ActionService sets it), plus a push block in the agent env (`pushInsteadOf`) that `--no-verify` cannot skip.
 4. **Codex:** `--sandbox workspace-write` (no network) for read-only stages.
 5. **PRism contract:** a prompt appended to every run. It overrides any skill step that would post, commit or push, and turns it into `prism_draft_replies` / `prism_ask_user`.
+
+Project settings, hooks and MCP config always come from the user's clone, never from the pull request checkout. These layers stop accidents and naive prompt injection; an OS-level sandbox for Claude runs is a follow-up.
 
 ---
 

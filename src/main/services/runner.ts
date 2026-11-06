@@ -1,8 +1,15 @@
 import { chmod, mkdir, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
-import { threadStages, type AgentId, type Run, type RunEvent, type Stage } from '@shared/domain'
-import { ghShimScript } from '../agents/guard'
+import {
+  activeRunStatuses,
+  threadStages,
+  type AgentId,
+  type Run,
+  type RunEvent,
+  type Stage,
+} from '@shared/domain'
+import { ghShimScript, pushBlockEnv } from '../agents/guard'
 import {
   answerPrompt,
   buildPrompt,
@@ -17,23 +24,26 @@ import { openInEditor, openInTerminal, resumeCommand, runInTerminal } from './ap
 import { getAgentConfig } from './config'
 import type { Ctx } from './context'
 import type { GithubApi } from './gh-api'
-import { effectiveBindings, readSkillContent } from './library'
+import { effectiveBindings, findSkill, readSkillContent, skillDirOf } from './library'
 import { prThreads } from './prs'
 import { getRepo } from './repos'
 import {
   activeRunFor,
   addEvent,
-  addUsage,
   answerAsk,
+  closePendingAsks,
   createAsk,
   createRun,
+  dismissRunsForPr,
   getRun,
   getRunRow,
+  lastReviewedHead,
   latestAsk,
-  listFindings,
   listRuns,
   listRunsForPr,
+  openReviewFindings,
   pendingAsk,
+  recordUsage,
   saveChanges,
   saveReplies,
   saveReview,
@@ -60,7 +70,7 @@ export type RunnerDeps = {
 const checkoutQuery = `
   query Checkout($id: ID!) {
     node(id: $id) { ... on PullRequest {
-      headRefName headRefOid baseRefName
+      headRefName headRefOid baseRefName isCrossRepository
       headRepository { owner { login } url sshUrl }
     } }
   }
@@ -70,6 +80,7 @@ type CheckoutNode = {
   headRefName: string
   headRefOid: string
   baseRefName: string
+  isCrossRepository: boolean
   headRepository: { owner: { login: string }; url: string; sshUrl: string } | null
 }
 
@@ -108,6 +119,7 @@ export async function defaultAgentEnv(userData: string) {
   env.PATH = `${bin}:${await userPath()}`
   env.GH_PROMPT_DISABLED = '1'
   env.GIT_TERMINAL_PROMPT = '0'
+  Object.assign(env, pushBlockEnv(env))
   return { env, executable: await which('claude') }
 }
 
@@ -156,6 +168,9 @@ export function createRunner(deps: RunnerDeps) {
         return `Saved ${replies.length} draft repl${replies.length === 1 ? 'y' : 'ies'}. The user decides what to post.`
       },
       askUser: (input) => {
+        if (pendingAsk(ctx, runId)) {
+          return 'A question is already waiting for the user. End your turn now; the answer arrives as the next message.'
+        }
         const ask = createAsk(ctx, runId, {
           prompt: input.question,
           options: input.options,
@@ -190,6 +205,7 @@ export function createRunner(deps: RunnerDeps) {
       headRef: node?.headRefName ?? row.headRef,
       headOid: node?.headRefOid ?? row.headOid,
       baseRef: node?.baseRefName ?? row.baseRef,
+      crossRepository: node ? node.isCrossRepository : true,
       headRepo: node?.headRepository
         ? {
             owner: node.headRepository.owner.login,
@@ -201,26 +217,32 @@ export function createRunner(deps: RunnerDeps) {
     return { row, repo, pr }
   }
 
-  function priorFindings(prId: number, runId: number) {
-    const previous = listRunsForPr(ctx, prId).find(
-      (item) => item.id !== runId && item.status === 'done' && item.report,
-    )
-    if (!previous) return []
-    return listFindings(ctx, previous.id).map(
+  function priorFindings(prId: number) {
+    return openReviewFindings(ctx, prId).map(
       (item) =>
         `#${item.id} [${item.severity}] ${item.path}${item.line ? `:${item.line}` : ''} ${item.title} (${item.status})`,
     )
   }
 
-  function skillDirs(prId: number, skillId: number | null) {
-    if (!skillId) return []
-    const row = ctx.db.select({ repoId: prs.repoId }).from(prs).where(eq(prs.id, prId)).get()
-    const skill = row
-      ? effectiveBindings(ctx, row.repoId).find((binding) => binding.skill?.id === skillId)?.skill
-      : null
-    if (!skill) return []
-    return [skill.mode === 'linked_file' ? dirname(skill.path) : skill.path]
+  function skillOf(run: { skillId: number | null; skillName: string | null }) {
+    const skill = run.skillId ? findSkill(ctx, run.skillId) : null
+    if (!skill && run.skillName) {
+      throw new Error(`The skill ${run.skillName} is no longer in the library`)
+    }
+    return skill
   }
+
+  function projectRootOf(prId: number) {
+    const row = ctx.db.select({ repoId: prs.repoId }).from(prs).where(eq(prs.id, prId)).get()
+    if (!row) return null
+    try {
+      return getRepo(ctx, row.repoId).localPath
+    } catch {
+      return null
+    }
+  }
+
+  const stopping = (prId: number) => listRunsForPr(ctx, prId).some((run) => controllers.has(run.id))
 
   async function selectThreads(runId: number, prId: number, stored: string[] | null) {
     const all = await prThreads(ctx, api, prId)
@@ -240,6 +262,9 @@ export function createRunner(deps: RunnerDeps) {
     if (run.stage === 'draft-replies' && threads.length === 0) {
       throw new Error('There are no review threads to reply to')
     }
+    const skill = skillOf(run)
+    const content = skill ? await readSkillContent(ctx, skill.id) : null
+    const skillDir = skill ? skillDirOf(skill) : null
     const worktree: Worktree = await prepare(
       {
         clone: repo.localPath!,
@@ -250,10 +275,6 @@ export function createRunner(deps: RunnerDeps) {
       pr,
     )
     if (signal.aborted) return null
-    const skill = run.skillId
-      ? effectiveBindings(ctx, repo.id).find((binding) => binding.skill?.id === run.skillId)?.skill
-      : null
-    const content = skill ? await readSkillContent(ctx, skill.id) : null
     update(runId, {
       worktreePath: worktree.path,
       reviewedHeadOid: worktree.headOid,
@@ -261,7 +282,7 @@ export function createRunner(deps: RunnerDeps) {
     })
     return {
       cwd: worktree.path,
-      skillDir: skill ? (skill.mode === 'linked_file' ? dirname(skill.path) : skill.path) : null,
+      skillDir,
       prompt: buildPrompt({
         stage: run.stage as Stage,
         repo: `${repo.owner}/${repo.name}`,
@@ -275,10 +296,11 @@ export function createRunner(deps: RunnerDeps) {
         baseRemote: worktree.baseRemote,
         worktree: worktree.path,
         skillName: run.skillName,
-        skillDir: skill ? (skill.mode === 'linked_file' ? dirname(skill.path) : skill.path) : null,
+        skillDir,
         skill: content,
         worktreeWarning: worktree.warning,
-        priorFindings: run.stage === 're-review' ? priorFindings(run.prId, runId) : [],
+        priorFindings: run.stage === 're-review' ? priorFindings(run.prId) : [],
+        lastReviewedHead: run.stage === 're-review' ? lastReviewedHead(ctx, run.prId, runId) : null,
         threads,
       }),
     }
@@ -301,8 +323,11 @@ export function createRunner(deps: RunnerDeps) {
       const run = getRun(ctx, runId)
       const adapter = deps.adapters[run.agent]
       if (!adapter) throw new Error(`The ${run.agent} agent is not supported yet`)
+      const projectRoot = projectRootOf(run.prId)
+      const skillId = getRunRow(ctx, runId).skillId
+      const known = skillId ? findSkill(ctx, skillId) : null
       let cwd = run.worktreePath
-      let extraDirs = skillDirs(run.prId, getRunRow(ctx, runId).skillId)
+      let extraDirs = known ? [skillDirOf(known)] : []
       let prompt = resumePrompt
       if (!prompt || !run.sessionId || !cwd) {
         const first = await firstPrompt(runId, controller.signal)
@@ -316,10 +341,12 @@ export function createRunner(deps: RunnerDeps) {
       let resume = getRunRow(ctx, runId).sessionId
       while (prompt && !controller.signal.aborted) {
         setStatus(runId, 'running', { startedAt: getRunRow(ctx, runId).startedAt ?? Date.now() })
+        const resumed = resume
         const result = await adapter.run({
           prompt,
           resume,
           cwd,
+          projectRoot,
           model: run.model,
           stage: run.stage,
           readOnly: readOnlyStages.has(run.stage),
@@ -336,7 +363,7 @@ export function createRunner(deps: RunnerDeps) {
           update(runId, { sessionId: result.sessionId }, false)
         }
         resume = result.sessionId ?? resume
-        emit.run(addUsage(ctx, runId, result))
+        emit.run(recordUsage(ctx, runId, result, resumed !== null && result.sessionId === resumed))
         event(runId, 'result', {
           costUsd: result.costUsd,
           tokensIn: result.tokensIn,
@@ -377,12 +404,30 @@ export function createRunner(deps: RunnerDeps) {
     } catch (error) {
       if (!controller.signal.aborted) {
         const message = error instanceof Error ? error.message : String(error)
-        event(runId, 'error', { message })
-        setStatus(runId, 'failed', { error: message, endedAt: Date.now(), progress: null })
+        try {
+          event(runId, 'error', { message })
+          setStatus(runId, 'failed', { error: message, endedAt: Date.now(), progress: null })
+        } catch {
+          controller.abort()
+        }
       }
     } finally {
       controllers.delete(runId)
       queued.delete(runId)
+    }
+  }
+
+  function cancel(runId: number) {
+    const run = getRun(ctx, runId)
+    if (terminal(run.status)) return run
+    controllers.get(runId)?.abort()
+    closePendingAsks(ctx, runId)
+    return setStatus(runId, 'cancelled', { endedAt: Date.now(), progress: null })
+  }
+
+  function cancelWhere(match: (prId: number) => boolean) {
+    for (const run of listRuns(ctx, activeRunStatuses)) {
+      if (match(run.prId)) cancel(run.id)
     }
   }
 
@@ -392,6 +437,9 @@ export function createRunner(deps: RunnerDeps) {
       if (!row) throw new Error(`Pull request ${input.prId} not found`)
       if (activeRunFor(ctx, input.prId))
         throw new Error('A run is already in progress for this pull request')
+      if (stopping(input.prId)) {
+        throw new Error('The previous run is still stopping. Try again in a moment.')
+      }
       const config = getAgentConfig(ctx)
       if (!config) throw new Error('Pick a default agent in Settings first')
       if (!deps.adapters[config.agent])
@@ -414,11 +462,18 @@ export function createRunner(deps: RunnerDeps) {
       return run
     },
 
-    cancel(runId: number) {
-      const run = getRun(ctx, runId)
-      if (terminal(run.status)) return run
-      controllers.get(runId)?.abort()
-      return setStatus(runId, 'cancelled', { endedAt: Date.now(), progress: null })
+    cancel,
+
+    cancelForRepo(repoId: number) {
+      cancelWhere(
+        (prId) =>
+          ctx.db.select({ repoId: prs.repoId }).from(prs).where(eq(prs.id, prId)).get()?.repoId ===
+          repoId,
+      )
+    },
+
+    cancelAll() {
+      cancelWhere(() => true)
     },
 
     answer(input: { askId: number; answer: string }) {
@@ -435,7 +490,9 @@ export function createRunner(deps: RunnerDeps) {
     dismiss(runId: number) {
       const run = getRun(ctx, runId)
       if (!terminal(run.status)) throw new Error('Stop the run before dismissing it')
-      return update(runId, { dismissedAt: Date.now() })
+      for (const id of dismissRunsForPr(ctx, run.prId, runId)) emit.run(getRun(ctx, id))
+      emit.prsChanged()
+      return getRun(ctx, runId)
     },
 
     followUp(input: { runId: number; message: string }) {
@@ -447,6 +504,10 @@ export function createRunner(deps: RunnerDeps) {
       if (activeRunFor(ctx, run.prId)) {
         throw new Error('Another run is in progress for this pull request')
       }
+      if (stopping(run.prId)) {
+        throw new Error('The run is still stopping. Try again in a moment.')
+      }
+      closePendingAsks(ctx, run.id)
       const message = input.message.trim()
       event(run.id, 'message', { text: message })
       const next = update(run.id, {

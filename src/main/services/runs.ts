@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNull, lte, ne, or } from 'drizzle-orm'
 import { z } from 'zod'
 import {
   activeRunStatuses,
@@ -21,12 +21,15 @@ import {
   type RunStatus,
   type Stage,
 } from '@shared/domain'
-import { redact } from '../agents/redact'
+import { redact, redactText } from '../agents/redact'
+import type { SessionTotals } from '../agents/types'
 import { asks, findings, runEvents, runs } from '../db/schema'
 import type { Ctx } from './context'
 
 type RunRow = typeof runs.$inferSelect
 type AskRow = typeof asks.$inferSelect
+
+const reviewStages = new Set<Stage>(['review', 're-review'])
 
 function parse<T>(schema: z.ZodType<T>, json: string | null, fallback: T): T {
   if (!json) return fallback
@@ -132,20 +135,21 @@ export function getRun(ctx: Ctx, id: number) {
 }
 
 export function updateRun(ctx: Ctx, id: number, set: Partial<Omit<RunRow, 'id'>>) {
-  ctx.db.update(runs).set(set).where(eq(runs.id, id)).run()
+  const clean = { ...set }
+  if (clean.error) clean.error = redactText(clean.error)
+  if (clean.progress) clean.progress = redactText(clean.progress)
+  ctx.db.update(runs).set(clean).where(eq(runs.id, id)).run()
   return getRun(ctx, id)
 }
 
-export function addUsage(
-  ctx: Ctx,
-  id: number,
-  usage: { tokensIn: number; tokensOut: number; costUsd: number },
-) {
+export function recordUsage(ctx: Ctx, id: number, totals: SessionTotals, resumed: boolean) {
   const row = getRunRow(ctx, id)
+  const merge = (before: number, after: number) =>
+    resumed ? Math.max(before, after) : before + after
   return updateRun(ctx, id, {
-    tokensIn: row.tokensIn + usage.tokensIn,
-    tokensOut: row.tokensOut + usage.tokensOut,
-    costUsd: row.costUsd + usage.costUsd,
+    tokensIn: merge(row.tokensIn, totals.tokensIn),
+    tokensOut: merge(row.tokensOut, totals.tokensOut),
+    costUsd: merge(row.costUsd, totals.costUsd),
   })
 }
 
@@ -242,9 +246,9 @@ export function saveReview(
           side: item.side,
           severity: item.severity,
           nitDecision: item.nitDecision ?? null,
-          title: item.title,
-          body: item.body,
-          suggestion: item.suggestion ?? null,
+          title: redactText(item.title),
+          body: redactText(item.body),
+          suggestion: item.suggestion === undefined ? null : redactText(item.suggestion),
           priorFindingId: item.priorFindingId ?? null,
         })
         .run()
@@ -273,6 +277,22 @@ export function setPriorStatus(
   return updated
 }
 
+type FindingRow = typeof findings.$inferSelect
+
+const toFinding = (row: FindingRow): Finding => ({
+  id: row.id,
+  runId: row.runId,
+  path: row.anchorPath,
+  line: row.anchorLine,
+  side: row.side,
+  severity: row.severity,
+  nitDecision: row.nitDecision,
+  title: row.title,
+  body: row.body,
+  suggestion: row.suggestion,
+  status: row.status,
+})
+
 export function listFindings(ctx: Ctx, runId: number): Finding[] {
   return ctx.db
     .select()
@@ -280,19 +300,43 @@ export function listFindings(ctx: Ctx, runId: number): Finding[] {
     .where(eq(findings.runId, runId))
     .orderBy(findings.id)
     .all()
-    .map((row) => ({
-      id: row.id,
-      runId: row.runId,
-      path: row.anchorPath,
-      line: row.anchorLine,
-      side: row.side,
-      severity: row.severity,
-      nitDecision: row.nitDecision,
-      title: row.title,
-      body: row.body,
-      suggestion: row.suggestion,
-      status: row.status,
-    }))
+    .map(toFinding)
+}
+
+const openFindingStatuses: Finding['status'][] = ['open', 'still_open', 'disputed']
+
+export function openReviewFindings(ctx: Ctx, prId: number): Finding[] {
+  return ctx.db
+    .select({ finding: findings })
+    .from(findings)
+    .innerJoin(runs, eq(runs.id, findings.runId))
+    .where(
+      and(
+        eq(findings.prId, prId),
+        inArray(runs.stage, [...reviewStages]),
+        inArray(findings.status, openFindingStatuses),
+      ),
+    )
+    .orderBy(findings.id)
+    .all()
+    .map(({ finding }) => toFinding(finding))
+}
+
+export function lastReviewedHead(ctx: Ctx, prId: number, exceptRunId: number) {
+  const row = ctx.db
+    .select({ oid: runs.reviewedHeadOid })
+    .from(runs)
+    .where(
+      and(
+        eq(runs.prId, prId),
+        eq(runs.status, 'done'),
+        inArray(runs.stage, [...reviewStages]),
+        ne(runs.id, exceptRunId),
+      ),
+    )
+    .orderBy(desc(runs.id))
+    .get()
+  return row?.oid ?? null
 }
 
 export function createAsk(
@@ -304,13 +348,23 @@ export function createAsk(
     .insert(asks)
     .values({
       runId,
-      prompt: input.prompt,
-      schemaJson: JSON.stringify({ options: input.options, placeholder: input.placeholder }),
+      prompt: redactText(input.prompt),
+      schemaJson: JSON.stringify(
+        redact({ options: input.options, placeholder: input.placeholder }),
+      ),
       createdAt: Date.now(),
     })
     .returning()
     .get()
   return toAsk(row)
+}
+
+export function closePendingAsks(ctx: Ctx, runId: number) {
+  return ctx.db
+    .update(asks)
+    .set({ answeredAt: Date.now() })
+    .where(and(eq(asks.runId, runId), isNull(asks.answeredAt)))
+    .run().changes
 }
 
 export function answerAsk(ctx: Ctx, askId: number, answer: string) {
@@ -324,8 +378,6 @@ export function answerAsk(ctx: Ctx, askId: number, answer: string) {
     .run()
   return toAsk({ ...row, answerJson: JSON.stringify(answer), answeredAt: Date.now() })
 }
-
-const reviewStages = new Set<Stage>(['review', 're-review'])
 
 export function runStage(
   tab: BoardTab,
@@ -346,7 +398,10 @@ export function runStage(
   return null
 }
 
-export type BoardRunInfo = BoardRun & { endedAt: number | null }
+export type BoardRunInfo = Omit<BoardRun, 'stale'> & {
+  endedAt: number | null
+  reviewedHeadOid: string | null
+}
 
 export type PrRuns = {
   latest: BoardRunInfo
@@ -355,16 +410,42 @@ export type PrRuns = {
   addressed: BoardRunInfo | null
 }
 
+export function isStaleVerdict(
+  run: Pick<BoardRunInfo, 'stage' | 'status' | 'reviewedHeadOid'>,
+  headOid: string | null,
+) {
+  return (
+    reviewStages.has(run.stage) &&
+    run.status === 'done' &&
+    !!run.reviewedHeadOid &&
+    !!headOid &&
+    run.reviewedHeadOid !== headOid
+  )
+}
+
 const isActive = (status: RunStatus) => activeRunStatuses.includes(status)
 
-export function latestBoardRuns(ctx: Ctx) {
+const boardColumns = {
+  id: runs.id,
+  prId: runs.prId,
+  stage: runs.stage,
+  status: runs.status,
+  progress: runs.progress,
+  error: runs.error,
+  endedAt: runs.endedAt,
+  reviewedHeadOid: runs.reviewedHeadOid,
+}
+
+export function latestBoardRuns(ctx: Ctx, onlyPrId?: number) {
+  const undismissed = isNull(runs.dismissedAt)
   const rows = ctx.db
-    .select()
+    .select(boardColumns)
     .from(runs)
-    .where(isNull(runs.dismissedAt))
+    .where(onlyPrId === undefined ? undismissed : and(undismissed, eq(runs.prId, onlyPrId)))
     .orderBy(desc(runs.id))
     .all()
-  type Picked = { latest: RunRow; active?: RunRow; reviewed?: RunRow; addressed?: RunRow }
+  type Row = (typeof rows)[number]
+  type Picked = { latest: Row; active?: Row; reviewed?: Row; addressed?: Row }
   const picked = new Map<number, Picked>()
   for (const row of rows) {
     const entry = picked.get(row.prId) ?? { latest: row }
@@ -381,6 +462,7 @@ export function latestBoardRuns(ctx: Ctx) {
     }
   }
   const counts = new Map<number, number>()
+  const verdicts = new Map<number, ReviewReport['verdict']>()
   if (used.size > 0) {
     for (const item of ctx.db
       .select({ runId: findings.runId })
@@ -389,8 +471,16 @@ export function latestBoardRuns(ctx: Ctx) {
       .all()) {
       counts.set(item.runId, (counts.get(item.runId) ?? 0) + 1)
     }
+    for (const item of ctx.db
+      .select({ id: runs.id, reportJson: runs.reportJson })
+      .from(runs)
+      .where(inArray(runs.id, [...used]))
+      .all()) {
+      const verdict = parse(reviewReport, item.reportJson, null as ReviewReport | null)?.verdict
+      if (verdict) verdicts.set(item.id, verdict)
+    }
   }
-  const info = (row: RunRow | undefined): BoardRunInfo | null =>
+  const info = (row: Row | undefined): BoardRunInfo | null =>
     row
       ? {
           id: row.id,
@@ -398,11 +488,11 @@ export function latestBoardRuns(ctx: Ctx) {
           status: row.status,
           progress: row.progress,
           error: row.error,
-          verdict:
-            parse(reviewReport, row.reportJson, null as ReviewReport | null)?.verdict ?? null,
+          verdict: verdicts.get(row.id) ?? null,
           findings: counts.get(row.id) ?? 0,
           ask: row.status === 'needs_you' ? pendingAsk(ctx, row.id) : null,
           endedAt: row.endedAt,
+          reviewedHeadOid: row.reviewedHeadOid,
         }
       : null
   const result = new Map<number, PrRuns>()
@@ -431,8 +521,8 @@ export function boardRunFor(
   }
 }
 
-export function dismissRunsForPr(ctx: Ctx, prId: number) {
-  ctx.db
+export function dismissRunsForPr(ctx: Ctx, prId: number, upToRunId?: number) {
+  return ctx.db
     .update(runs)
     .set({ dismissedAt: Date.now() })
     .where(
@@ -440,9 +530,29 @@ export function dismissRunsForPr(ctx: Ctx, prId: number) {
         eq(runs.prId, prId),
         isNull(runs.dismissedAt),
         inArray(runs.status, ['done', 'failed', 'cancelled']),
+        upToRunId === undefined ? undefined : lte(runs.id, upToRunId),
       ),
     )
-    .run()
+    .returning({ id: runs.id })
+    .all()
+    .map((row) => row.id)
+}
+
+export function keepsPrTracked(ctx: Ctx, prId: number) {
+  const row = ctx.db
+    .select({ id: runs.id })
+    .from(runs)
+    .where(
+      and(
+        eq(runs.prId, prId),
+        or(
+          inArray(runs.status, [...activeRunStatuses]),
+          and(eq(runs.status, 'done'), isNull(runs.dismissedAt)),
+        ),
+      ),
+    )
+    .get()
+  return row !== undefined
 }
 
 export function saveChanges(ctx: Ctx, runId: number, changes: ChangesReport) {

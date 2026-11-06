@@ -13,6 +13,7 @@ import {
 import { deriveStage, stageBasis, tabOf, type PrFacts } from './pr-stage'
 import { getBoardSettings } from './prs'
 import { listRepos } from './repos'
+import { keepsPrTracked } from './runs'
 
 export type GqlPr = {
   id: string
@@ -257,9 +258,9 @@ export function applyPr(
   return { row, facts, flags }
 }
 
-function shouldTrack(flags: FlagRow | undefined, facts: PrFacts) {
+function shouldTrack(flags: FlagRow | undefined, facts: PrFacts, hasRuns: boolean) {
   if (facts.state !== 'OPEN' || tabOf(facts.role) === 'mine') return true
-  if (facts.reviewRequested || facts.myReview) return true
+  if (facts.reviewRequested || facts.myReview || hasRuns) return true
   return !!flags?.starred || !!flags?.archivedAt
 }
 
@@ -270,7 +271,7 @@ function dropUnreachable(ctx: Ctx, nodeId: string) {
     .leftJoin(prFlags, eq(prFlags.prId, prs.id))
     .where(eq(prs.nodeId, nodeId))
     .get()
-  if (row && !row.flags?.starred && !row.flags?.archivedAt) {
+  if (row && !row.flags?.starred && !row.flags?.archivedAt && !keepsPrTracked(ctx, row.id)) {
     ctx.db.delete(prs).where(eq(prs.id, row.id)).run()
   }
 }
@@ -408,7 +409,9 @@ export async function syncRepo(
       ci: cis[index] ?? 'none',
       now,
     })
-    if (!shouldTrack(flags, facts)) ctx.db.delete(prs).where(eq(prs.id, row.id)).run()
+    if (!shouldTrack(flags, facts, keepsPrTracked(ctx, row.id))) {
+      ctx.db.delete(prs).where(eq(prs.id, row.id)).run()
+    }
   }
 
   await writeSnapshot(ctx, api, repo, now).catch((error: unknown) => {

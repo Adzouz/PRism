@@ -478,6 +478,7 @@ export const boardRun = z.object({
   verdict: verdict.nullable(),
   findings: z.number(),
   ask: ask.nullable(),
+  stale: z.boolean(),
 })
 export type BoardRun = z.infer<typeof boardRun>
 

@@ -1,10 +1,11 @@
 const secrets = [
   /\b(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})\b/g,
   /\bsk-ant-[A-Za-z0-9_-]{20,}/g,
-  /\bsk-(proj-)?[A-Za-z0-9]{32,}/g,
+  /\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{32,}/g,
   /\bAKIA[0-9A-Z]{16}\b/g,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g,
-  /\b(Bearer|token)\s+[A-Za-z0-9._~+/-]{20,}=*/gi,
+  /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/gi,
+  /\bauthorization:\s*(?:token|basic)\s+[A-Za-z0-9._~+/-]{8,}=*/gi,
 ]
 
 export function redactText(text: string) {

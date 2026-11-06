@@ -17,8 +17,10 @@ import { getRepo } from './repos'
 import { ciOfChecks, fetchChecks } from './checks'
 import { stageAllowedIn, stageBasis, tabOf } from './pr-stage'
 import {
+  activeRunFor,
   boardRunFor,
   dismissRunsForPr,
+  isStaleVerdict,
   latestBoardRuns,
   type BoardRunInfo,
   type PrRuns,
@@ -44,7 +46,7 @@ function selectBoard(ctx: Ctx) {
 
 type BoardRow = Awaited<ReturnType<ReturnType<typeof selectBoard>['all']>>[number]
 
-const boardRunOf = (run: BoardRunInfo): BoardPr['run'] => ({
+const boardRunOf = (run: BoardRunInfo, headOid: string | null): BoardPr['run'] => ({
   id: run.id,
   stage: run.stage,
   status: run.status,
@@ -53,6 +55,7 @@ const boardRunOf = (run: BoardRunInfo): BoardPr['run'] => ({
   verdict: run.verdict,
   findings: run.findings,
   ask: run.ask,
+  stale: isStaleVerdict(run, headOid),
 })
 
 function toBoardPr({ pr, flags, owner, name }: BoardRow, set?: PrRuns): BoardPr {
@@ -92,7 +95,7 @@ function toBoardPr({ pr, flags, owner, name }: BoardRow, set?: PrRuns): BoardPr 
     starred: flags?.starred ?? false,
     hidden: flags?.hidden ?? false,
     archivedAt: flags?.archivedAt ?? null,
-    run: picked ? boardRunOf(picked.run) : null,
+    run: picked ? boardRunOf(picked.run, pr.headOid) : null,
   }
 }
 
@@ -106,7 +109,7 @@ export function listPrs(ctx: Ctx) {
 export function getPr(ctx: Ctx, id: number) {
   const row = selectBoard(ctx).where(eq(prs.id, id)).get()
   if (!row) throw new Error(`Pull request ${id} not found`)
-  return toBoardPr(row, latestBoardRuns(ctx).get(id))
+  return toBoardPr(row, latestBoardRuns(ctx, id).get(id))
 }
 
 function upsertFlags(ctx: Ctx, prId: number, set: Partial<typeof prFlags.$inferInsert>) {
@@ -135,6 +138,7 @@ export function setPrFlags(
 export function setPrStage(ctx: Ctx, input: { id: number; stage: BoardStage | null }) {
   const row = ctx.db.select().from(prs).where(eq(prs.id, input.id)).get()
   if (!row) throw new Error(`Pull request ${input.id} not found`)
+  if (activeRunFor(ctx, row.id)) throw new Error('Stop the agent run before moving this card')
   const tab = tabOf(row.myRole)
   const stage = input.stage === row.derivedStage ? null : input.stage
   if (stage && !stageAllowedIn(tab, stage)) throw new Error('That column is not on this board')
@@ -262,17 +266,22 @@ export async function prDetail(ctx: Ctx, api: GithubApi, id: number): Promise<Pr
 }
 
 const threadsQuery = `
-  query Threads($id: ID!) {
+  query Threads($id: ID!, $after: String) {
     node(id: $id) { ... on PullRequest {
-      reviewThreads(first: 100) { nodes {
-        id isResolved isOutdated path line originalLine
-        comments(first: 30) { totalCount nodes {
-          id body createdAt url author { login avatarUrl }
-        } }
-      } }
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id isResolved isOutdated path line originalLine
+          comments(last: 30) { totalCount nodes {
+            id body createdAt url author { login avatarUrl }
+          } }
+        }
+      }
     } }
   }
 `
+
+const maxThreadPages = 10
 
 type ThreadNode = {
   id: string
@@ -293,14 +302,28 @@ type ThreadNode = {
   }
 }
 
+type ThreadsPage = {
+  reviewThreads: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null }
+    nodes: ThreadNode[]
+  }
+}
+
 export async function prThreads(ctx: Ctx, api: GithubApi, id: number): Promise<ReviewThread[]> {
   const row = ctx.db.select({ nodeId: prs.nodeId }).from(prs).where(eq(prs.id, id)).get()
   if (!row) throw new Error(`Pull request ${id} not found`)
-  const { node } = await api.graphql<{
-    node: { reviewThreads: { nodes: ThreadNode[] } } | null
-  }>(threadsQuery, { id: row.nodeId })
-  if (!node) throw new Error('Pull request not found on GitHub')
-  return node.reviewThreads.nodes.map((thread) => ({
+  const threads: ThreadNode[] = []
+  let after: string | null = null
+  for (let page = 0; page < maxThreadPages; page += 1) {
+    const { node }: { node: ThreadsPage | null } = await api.graphql<{
+      node: ThreadsPage | null
+    }>(threadsQuery, { id: row.nodeId, after })
+    if (!node) throw new Error('Pull request not found on GitHub')
+    threads.push(...node.reviewThreads.nodes)
+    if (!node.reviewThreads.pageInfo.hasNextPage) break
+    after = node.reviewThreads.pageInfo.endCursor
+  }
+  return threads.map((thread) => ({
     id: thread.id,
     path: thread.path,
     line: thread.line ?? thread.originalLine,

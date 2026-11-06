@@ -28,13 +28,17 @@ type BoardStore = {
   density: Density
   openPrId: number | null
   drawerTab: DrawerTab
-  agentDropConfirmed: boolean
+  openRunId: number | null
+  dropConfirmed: Partial<Record<BoardStage, boolean>>
   setFilters: (tab: BoardTab, patch: Partial<Filters>) => void
   setDensity: (density: Density) => void
-  openPr: (id: number | null, tab?: DrawerTab) => void
+  openPr: (id: number | null, tab?: DrawerTab, runId?: number | null) => void
   setDrawerTab: (tab: DrawerTab) => void
-  confirmAgentDrop: () => void
+  selectRun: (runId: number | null) => void
+  confirmDrop: (column: BoardStage) => void
 }
+
+type PersistedBoard = Pick<BoardStore, 'filters' | 'density' | 'dropConfirmed'>
 
 export const useBoardStore = create<BoardStore>()(
   persist(
@@ -43,27 +47,38 @@ export const useBoardStore = create<BoardStore>()(
       density: 'comfortable',
       openPrId: null,
       drawerTab: 'overview',
-      agentDropConfirmed: false,
+      openRunId: null,
+      dropConfirmed: {},
       setFilters: (tab, patch) =>
         set((state) => ({
           filters: { ...state.filters, [tab]: { ...state.filters[tab], ...patch } },
         })),
       setDensity: (density) => set({ density }),
-      openPr: (openPrId, drawerTab) =>
-        set((state) => ({ openPrId, drawerTab: drawerTab ?? state.drawerTab })),
+      openPr: (openPrId, drawerTab = 'overview', openRunId = null) =>
+        set({ openPrId, drawerTab, openRunId }),
       setDrawerTab: (drawerTab) => set({ drawerTab }),
-      confirmAgentDrop: () => set({ agentDropConfirmed: true }),
+      selectRun: (openRunId) => set({ openRunId }),
+      confirmDrop: (column) =>
+        set((state) => ({ dropConfirmed: { ...state.dropConfirmed, [column]: true } })),
     }),
     {
       name: 'prism-board',
-      partialize: ({ filters, density, agentDropConfirmed }) => ({
+      version: 1,
+      partialize: ({ filters, density, dropConfirmed }): PersistedBoard => ({
         density,
-        agentDropConfirmed,
+        dropConfirmed,
         filters: {
           reviews: { ...filters.reviews, search: '' },
           mine: { ...filters.mine, search: '' },
         },
       }),
+      migrate: (persisted, version) => {
+        const { agentDropConfirmed, ...state } = (persisted ?? {}) as PersistedBoard & {
+          agentDropConfirmed?: boolean
+        }
+        if (version >= 1) return state
+        return { ...state, dropConfirmed: agentDropConfirmed ? { reviewing: true } : {} }
+      },
     },
   ),
 )

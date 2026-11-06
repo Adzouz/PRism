@@ -1,11 +1,25 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight, Loader2, ShieldAlert, Wrench } from 'lucide-react'
 import type { RunEvent } from '@shared/domain'
+import { ErrorText } from '@/components/page'
 import { useRunEvents } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { Markdown, statusLabel } from './parts'
+import { Loading, Markdown, statusLabel } from './parts'
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '')
+
+const followThreshold = 48
+
+function scrollParent(node: HTMLElement | null) {
+  for (let element = node?.parentElement ?? null; element; element = element.parentElement) {
+    const { overflowY } = getComputedStyle(element)
+    if (overflowY === 'auto' || overflowY === 'scroll') return element
+  }
+  return null
+}
+
+const atBottom = (element: HTMLElement) =>
+  element.scrollHeight - element.scrollTop - element.clientHeight <= followThreshold
 
 function toolLabel(name: string, input: unknown) {
   const short = name.replace(/^mcp__prism__/, '').replace(/^mcp__/, '')
@@ -19,10 +33,40 @@ function toolLabel(name: string, input: unknown) {
   return { short, detail }
 }
 
-function ToolCall({ event, result }: { event: RunEvent; result: RunEvent | undefined }) {
+function ToolStatus({ result, live }: { result: RunEvent | undefined; live: boolean }) {
+  if (result?.payload.ok === false) {
+    return <span className="ml-auto shrink-0 font-medium text-destructive">failed</span>
+  }
+  if (result) {
+    return (
+      <span className="ml-auto size-1.5 shrink-0 rounded-full bg-success">
+        <span className="sr-only">succeeded</span>
+      </span>
+    )
+  }
+  if (live) {
+    return (
+      <span className="ml-auto shrink-0">
+        <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+        <span className="sr-only">running</span>
+      </span>
+    )
+  }
+  return <span className="ml-auto shrink-0 text-muted-foreground">no result</span>
+}
+
+function ToolCall({
+  event,
+  result,
+  live,
+}: {
+  event: RunEvent
+  result: RunEvent | undefined
+  live: boolean
+}) {
   const [open, setOpen] = useState(false)
   const { short, detail } = toolLabel(str(event.payload.name), event.payload.input)
-  const failed = result && result.payload.ok === false
+  const failed = result?.payload.ok === false
   return (
     <div className="rounded-lg border bg-surface text-xs">
       <button
@@ -37,16 +81,7 @@ function ToolCall({ event, result }: { event: RunEvent; result: RunEvent | undef
         <Wrench className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="font-medium">{short}</span>
         <span className="truncate font-mono text-muted-foreground">{detail}</span>
-        {!result ? (
-          <Loader2 className="ml-auto size-3.5 shrink-0 animate-spin text-muted-foreground" />
-        ) : (
-          <span
-            className={cn(
-              'ml-auto size-1.5 shrink-0 rounded-full',
-              failed ? 'bg-destructive' : 'bg-success',
-            )}
-          />
-        )}
+        <ToolStatus result={result} live={live} />
       </button>
       {open && (
         <div className="space-y-2 border-t px-2.5 py-2">
@@ -69,13 +104,21 @@ function ToolCall({ event, result }: { event: RunEvent; result: RunEvent | undef
   )
 }
 
-function Line({ event, results }: { event: RunEvent; results: Map<string, RunEvent> }) {
+const Line = memo(function Line({
+  event,
+  result,
+  live,
+}: {
+  event: RunEvent
+  result: RunEvent | undefined
+  live: boolean
+}) {
   const time = new Date(event.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   switch (event.kind) {
     case 'text':
       return <Markdown text={str(event.payload.text)} />
     case 'tool':
-      return <ToolCall event={event} result={results.get(str(event.payload.id))} />
+      return <ToolCall event={event} result={result} live={live} />
     case 'progress':
       return (
         <p className="text-xs font-medium text-primary">
@@ -127,45 +170,65 @@ function Line({ event, results }: { event: RunEvent; results: Map<string, RunEve
     default:
       return null
   }
-}
+})
 
 export function Transcript({ runId, live }: { runId: number; live: boolean }) {
-  const { data: events, isLoading } = useRunEvents(runId)
-  const end = useRef<HTMLDivElement>(null)
+  const { data: events, isLoading, error } = useRunEvents(runId)
+  const root = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
-  const results = new Map(
-    (events ?? [])
-      .filter((event) => event.kind === 'tool_result')
-      .map((event) => [str(event.payload.id), event]),
+  const results = useMemo(
+    () =>
+      new Map(
+        (events ?? [])
+          .filter((event) => event.kind === 'tool_result')
+          .map((event) => [str(event.payload.id), event]),
+      ),
+    [events],
+  )
+  const visible = useMemo(
+    () => (events ?? []).filter((event) => event.kind !== 'tool_result' && event.kind !== 'result'),
+    [events],
+  )
+  const turnStart = useMemo(
+    () => (events ?? []).findLast((event) => event.kind === 'status')?.id ?? 0,
+    [events],
   )
   const count = events?.length ?? 0
 
   useEffect(() => {
-    if (live && follow.current && count > 0) end.current?.scrollIntoView({ block: 'end' })
+    const container = scrollParent(root.current)
+    if (!container) return
+    const onScroll = () => {
+      follow.current = atBottom(container)
+    }
+    container.addEventListener('scroll', onScroll, { passive: true })
+    return () => container.removeEventListener('scroll', onScroll)
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!live || !follow.current || count === 0) return
+    const container = scrollParent(root.current)
+    container?.scrollTo({ top: container.scrollHeight })
   }, [count, live])
 
-  if (isLoading) {
-    return (
-      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="size-4 animate-spin" /> Loading transcript…
-      </p>
-    )
-  }
-  const visible = (events ?? []).filter(
-    (event) => event.kind !== 'tool_result' && event.kind !== 'result',
-  )
   return (
-    <div
-      className="space-y-2"
-      onWheel={(event) => {
-        if (event.deltaY < 0) follow.current = false
-      }}
-    >
-      {visible.length === 0 && <p className="text-sm text-muted-foreground">Nothing yet.</p>}
-      {visible.map((event) => (
-        <Line key={event.id} event={event} results={results} />
-      ))}
-      <div ref={end} />
+    <div ref={root} className="space-y-2">
+      {isLoading ? (
+        <Loading>Loading transcript…</Loading>
+      ) : error && !events ? (
+        <ErrorText error={error} />
+      ) : visible.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Nothing yet.</p>
+      ) : (
+        visible.map((event) => (
+          <Line
+            key={event.id}
+            event={event}
+            result={event.kind === 'tool' ? results.get(str(event.payload.id)) : undefined}
+            live={event.kind === 'tool' && live && event.id > turnStart}
+          />
+        ))
+      )}
     </div>
   )
 }

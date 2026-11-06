@@ -256,7 +256,7 @@ export const usePrThreads = (prId: number, enabled = true) =>
     queryKey: keys.prThreads(prId),
     queryFn: () => invoke('prs:threads', prId),
     enabled,
-    staleTime: 30_000,
+    staleTime: 60_000,
   })
 
 export const useApps = () =>

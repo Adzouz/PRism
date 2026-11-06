@@ -60,8 +60,14 @@ async function pick(options: Electron.OpenDialogOptions) {
   return result.canceled ? null : (result.filePaths[0] ?? null)
 }
 
+export type LifecycleHooks = {
+  beforeRepoRemoved?: (repoId: number) => void
+  beforeReset?: () => void
+}
+
 export function onboardingHandlers(
   ctx: Ctx,
+  hooks: LifecycleHooks = {},
 ): Omit<
   Handlers,
   | 'app:info'
@@ -89,7 +95,10 @@ export function onboardingHandlers(
     'agents:setConfig': (value) => setAgentConfig(ctx, value),
     'repos:list': () => listRepos(ctx),
     'repos:add': (slug) => addRepo(ctx, slug),
-    'repos:remove': (id) => removeRepo(ctx, id),
+    'repos:remove': (id) => {
+      hooks.beforeRepoRemoved?.(id)
+      return removeRepo(ctx, id)
+    },
     'repos:locate': (id) => locateRepo(ctx, id),
     'repos:setPath': ({ id, path }) => setRepoPath(ctx, id, path),
     'repos:clone': ({ id, path }) => cloneRepoTo(ctx, id, path),
@@ -131,6 +140,9 @@ export function onboardingHandlers(
     },
     'config:status': () => configStatus(ctx),
     'onboarding:complete': () => completeOnboarding(ctx),
-    'config:reset': () => resetConfiguration(ctx),
+    'config:reset': () => {
+      hooks.beforeReset?.()
+      return resetConfiguration(ctx)
+    },
   }
 }

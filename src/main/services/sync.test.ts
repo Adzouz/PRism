@@ -10,6 +10,7 @@ import { deriveStage, type PrFacts } from './pr-stage'
 import { listPrs, setPrFlags, setPrStage } from './prs'
 import { getRepo } from './repos'
 import { checkState } from './checks'
+import { createRun, dismissRunsForPr, updateRun } from './runs'
 import { autoArchiveDone, createSyncService, myReviewOf, syncRepo, type GqlPr } from './sync'
 
 const migrations = resolve(__dirname, '../../../drizzle')
@@ -367,6 +368,32 @@ describe('review and check edge cases', () => {
         conclusion: 'NEW_VALUE',
       }),
     ).toEqual({ name: 'x', state: 'pending' })
+  })
+
+  it('keeps a review PR with a pending verdict until it is dismissed', async () => {
+    const { ctx, repo } = await makeCtx()
+    const pr = makePr()
+    let fixture: Fixture = { req: [pr] }
+    const { api } = fakeApi(() => fixture)
+    await syncRepo(ctx, api, repo, me)
+    const id = listPrs(ctx)[0]!.id
+    const run = createRun(ctx, {
+      prId: id,
+      stage: 'review',
+      skillId: null,
+      skillName: null,
+      agent: 'claude',
+      model: 'claude-haiku-5-5',
+    })
+    updateRun(ctx, run.id, { status: 'done', endedAt: Date.now() })
+
+    fixture = { nodes: [pr] }
+    await syncRepo(ctx, api, repo, me)
+    expect(listPrs(ctx).map((item) => item.id)).toEqual([id])
+
+    dismissRunsForPr(ctx, id)
+    await syncRepo(ctx, api, repo, me)
+    expect(listPrs(ctx)).toEqual([])
   })
 
   it('drops PRs GitHub no longer returns, keeps starred ones', async () => {

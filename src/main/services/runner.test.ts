@@ -2,16 +2,24 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import type { Run, RunEvent } from '@shared/domain'
+import type { Run, RunEvent, Stage } from '@shared/domain'
 import type { AgentAdapter, SegmentInput, SegmentResult } from '../agents/types'
 import { openDb } from '../db/client'
 import { prs, repos, skills, stageBindings } from '../db/schema'
 import { setSetting } from '../db/settings'
 import type { Ctx } from './context'
 import type { GithubApi } from './gh-api'
-import { listPrs } from './prs'
+import { listPrs, setPrStage } from './prs'
 import { createRunner } from './runner'
-import { boardRunFor, getRun, listEvents, listFindings, runStage, type BoardRunInfo } from './runs'
+import {
+  boardRunFor,
+  getRun,
+  listEvents,
+  listFindings,
+  pendingAsk,
+  runStage,
+  type BoardRunInfo,
+} from './runs'
 import type { prepareWorktree } from './worktrees'
 
 const migrations = resolve(__dirname, '../../../drizzle')
@@ -119,7 +127,14 @@ const threadNode = (id: string, isResolved: boolean) => ({
 const api: GithubApi = {
   graphql: async <T>(query: string) =>
     (query.includes('query Threads')
-      ? { node: { reviewThreads: { nodes: threadNodes } } }
+      ? {
+          node: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: threadNodes,
+            },
+          },
+        }
       : { node: null }) as T,
   graphqlPartial: async <T>() => ({ data: { node: null } as T, errors: [] }),
   probe: async () => ({ status: 200, etag: null }),
@@ -136,11 +151,11 @@ const prepare: typeof prepareWorktree = async (_options, pr) => ({
   warning: null,
 })
 
-const ok = (sessionId: string): SegmentResult => ({
+const ok = (sessionId: string, total = 1): SegmentResult => ({
   sessionId,
-  tokensIn: 100,
-  tokensOut: 20,
-  costUsd: 0.01,
+  tokensIn: 100 * total,
+  tokensOut: 20 * total,
+  costUsd: 0.01 * total,
   error: null,
 })
 
@@ -233,6 +248,7 @@ describe('agent runner', () => {
     expect(prompt.prompt).toContain('acme/app#1')
     expect(prompt.readOnly).toBe(true)
     expect(prompt.systemAppend).toContain('Never commit')
+    expect(prompt.projectRoot).toBe('/code/app')
   })
 
   it('pauses on a question and resumes the same session with the answer', async () => {
@@ -245,7 +261,7 @@ describe('agent runner', () => {
         return ok('s1')
       }
       input.tools.reportFindings({ verdict: 'approve', summary: 'Fine.', dimensions: [] }, [])
-      return ok('s1')
+      return ok('s1', 2)
     })
     const run = runner.start({ prId: ids[0]!, stage: 'review' })
     await until(() => getRun(ctx, run.id).status === 'needs_you')
@@ -405,6 +421,9 @@ describe('agent runner', () => {
     await until(() => runner.isActive(run.id) && getRun(ctx, run.id).status === 'running')
     expect(() => runner.dismiss(run.id)).toThrow('Stop the run')
     expect(() => runner.followUp({ runId: run.id, message: 'x' })).toThrow('still in progress')
+    expect(() => setPrStage(ctx, { id: ids[0]!, stage: 'waiting-on-author' })).toThrow(
+      'Stop the agent run',
+    )
     runner.cancel(run.id)
     await until(() => !runner.isActive(run.id))
     expect(() => runner.followUp({ runId: run.id, message: 'x' })).toThrow('no agent session')
@@ -415,6 +434,230 @@ describe('agent runner', () => {
     const { ctx, ids } = await setup()
     const { runner } = makeRunner(ctx, async () => ok('s'))
     expect(() => runner.start({ prId: ids[0]!, stage: 're-review' })).toThrow('No skill is bound')
+  })
+
+  it('closes the open question when a waiting run is stopped', async () => {
+    const { ctx, ids } = await setup()
+    const waiting: boolean[] = []
+    const { runner } = makeRunner(ctx, async (input) => {
+      if (!input.resume) {
+        input.tools.askUser({ question: 'Which base?' })
+        return ok('s1')
+      }
+      waiting.push(input.tools.isWaiting())
+      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      return ok('s1', 2)
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'needs_you')
+    const ask = getRun(ctx, run.id).ask!
+    runner.cancel(run.id)
+    expect(pendingAsk(ctx, run.id)).toBeNull()
+    expect(() => runner.answer({ askId: ask.id, answer: 'main' })).toThrow('already answered')
+    runner.followUp({ runId: run.id, message: 'Use main and finish' })
+    await until(() => getRun(ctx, run.id).status === 'done')
+    expect(waiting).toEqual([false])
+  })
+
+  it('refuses a second question while one is open', async () => {
+    const { ctx, ids } = await setup()
+    const replies: string[] = []
+    const { runner } = makeRunner(ctx, async (input) => {
+      replies.push(input.tools.askUser({ question: 'First?' }))
+      replies.push(input.tools.askUser({ question: 'Second?' }))
+      return ok('s1')
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'needs_you')
+    expect(replies[1]).toContain('already waiting')
+    expect(getRun(ctx, run.id).ask?.prompt).toBe('First?')
+  })
+
+  it('dismisses earlier finished runs along with the verdict', async () => {
+    const { ctx, ids } = await setup()
+    const { runner } = makeRunner(ctx, async (input) => {
+      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      return ok('s')
+    })
+    const first = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, first.id).status === 'done' && !runner.isActive(first.id))
+    const second = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, second.id).status === 'done' && !runner.isActive(second.id))
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'verdict-ready', run: { id: second.id } })
+    runner.dismiss(second.id)
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'to-review', run: null })
+    expect(getRun(ctx, first.id).dismissedAt).not.toBeNull()
+  })
+
+  it('gives re-reviews the open findings of earlier reviews and the last reviewed head', async () => {
+    const { ctx, ids } = await setup()
+    const skill = ctx.db.select().from(skills).get()!
+    ctx.db
+      .insert(stageBindings)
+      .values({ scope: 'global', stage: 're-review', skillId: skill.id, validatedAt: 1 })
+      .run()
+    let firstId = 0
+    let reReviews = 0
+    const { runner, adapter } = makeRunner(ctx, async (input) => {
+      if (input.stage === 're-review') {
+        reReviews += 1
+        if (reReviews === 1) {
+          input.tools.reportPriorStatus([{ findingId: firstId, status: 'resolved' }])
+          input.tools.reportFindings({ verdict: 'comment', summary: 'One more.', dimensions: [] }, [
+            { ...finding, title: 'Missing test' },
+          ])
+        } else {
+          input.tools.reportFindings({ verdict: 'approve', summary: 'Fine.', dimensions: [] }, [])
+        }
+      } else {
+        const review = input.stage === 'review'
+        input.tools.reportFindings(
+          { verdict: review ? 'request_changes' : 'comment', summary: 'Done.', dimensions: [] },
+          review ? [finding] : [],
+        )
+      }
+      return ok('s')
+    })
+    const runAndWait = async (stage: Stage) => {
+      const run = runner.start({ prId: ids[0]!, stage })
+      await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
+      return run
+    }
+    const review = await runAndWait('review')
+    firstId = listFindings(ctx, review.id)[0]!.id
+    await runAndWait('test-plan')
+    await runAndWait('re-review')
+    await runAndWait('re-review')
+    const prompts = vi
+      .mocked(adapter.run)
+      .mock.calls.map(([input]) => input)
+      .filter((input) => input.stage === 're-review')
+      .map((input) => input.prompt)
+    expect(prompts[0]).toContain('Null check (open)')
+    expect(prompts[0]).toContain('Last PRism review was at head1')
+    expect(prompts[1]).toContain('Missing test (open)')
+    expect(prompts[1]).not.toContain('Null check')
+  })
+
+  it('counts session cost once across resumed segments', async () => {
+    const { ctx, ids } = await setup()
+    const { runner } = makeRunner(ctx, async (input) => {
+      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      return input.resume ? ok('s7', 3) : ok('s7', 2)
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
+    expect(getRun(ctx, run.id).costUsd).toBeCloseTo(0.02)
+    runner.followUp({ runId: run.id, message: 'Again' })
+    await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
+    expect(getRun(ctx, run.id)).toMatchObject({ tokensIn: 300, tokensOut: 60 })
+    expect(getRun(ctx, run.id).costUsd).toBeCloseTo(0.03)
+  })
+
+  it('refuses follow-ups and new runs while a stopped run winds down', async () => {
+    const { ctx, ids } = await setup()
+    let finish!: () => void
+    const wound = new Promise<void>((done) => (finish = done))
+    const { runner } = makeRunner(ctx, async (input) => {
+      input.onSession('s3')
+      await new Promise((done) => input.signal.addEventListener('abort', done))
+      await wound
+      return ok('s3')
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(
+      () => getRun(ctx, run.id).status === 'running' && getRun(ctx, run.id).sessionId !== null,
+    )
+    runner.cancel(run.id)
+    expect(getRun(ctx, run.id).status).toBe('cancelled')
+    expect(() => runner.followUp({ runId: run.id, message: 'x' })).toThrow('still stopping')
+    expect(() => runner.start({ prId: ids[0]!, stage: 'review' })).toThrow('still stopping')
+    finish()
+    await until(() => !runner.isActive(run.id))
+    expect(runner.followUp({ runId: run.id, message: 'x' }).status).toBe('running')
+    runner.cancel(run.id)
+    await until(() => !runner.isActive(run.id))
+  })
+
+  it('keeps the skill a run started with when the stage is rebound', async () => {
+    const { ctx, ids } = await setup()
+    const other = ctx.db
+      .insert(skills)
+      .values({
+        name: 'other',
+        description: 'x',
+        mode: 'custom',
+        path: '/nowhere',
+        contentHash: 'y',
+      })
+      .returning()
+      .get()
+    const { runner, adapter } = makeRunner(ctx, async (input) => {
+      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      return ok('s')
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    ctx.db.update(stageBindings).set({ skillId: other.id }).run()
+    await until(() => getRun(ctx, run.id).status === 'done')
+    expect(vi.mocked(adapter.run).mock.calls[0]![0].prompt).toContain('Review carefully.')
+  })
+
+  it('fails a run whose skill was removed from the library', async () => {
+    const { ctx, ids } = await setup()
+    const { runner, adapter } = makeRunner(ctx, async () => ok('s'))
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    ctx.db.delete(stageBindings).run()
+    ctx.db.delete(skills).run()
+    await until(() => getRun(ctx, run.id).status === 'failed')
+    expect(getRun(ctx, run.id).error).toContain('pr-review is no longer in the library')
+    expect(adapter.run).not.toHaveBeenCalled()
+  })
+
+  it('stops the runs of a repository before it is removed', async () => {
+    const { ctx, ids } = await setup(2)
+    const { runner } = makeRunner(ctx, async (input) => {
+      await new Promise((done) => input.signal.addEventListener('abort', done))
+      return ok('s')
+    })
+    const started = ids.map((prId) => runner.start({ prId, stage: 'review' }))
+    await until(() =>
+      started.every((run) => runner.isActive(run.id) && getRun(ctx, run.id).status === 'running'),
+    )
+    runner.cancelForRepo(9999)
+    expect(started.map((run) => getRun(ctx, run.id).status)).toEqual(['running', 'running'])
+    runner.cancelForRepo(ctx.db.select().from(repos).get()!.id)
+    expect(started.map((run) => getRun(ctx, run.id).status)).toEqual(['cancelled', 'cancelled'])
+    await until(() => started.every((run) => !runner.isActive(run.id)))
+  })
+
+  it('survives its pull request disappearing mid-run', async () => {
+    const { ctx, ids } = await setup()
+    let finish!: () => void
+    const gate = new Promise<void>((done) => (finish = done))
+    const { runner } = makeRunner(ctx, async () => {
+      await gate
+      return ok('s')
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'running')
+    ctx.db.delete(prs).run()
+    finish()
+    await until(() => !runner.isActive(run.id))
+    expect(listPrs(ctx)).toEqual([])
+    expect(() => getRun(ctx, run.id)).toThrow('not found')
+  })
+
+  it('flags a verdict made on an older head', async () => {
+    const { ctx, ids } = await setup()
+    const { runner } = makeRunner(ctx, async (input) => {
+      input.tools.reportFindings({ verdict: 'approve', summary: 'Ok.', dimensions: [] }, [])
+      return ok('s')
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'done')
+    expect(listPrs(ctx)[0]!.run).toMatchObject({ stale: false })
+    ctx.db.update(prs).set({ headOid: 'head2' }).run()
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'verdict-ready', run: { stale: true } })
   })
 })
 
@@ -469,6 +712,7 @@ describe('run stage overlay', () => {
       findings: 0,
       ask: null,
       endedAt,
+      reviewedHeadOid: null,
     })
     const review = info(1, 'review', 'done')
     const plan = info(2, 'test-plan', 'running', null)

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { memo, useState, type FormEvent, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -73,23 +73,56 @@ export const verdictTone: Record<ReviewReport['verdict'], 'success' | 'default' 
   request_changes: 'destructive',
 }
 
-const markdownComponents: Components = {
-  a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noreferrer">
+export function Loading({ children }: { children: ReactNode }) {
+  return (
+    <p className="flex items-center gap-2 text-sm text-muted-foreground">
+      <Loader2 className="size-4 animate-spin" />
       {children}
-    </a>
-  ),
+    </p>
+  )
 }
 
-export function Markdown({ text, className }: { text: string; className?: string }) {
+const linkProtocols = new Set(['http:', 'https:', 'mailto:'])
+
+function externalHref(href: string | undefined) {
+  if (!href) return null
+  try {
+    return linkProtocols.has(new URL(href).protocol) ? href : null
+  } catch {
+    return null
+  }
+}
+
+const markdownComponents: Components = {
+  a: ({ href, children }) => {
+    const target = externalHref(href)
+    return target ? (
+      <a href={target} target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    ) : (
+      <span title={href || undefined}>{children}</span>
+    )
+  },
+}
+
+const remarkPlugins = [remarkGfm]
+
+export const Markdown = memo(function Markdown({
+  text,
+  className,
+}: {
+  text: string
+  className?: string
+}) {
   return (
     <div className={cn('markdown-body select-text', className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={markdownComponents}>
         {text}
       </ReactMarkdown>
     </div>
   )
-}
+})
 
 export function AnswerForm({ ask, compact = false }: { ask: Ask; compact?: boolean }) {
   const [text, setText] = useState('')
@@ -119,7 +152,10 @@ export function AnswerForm({ ask, compact = false }: { ask: Ask; compact?: boole
               type="button"
               size="sm"
               variant="outline"
-              className={cn(compact && 'h-6 px-2 text-xs')}
+              className={cn(
+                'h-auto max-w-full py-1.5 text-left whitespace-normal wrap-anywhere',
+                compact && 'px-2 py-1 text-xs',
+              )}
               disabled={answer.isPending}
               onClick={() => send(option)}
             >

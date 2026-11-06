@@ -19,6 +19,8 @@ import { createSyncService } from './services/sync'
 
 let runner: AgentRunner | null = null
 
+const externalLink = (url: string) => /^(https?:|mailto:)/i.test(url)
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -38,14 +40,14 @@ function createWindow() {
 
   win.on('ready-to-show', () => win.show())
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https://')) void shell.openExternal(url)
+    if (externalLink(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (event, url) => {
     const page = (value: string) => value.split('#')[0]
     if (page(url) === page(win.webContents.getURL())) return
     event.preventDefault()
-    if (url.startsWith('https://')) void shell.openExternal(url)
+    if (externalLink(url)) void shell.openExternal(url)
   })
 
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
@@ -104,7 +106,10 @@ void app.whenReady().then(() => {
       return theme
     },
     'theme:isDark': () => nativeTheme.shouldUseDarkColors,
-    ...onboardingHandlers(ctx),
+    ...onboardingHandlers(ctx, {
+      beforeRepoRemoved: (repoId) => runner?.cancelForRepo(repoId),
+      beforeReset: () => runner?.cancelAll(),
+    }),
     ...boardHandlers(ctx, api, sync, prsChanged),
     ...runHandlers(ctx, api, runner),
   })

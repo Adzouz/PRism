@@ -1,4 +1,4 @@
-import { chmod, mkdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, realpath, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { prePushHookScript } from '../agents/guard'
 import { run } from '../system/exec'
@@ -11,12 +11,13 @@ export type PrCheckout = {
   headRef: string
   headOid: string
   baseRef: string
+  crossRepository: boolean
   headRepo: { owner: string; sshUrl: string; url: string } | null
 }
 
 export type Worktree = {
   path: string
-  branch: string
+  branch: string | null
   remote: string
   baseRemote: string
   created: boolean
@@ -39,7 +40,12 @@ async function tryGit(cwd: string, args: string[]) {
   return result.code === 0 ? result.stdout.trim() : null
 }
 
-export type WorktreeEntry = { path: string; head: string | null; branch: string | null }
+export type WorktreeEntry = {
+  path: string
+  head: string | null
+  branch: string | null
+  prunable: boolean
+}
 
 export function parseWorktreeList(output: string): WorktreeEntry[] {
   return output
@@ -52,6 +58,7 @@ export function parseWorktreeList(output: string): WorktreeEntry[] {
         path: value('worktree') ?? '',
         head: value('HEAD'),
         branch: value('branch')?.replace(/^refs\/heads\//, '') ?? null,
+        prunable: lines.some((line) => line === 'prunable' || line.startsWith('prunable ')),
       }
     })
     .filter((entry) => entry.path)
@@ -89,6 +96,7 @@ async function headRemote(clone: string, pr: PrCheckout, base: { name: string; u
 }
 
 export function localBranchName(pr: PrCheckout) {
+  if (pr.crossRepository && !pr.headRepo) return null
   const fork = pr.headRepo && pr.headRepo.owner.toLowerCase() !== pr.owner.toLowerCase()
   return fork ? `${pr.headRepo!.owner}/${pr.headRef}` : pr.headRef
 }
@@ -125,29 +133,49 @@ async function prepareLocked(
 ): Promise<Worktree> {
   const { clone, root, log } = options
   const base = await baseRemote(clone, pr)
-  const remote = await headRemote(clone, pr, base)
-  log(`Fetching ${remote}/${pr.headRef} and ${base.name}/${pr.baseRef}`)
-  await git(clone, ['fetch', base.name, pr.baseRef])
-  const remoteRef = `refs/remotes/${remote}/${pr.headRef}`
-  const fetched = await tryGit(clone, ['fetch', remote, `+${pr.headRef}:${remoteRef}`])
-  const startRef =
-    fetched !== null
-      ? remoteRef
-      : (await git(clone, [
-          'fetch',
-          base.name,
-          `+pull/${pr.number}/head:refs/prism/pr-${pr.number}`,
-        ]),
-        `refs/prism/pr-${pr.number}`)
-
   const branch = localBranchName(pr)
-  const [main, ...entries] = parseWorktreeList(
-    await git(clone, ['worktree', 'list', '--porcelain']),
-  )
-  const target = join(root, `pr-${pr.number}`)
+  const remote = branch === null ? base.name : await headRemote(clone, pr, base)
+  const pullRef = `refs/prism/pr-${pr.number}`
+  const branchRef = `refs/remotes/${remote}/${pr.headRef}`
+  const fetchPull = () => tryGit(clone, ['fetch', base.name, `+pull/${pr.number}/head:${pullRef}`])
+  const oidOf = (ref: string) => tryGit(clone, ['rev-parse', '--verify', `${ref}^{commit}`])
+
+  await git(clone, ['fetch', base.name, pr.baseRef])
+  let startRef: string
+  let previous: string | null
+  if (branch === null) {
+    log(`Fetching pull/${pr.number}/head and ${base.name}/${pr.baseRef}`)
+    previous = await oidOf(pullRef)
+    if ((await fetchPull()) === null) {
+      throw new Error(`Could not fetch pull/${pr.number}/head from ${base.name}`)
+    }
+    startRef = pullRef
+  } else {
+    log(`Fetching ${remote}/${pr.headRef} and ${base.name}/${pr.baseRef}`)
+    previous = await oidOf(branchRef)
+    const fetched = await tryGit(clone, ['fetch', remote, `+${pr.headRef}:${branchRef}`])
+    startRef = fetched !== null ? branchRef : pullRef
+    if (fetched === null && (await fetchPull()) === null) {
+      throw new Error(`Could not fetch ${pr.headRef} or pull/${pr.number}/head`)
+    }
+    if (startRef === branchRef && pr.headOid && (await oidOf(branchRef)) !== pr.headOid) {
+      if ((await fetchPull()) !== null && (await oidOf(pullRef)) === pr.headOid) {
+        log(`${remote}/${pr.headRef} is not the pull request head; using pull/${pr.number}/head`)
+        startRef = pullRef
+      }
+    }
+  }
+
+  const [main, ...all] = parseWorktreeList(await git(clone, ['worktree', 'list', '--porcelain']))
+  const entries = all.filter((entry) => !entry.prunable)
+  await mkdir(root, { recursive: true })
+  const target = join(await realpath(root), `pr-${pr.number}`)
+  const targets = new Set([target, join(root, `pr-${pr.number}`)])
+  const matches = (entry: WorktreeEntry) =>
+    (branch !== null && entry.branch === branch) || targets.has(entry.path)
   const existing =
-    entries.find((entry) => entry.branch === branch) ??
-    entries.find((entry) => entry.path === target)
+    (branch === null ? undefined : entries.find((entry) => entry.branch === branch)) ??
+    entries.find((entry) => targets.has(entry.path))
 
   let path: string
   let created = false
@@ -156,28 +184,32 @@ async function prepareLocked(
     log(`Reusing worktree ${path}`)
   } else {
     if (await exists(target)) throw new Error(`${target} exists but is not a worktree of ${clone}`)
-    await mkdir(root, { recursive: true })
     const hasBranch =
+      branch !== null &&
       (await tryGit(clone, ['rev-parse', '--verify', `refs/heads/${branch}`])) !== null
-    const busy = main?.branch === branch
-    const args = busy
-      ? ['worktree', 'add', '--detach', target, startRef]
-      : hasBranch
-        ? ['worktree', 'add', target, branch]
-        : ['worktree', 'add', '-b', branch, target, startRef]
+    const detached = branch === null || main?.branch === branch
+    const force = all.some((entry) => entry.prunable && matches(entry)) ? ['-f'] : []
+    const args =
+      detached || branch === null
+        ? ['worktree', 'add', ...force, '--detach', target, startRef]
+        : hasBranch
+          ? ['worktree', 'add', ...force, target, branch]
+          : ['worktree', 'add', ...force, '-b', branch, target, startRef]
     await git(clone, args)
-    if (busy) log(`${branch} is checked out in ${clone}; using a detached worktree`)
-    if (!hasBranch && !busy && fetched !== null) {
+    if (branch !== null && detached) {
+      log(`${branch} is checked out in ${clone}; using a detached worktree`)
+    }
+    if (branch !== null && !hasBranch && !detached && startRef === branchRef) {
       await tryGit(target, ['branch', `--set-upstream-to=${remote}/${pr.headRef}`])
     }
     path = target
     created = true
-    log(`Created worktree ${path} on ${branch}`)
+    log(`Created worktree ${path}${branch === null || detached ? ' (detached)' : ` on ${branch}`}`)
     await installGuard(clone, path, options.hooksDir)
   }
 
   const head = await git(path, ['rev-parse', 'HEAD'])
-  const wanted = await git(clone, ['rev-parse', startRef])
+  const wanted = await git(clone, ['rev-parse', `${startRef}^{commit}`])
   let warning: string | null = null
   if (head !== wanted) {
     const clean = (await git(path, ['status', '--porcelain'])) === ''
@@ -185,6 +217,9 @@ async function prepareLocked(
     if (clean && behind) {
       await git(path, ['merge', '--ff-only', wanted])
       log(`Fast-forwarded to ${wanted.slice(0, 7)}`)
+    } else if (clean && previous !== null && head === previous) {
+      await git(path, ['reset', '--hard', wanted])
+      log(`The pull request was force-pushed; moved to ${wanted.slice(0, 7)}`)
     } else {
       warning = `Worktree is at ${head.slice(0, 7)}, the pull request head is ${wanted.slice(0, 7)}${clean ? '' : ' (local changes kept)'}`
       log(warning)

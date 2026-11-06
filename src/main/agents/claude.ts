@@ -1,4 +1,10 @@
-import type { CanUseTool, HookCallback, Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import type {
+  CanUseTool,
+  HookCallback,
+  ModelUsage,
+  Options,
+  SDKMessage,
+} from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import {
   changesReport,
@@ -9,6 +15,7 @@ import {
   verdict,
 } from '@shared/domain'
 import { toolBlockReason } from './guard'
+import { redactText } from './redact'
 import type { AgentAdapter, AgentEvent, PrismTools, SegmentInput, SegmentResult } from './types'
 
 type Sdk = typeof import('@anthropic-ai/claude-agent-sdk')
@@ -87,10 +94,23 @@ export function prismServer(sdk: Sdk, tools: PrismTools) {
   })
 }
 
-function truncate(value: string, max = 4000) {
+function truncate(raw: string, max = 4000) {
+  const value = redactText(raw)
   return value.length > max
     ? `${value.slice(0, max)}\n… (${value.length - max} more characters)`
     : value
+}
+
+const editTools = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
+
+export function usageOf(modelUsage: Record<string, ModelUsage> | undefined) {
+  let tokensIn = 0
+  let tokensOut = 0
+  for (const usage of Object.values(modelUsage ?? {})) {
+    tokensIn += usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens
+    tokensOut += usage.outputTokens
+  }
+  return { tokensIn, tokensOut }
 }
 
 function resultText(content: unknown): string {
@@ -178,9 +198,11 @@ export const claudeAdapter: AgentAdapter = {
       resume: input.resume ?? undefined,
       abortController: abort,
       systemPrompt: { type: 'preset', preset: 'claude_code', append: input.systemAppend },
-      settingSources: ['project'],
+      settingSources: input.projectRoot ? ['project'] : [],
+      projectConfigRoot: input.projectRoot ?? undefined,
       mcpServers: { prism: prismServer(sdk, input.tools) },
-      disallowedTools: input.readOnly ? ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] : [],
+      strictMcpConfig: true,
+      disallowedTools: ['AskUserQuestion', ...(input.readOnly ? editTools : [])],
       permissionMode: 'default',
       canUseTool,
       hooks: { PreToolUse: [{ hooks: [preToolUse] }] },
@@ -209,13 +231,10 @@ export const claudeAdapter: AgentAdapter = {
         }
         for (const event of eventsOf(message)) input.onEvent(event)
         if (message.type === 'result') {
-          const usage = message.usage
-          result.tokensIn +=
-            usage.input_tokens +
-            (usage.cache_read_input_tokens ?? 0) +
-            (usage.cache_creation_input_tokens ?? 0)
-          result.tokensOut += usage.output_tokens
-          result.costUsd += message.total_cost_usd
+          const totals = usageOf(message.modelUsage)
+          result.tokensIn = Math.max(result.tokensIn, totals.tokensIn)
+          result.tokensOut = Math.max(result.tokensOut, totals.tokensOut)
+          result.costUsd = Math.max(result.costUsd, message.total_cost_usd)
           if (message.subtype !== 'success') {
             result.error = message.errors.join('\n') || message.subtype
           } else if (message.is_error) {

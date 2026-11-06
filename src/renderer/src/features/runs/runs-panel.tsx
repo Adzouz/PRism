@@ -4,6 +4,7 @@ import {
   CircleCheck,
   CircleX,
   FolderGit2,
+  GitCommitHorizontal,
   Loader2,
   Play,
   Send,
@@ -28,6 +29,7 @@ import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   runStageFor,
+  useApps,
   useCancelRun,
   useDismissRun,
   useFollowUp,
@@ -38,8 +40,16 @@ import {
   useStartRun,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { age, useNow } from '../board/model'
-import { AnswerForm, isLive, Markdown, RunStatusBadge, verdictLabel, verdictTone } from './parts'
+import { age, useBoardStore, useNow } from '../board/model'
+import {
+  AnswerForm,
+  isLive,
+  Loading,
+  Markdown,
+  RunStatusBadge,
+  verdictLabel,
+  verdictTone,
+} from './parts'
 import { lastComment, threadWhere, ThreadPicker } from './threads'
 import { Transcript } from './transcript'
 
@@ -78,7 +88,8 @@ function Heading({ children }: { children: ReactNode }) {
 }
 
 function Findings({ runId }: { runId: number }) {
-  const { data: findings } = useRunFindings(runId)
+  const { data: findings, error } = useRunFindings(runId)
+  if (error && !findings) return <ErrorText error={error} />
   if (!findings?.length) return null
   const sorted = [...findings].sort(
     (a, b) => severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity),
@@ -204,16 +215,32 @@ function FollowUp({ run }: { run: Run }) {
   )
 }
 
-function duration(run: Run, now: number) {
+function Duration({ run }: { run: Run }) {
+  const now = useNow(10_000)
   if (!run.startedAt) return null
-  return age(run.startedAt, run.endedAt ?? now).replace('now', '<1m')
+  return <span>{age(run.startedAt, run.endedAt ?? now).replace('now', '<1m')}</span>
 }
 
-function RunDetail({ run, canFollowUp }: { run: Run; canFollowUp: boolean }) {
+function useTerminalName() {
+  const { data: apps } = useApps()
+  const iterm =
+    apps?.preferred.terminal === 'iterm' && apps.terminals.some((app) => app.id === 'iterm')
+  return iterm ? 'iTerm' : 'Terminal'
+}
+
+function RunDetail({
+  run,
+  canFollowUp,
+  stale,
+}: {
+  run: Run
+  canFollowUp: boolean
+  stale: boolean
+}) {
   const cancel = useCancelRun()
   const dismiss = useDismissRun()
   const resume = useResumeInTerminal()
-  const now = useNow(10_000)
+  const terminalName = useTerminalName()
   const live = isLive(run.status)
   const wantsThreads = run.threadIds.length > 0 || run.replies.length > 0 || run.changes !== null
   const { data: threadList } = usePrThreads(run.prId, wantsThreads)
@@ -247,7 +274,7 @@ function RunDetail({ run, canFollowUp }: { run: Run; canFollowUp: boolean }) {
               onClick={() => resume.mutate(run.id)}
             >
               <SquareTerminal />
-              Resume in terminal
+              Resume in {terminalName}
             </Button>
           )}
           {done && run.dismissedAt === null && (
@@ -266,7 +293,7 @@ function RunDetail({ run, canFollowUp }: { run: Run; canFollowUp: boolean }) {
       </div>
       <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span>{run.model}</span>
-        {duration(run, now) && <span>{duration(run, now)}</span>}
+        <Duration run={run} />
         <span>
           {(run.tokensIn + run.tokensOut).toLocaleString()} tokens · ${run.costUsd.toFixed(2)}
         </span>
@@ -308,6 +335,12 @@ function RunDetail({ run, canFollowUp }: { run: Run; canFollowUp: boolean }) {
               {verdictLabel[run.report.verdict]}
             </Badge>
           </div>
+          {stale && (
+            <p className="flex items-center gap-1.5 text-sm text-warning">
+              <GitCommitHorizontal className="size-4 shrink-0" />
+              New commits since this review. Run a re-review to cover them.
+            </p>
+          )}
           <Markdown text={run.report.summary} />
           <Findings runId={run.id} />
         </section>
@@ -337,19 +370,59 @@ function RunDetail({ run, canFollowUp }: { run: Run; canFollowUp: boolean }) {
   )
 }
 
+function RunPicker({
+  runs,
+  current,
+  onSelect,
+}: {
+  runs: Run[]
+  current: Run | null
+  onSelect: (runId: number) => void
+}) {
+  const now = useNow()
+  return (
+    <div className="border-t pt-4">
+      <div
+        role="group"
+        aria-label="Run history"
+        className="-m-0.5 flex max-h-20 flex-wrap gap-1 overflow-y-auto p-0.5"
+      >
+        {runs.map((item) => {
+          const selected = item.id === current?.id
+          return (
+            <button
+              key={item.id}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => onSelect(item.id)}
+              className={cn(
+                'rounded-md px-2 py-1 text-xs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring',
+                selected && 'bg-secondary font-medium text-foreground shadow-sm',
+              )}
+            >
+              {stageLabels[item.stage]} · {age(item.createdAt, now)}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function RunsPanel({ pr }: { pr: BoardPr }) {
-  const { data: runs } = usePrRuns(pr.id)
+  const { data: runs, isLoading, error } = usePrRuns(pr.id)
   const start = useStartRun()
-  const [selected, setSelected] = useState<number | null>(null)
+  const openRunId = useBoardStore((state) => state.openRunId)
+  const selectRun = useBoardStore((state) => state.selectRun)
   const [stage, setStage] = useState<Stage>(() => runStageFor(pr))
   const [chosenThreads, setChosenThreads] = useState<Set<string> | null>(null)
-  const needsThreads = threadStages.includes(stage)
+  const isOpen = pr.state === 'OPEN'
+  const needsThreads = isOpen && threadStages.includes(stage)
   const { data: threads } = usePrThreads(pr.id, needsThreads)
   const openThreads = (threads ?? []).filter((thread) => !thread.isResolved).length
   const threadCount = chosenThreads ? chosenThreads.size : openThreads
   const active = runs?.find((run) => isLive(run.status) || run.status === 'needs_you')
-  const current = runs?.find((run) => run.id === selected) ?? runs?.[0] ?? null
-  const now = useNow()
+  const current = runs?.find((run) => run.id === openRunId) ?? runs?.[0] ?? null
   const blocked = stage === 'draft-replies' && threads !== undefined && threadCount === 0
 
   const run = () =>
@@ -359,12 +432,12 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
         stage,
         threadIds: needsThreads && chosenThreads ? [...chosenThreads] : undefined,
       },
-      { onSuccess: (created) => setSelected(created.id) },
+      { onSuccess: (created) => selectRun(created.id) },
     )
 
   return (
     <div className="space-y-5">
-      {pr.state === 'OPEN' && (
+      {isOpen && (
         <div className="space-y-3">
           <ToggleGroup
             type="single"
@@ -382,7 +455,11 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
           {needsThreads && (
             <ThreadPicker prId={pr.id} selected={chosenThreads} onChange={setChosenThreads} />
           )}
-          <Button size="sm" disabled={Boolean(active) || start.isPending || blocked} onClick={run}>
+          <Button
+            size="sm"
+            disabled={!runs || Boolean(active) || start.isPending || blocked}
+            onClick={run}
+          >
             {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
             Run {stageLabels[stage].toLowerCase()}
             {needsThreads && threads && ` · ${threadCount} thread${threadCount === 1 ? '' : 's'}`}
@@ -390,25 +467,18 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
           <ErrorText error={start.error} />
         </div>
       )}
-      {runs && runs.length > 1 && (
-        <div className="flex flex-wrap gap-1 border-t pt-4">
-          {runs.slice(0, 8).map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setSelected(item.id)}
-              className={cn(
-                'rounded-md px-2 py-1 text-xs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring',
-                item.id === current?.id && 'bg-secondary text-foreground',
-              )}
-            >
-              {stageLabels[item.stage]} · {age(item.createdAt, now)}
-            </button>
-          ))}
-        </div>
-      )}
-      {current ? (
-        <RunDetail key={current.id} run={current} canFollowUp={!active} />
+      {runs && runs.length > 1 && <RunPicker runs={runs} current={current} onSelect={selectRun} />}
+      {isLoading ? (
+        <Loading>Loading runs…</Loading>
+      ) : error && !runs ? (
+        <ErrorText error={error} />
+      ) : current ? (
+        <RunDetail
+          key={current.id}
+          run={current}
+          canFollowUp={!active}
+          stale={pr.run?.id === current.id && pr.run.stale}
+        />
       ) : (
         <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
           <Bot className="size-6" />

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -36,7 +36,8 @@ async function setup() {
   execFileSync('git', ['clone', '-q', '--bare', work, origin])
   const clone = join(base, 'clone')
   execFileSync('git', ['clone', '-q', origin, clone])
-  return { base, work, origin, clone, head }
+  const options = { clone, root: join(base, 'wts'), hooksDir: join(base, 'hooks'), log: () => {} }
+  return { base, work, origin, clone, head, options }
 }
 
 const pr = (overrides: Partial<PrCheckout> = {}): PrCheckout => ({
@@ -46,23 +47,25 @@ const pr = (overrides: Partial<PrCheckout> = {}): PrCheckout => ({
   headRef: 'feature',
   headOid: '',
   baseRef: 'main',
+  crossRepository: false,
   headRepo: null,
   ...overrides,
 })
 
 describe('worktrees', () => {
   it('parses porcelain output', () => {
-    const output = 'worktree /a\nHEAD 1\nbranch refs/heads/main\n\nworktree /b\nHEAD 2\ndetached\n'
+    const output =
+      'worktree /a\nHEAD 1\nbranch refs/heads/main\n\nworktree /b\nHEAD 2\ndetached\n\nworktree /c\nHEAD 3\nbranch refs/heads/x\nprunable gitdir file points to non-existent location\n'
     expect(parseWorktreeList(output)).toEqual([
-      { path: '/a', head: '1', branch: 'main' },
-      { path: '/b', head: '2', branch: null },
+      { path: '/a', head: '1', branch: 'main', prunable: false },
+      { path: '/b', head: '2', branch: null, prunable: false },
+      { path: '/c', head: '3', branch: 'x', prunable: true },
     ])
   })
 
   it('creates a guarded worktree, then reuses and fast-forwards it', async () => {
-    const { base, work, origin, clone, head } = await setup()
-    const options = { clone, root: join(base, 'wts'), hooksDir: join(base, 'hooks'), log: () => {} }
-    const first = await prepareWorktree(options, pr())
+    const { base, work, origin, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
     expect(first).toMatchObject({
       path: join(base, 'wts/pr-7'),
       branch: 'feature',
@@ -75,25 +78,95 @@ describe('worktrees', () => {
     git(work, 'checkout', '-q', 'feature')
     const next = await commit(work, 'c.txt', 'three')
     git(work, 'push', '-q', origin, 'feature')
-    const second = await prepareWorktree(options, pr())
+    const second = await prepareWorktree(options, pr({ headOid: next }))
     expect(second).toMatchObject({ path: first.path, created: false, headOid: next })
 
     await writeFile(join(first.path, 'b.txt'), 'local edit')
     const after = await commit(work, 'd.txt', 'four')
     git(work, 'push', '-q', origin, 'feature')
-    const third = await prepareWorktree(options, pr())
+    const third = await prepareWorktree(options, pr({ headOid: after }))
     expect(third.headOid).toBe(next)
     expect(third.warning).toContain(after.slice(0, 7))
   })
 
-  it('adds a remote for fork pull requests', async () => {
-    const { base, clone, work, head } = await setup()
-    const fork = join(base, 'fork.git')
-    execFileSync('git', ['clone', '-q', '--bare', work, fork])
-    const options = { clone, root: join(base, 'wts'), hooksDir: join(base, 'hooks'), log: () => {} }
+  it('follows a force-push when the worktree is clean', async () => {
+    const { work, origin, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'e.txt', 'rewritten')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    const second = await prepareWorktree(options, pr({ headOid: rewritten }))
+    expect(second).toMatchObject({ path: first.path, headOid: rewritten, warning: null })
+  })
+
+  it('keeps local commits after a force-push', async () => {
+    const { work, origin, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    const local = await commit(first.path, 'mine.txt', 'local work')
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'e.txt', 'rewritten')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    const second = await prepareWorktree(options, pr({ headOid: rewritten }))
+    expect(second.headOid).toBe(local)
+    expect(second.warning).toContain(rewritten.slice(0, 7))
+  })
+
+  it('checks out pull/<n>/head for a pull request from a deleted fork', async () => {
+    const { work, origin, options } = await setup()
+    git(work, 'checkout', '-qb', 'fork-main', 'main')
+    const forkHead = await commit(work, 'fork.txt', 'from a fork')
+    git(work, 'push', '-q', origin, 'fork-main:refs/pull/9/head')
     const result = await prepareWorktree(
       options,
-      pr({ number: 9, headRepo: { owner: 'octocat', url: fork, sshUrl: fork } }),
+      pr({ number: 9, headRef: 'main', headOid: forkHead, crossRepository: true }),
+    )
+    expect(result).toMatchObject({ branch: null, headOid: forkHead, warning: null })
+    expect(git(result.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('HEAD')
+  })
+
+  it('uses pull/<n>/head when the branch is not the pull request head', async () => {
+    const { work, origin, options } = await setup()
+    git(work, 'checkout', '-qb', 'pr-head', 'main')
+    const prHead = await commit(work, 'pr.txt', 'the real head')
+    git(work, 'push', '-q', origin, 'pr-head:refs/pull/7/head')
+    const result = await prepareWorktree(options, pr({ headOid: prHead }))
+    expect(result.headOid).toBe(prHead)
+  })
+
+  it('recreates a worktree whose folder was deleted by hand', async () => {
+    const { head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    await rm(first.path, { recursive: true, force: true })
+    const second = await prepareWorktree(options, pr({ headOid: head }))
+    expect(second).toMatchObject({ path: first.path, created: true, headOid: head })
+  })
+
+  it('reuses worktrees under a symlinked root', async () => {
+    const { base, head, options } = await setup()
+    await mkdir(join(base, 'real-wts'))
+    await symlink(join(base, 'real-wts'), join(base, 'linked-wts'))
+    const linked = { ...options, root: join(base, 'linked-wts') }
+    git(options.clone, 'checkout', '-q', 'feature')
+    const first = await prepareWorktree(linked, pr({ headOid: head }))
+    const second = await prepareWorktree(linked, pr({ headOid: head }))
+    expect(first.created).toBe(true)
+    expect(second).toMatchObject({ path: first.path, created: false })
+  })
+
+  it('adds a remote for fork pull requests', async () => {
+    const { base, clone, work, head, options } = await setup()
+    const fork = join(base, 'fork.git')
+    execFileSync('git', ['clone', '-q', '--bare', work, fork])
+    const result = await prepareWorktree(
+      options,
+      pr({
+        number: 9,
+        headOid: head,
+        crossRepository: true,
+        headRepo: { owner: 'octocat', url: fork, sshUrl: fork },
+      }),
     )
     expect(result).toMatchObject({
       remote: 'prism-octocat',
@@ -104,14 +177,15 @@ describe('worktrees', () => {
   })
 
   it('prepares several worktrees of one clone in parallel', async () => {
-    const { base, clone, head } = await setup()
-    const options = { clone, root: join(base, 'wts'), hooksDir: join(base, 'hooks'), log: () => {} }
+    const { base, head, options } = await setup()
     const results = await Promise.all(
       [1, 2, 3].map((number) =>
         prepareWorktree(
           options,
           pr({
             number,
+            headOid: head,
+            crossRepository: true,
             headRepo: { owner: `fork${number}`, url: join(base, 'origin.git'), sshUrl: '' },
           }),
         ),

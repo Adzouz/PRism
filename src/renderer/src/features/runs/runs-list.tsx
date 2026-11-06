@@ -1,16 +1,24 @@
 import { Bot } from 'lucide-react'
-import { stageLabels } from '@shared/domain'
-import { EmptyState } from '@/components/page'
+import { stageLabels, type Run } from '@shared/domain'
+import { EmptyState, ErrorText } from '@/components/page'
 import { usePrs, useRuns } from '@/lib/api'
 import { age, useBoardStore, useNow } from '../board/model'
-import { RunStatusBadge, isLive, verdictLabel } from './parts'
+import { Loading, RunStatusBadge, isLive, verdictLabel } from './parts'
+
+function runNote(run: Run) {
+  if (isLive(run.status)) return run.progress
+  if (run.status === 'needs_you') return run.ask?.prompt
+  if (run.report && run.stage !== 'test-plan') return verdictLabel[run.report.verdict]
+  return run.error
+}
 
 export function RunsList() {
-  const { data: runs, isLoading } = useRuns()
+  const { data: runs, isLoading, error } = useRuns()
   const { data: prs } = usePrs()
   const openPr = useBoardStore((state) => state.openPr)
   const now = useNow()
-  if (isLoading) return null
+  if (isLoading) return <Loading>Loading runs…</Loading>
+  if (error && !runs) return <ErrorText error={error} />
   if (!runs?.length) {
     return (
       <EmptyState
@@ -29,7 +37,7 @@ export function RunsList() {
           <li key={run.id}>
             <button
               type="button"
-              onClick={() => openPr(run.prId, 'runs')}
+              onClick={() => openPr(run.prId, 'runs', run.id)}
               className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm outline-none first:rounded-t-2xl last:rounded-b-2xl hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-ring"
             >
               <RunStatusBadge status={run.status} />
@@ -47,13 +55,7 @@ export function RunsList() {
                 )}
               </span>
               <span className="hidden shrink-0 truncate text-xs text-muted-foreground sm:block sm:max-w-48">
-                {isLive(run.status)
-                  ? run.progress
-                  : run.status === 'needs_you'
-                    ? run.ask?.prompt
-                    : run.report
-                      ? verdictLabel[run.report.verdict]
-                      : run.error}
+                {runNote(run)}
               </span>
               <span className="w-14 shrink-0 text-right font-mono text-xs text-muted-foreground">
                 ${run.costUsd.toFixed(2)}

@@ -18,13 +18,13 @@ import {
 import { Bot, GitPullRequest, Loader2 } from 'lucide-react'
 import {
   boardColumns,
-  stageLabels,
   type BoardColumn,
   type BoardPr,
+  type BoardStage,
   type BoardTab,
   type Stage,
 } from '@shared/domain'
-import { EmptyState, ErrorText } from '@/components/page'
+import { EmptyState } from '@/components/page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -39,10 +39,35 @@ import {
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { CardPreview, PrCard, type CardActions } from './card'
-import { boardView, hasLiveRun, useBoardStore, useNow, type Density } from './model'
-
-const runColumns = new Set(['reviewing', 'addressing'])
+import { boardView, hasLiveRun, stageLabel, useBoardStore, useNow, type Density } from './model'
 import { Toolbar } from './toolbar'
+
+const runColumns = new Set<BoardStage>(['reviewing', 'addressing'])
+
+const dropCopy: Record<Stage, { title: string; body: string }> = {
+  review: {
+    title: 'Start a review run?',
+    body: 'Your default agent reviews this pull request in a worktree with the skill bound to Review, then reports a verdict and findings. It only reads and reports: it never commits, pushes or posts.',
+  },
+  're-review': {
+    title: 'Start a re-review run?',
+    body: 'Your default agent re-reviews this pull request in a worktree with the skill bound to Re-review, then reports a new verdict. It only reads and reports: it never commits, pushes or posts.',
+  },
+  address: {
+    title: 'Start an address comments run?',
+    body: 'Your default agent edits files in a worktree for this pull request to address its unresolved review threads, with the skill bound to Address comments, then reports what it changed. It never commits, pushes or posts.',
+  },
+  'test-plan': {
+    title: 'Start a test plan run?',
+    body: 'Your default agent reads this pull request in a worktree with the skill bound to Test plan, then writes how to test it. It never commits, pushes or posts.',
+  },
+  'draft-replies': {
+    title: 'Start a draft replies run?',
+    body: 'Your default agent drafts replies to the unresolved review threads with the skill bound to Draft replies. It never posts them.',
+  },
+}
+
+type Failure = { prId: number; error: unknown }
 
 const collision: CollisionDetection = (args) => {
   const hits = pointerWithin(args)
@@ -85,6 +110,7 @@ function Column({
   now,
   density,
   actions,
+  failure,
 }: {
   tab: BoardTab
   column: BoardColumn
@@ -92,14 +118,15 @@ function Column({
   now: number
   density: Density
   actions: CardActions
+  failure: Failure | null
 }) {
   const { active } = useDndContext()
   const dragged = active?.data.current?.pr as BoardPr | undefined
-  const disabled =
-    Boolean(column.agent) &&
-    !(runColumns.has(column.stage) && dragged && !hasLiveRun(dragged) && dragged.state === 'OPEN')
-  const { setNodeRef, isOver } = useDroppable({ id: column.stage, disabled })
   const fromHere = dragged?.stage === column.stage
+  const disabled = column.agent
+    ? !(runColumns.has(column.stage) && dragged && !hasLiveRun(dragged) && dragged.state === 'OPEN')
+    : Boolean(dragged && hasLiveRun(dragged) && !fromHere)
+  const { setNodeRef, isOver } = useDroppable({ id: column.stage, disabled })
   return (
     <section
       ref={setNodeRef}
@@ -125,7 +152,14 @@ function Column({
       </header>
       <div className="flex flex-col gap-2">
         {prs.map((pr) => (
-          <PrCard key={pr.id} pr={pr} now={now} density={density} actions={actions} />
+          <PrCard
+            key={pr.id}
+            pr={pr}
+            now={now}
+            density={density}
+            actions={actions}
+            error={failure?.prId === pr.id ? failure.error : null}
+          />
         ))}
         {prs.length === 0 && (
           <p className="px-2 py-6 text-center text-xs text-muted-foreground">
@@ -148,16 +182,17 @@ export function Board({ tab }: { tab: BoardTab }) {
   const filters = useBoardStore((state) => state.filters[tab])
   const density = useBoardStore((state) => state.density)
   const openPr = useBoardStore((state) => state.openPr)
+  const dropConfirmed = useBoardStore((state) => state.dropConfirmed)
+  const confirmDrop = useBoardStore((state) => state.confirmDrop)
   const now = useNow()
-  const setFlags = useSetFlags()
-  const setStage = useSetStage()
-  const startRun = useStartRun()
-  const cancelRun = useCancelRun()
-  const dismissRun = useDismissRun()
-  const agentDropConfirmed = useBoardStore((state) => state.agentDropConfirmed)
-  const confirmAgentDrop = useBoardStore((state) => state.confirmAgentDrop)
-  const [pendingRun, setPendingRun] = useState<BoardPr | null>(null)
-  const [dragging, setDragging] = useState<BoardPr | null>(null)
+  const { mutateAsync: flag } = useSetFlags()
+  const { mutateAsync: stage } = useSetStage()
+  const { mutateAsync: start } = useStartRun()
+  const { mutateAsync: cancel } = useCancelRun()
+  const { mutateAsync: dismiss } = useDismissRun()
+  const [failure, setFailure] = useState<Failure | null>(null)
+  const [pendingDrop, setPendingDrop] = useState<{ pr: BoardPr; column: BoardStage } | null>(null)
+  const [drag, setDrag] = useState<{ pr: BoardPr; columns: BoardColumn[] } | null>(null)
   const justDropped = useRef(false)
 
   const sensors = useSensors(
@@ -175,45 +210,62 @@ export function Board({ tab }: { tab: BoardTab }) {
     ],
     [prs, tab],
   )
-
-  const { mutate: flag } = setFlags
-  const { mutate: stage } = setStage
-  const { mutate: start } = startRun
-  const { mutate: cancel } = cancelRun
-  const { mutate: dismiss } = dismissRun
-  const launch = useCallback(
-    (pr: BoardPr, runAs?: Stage) => start({ prId: pr.id, stage: runAs ?? runStageFor(pr) }),
-    [start],
+  const visibleColumns = useMemo(
+    () =>
+      boardColumns[tab].filter(
+        (column) => !column.hideEmpty || (view.byStage.get(column.stage)?.length ?? 0) > 0,
+      ),
+    [tab, view],
   )
+
+  const track = useCallback((pr: BoardPr, task?: Promise<unknown>) => {
+    setFailure(null)
+    task?.catch((error: unknown) => setFailure({ prId: pr.id, error }))
+  }, [])
+
+  const launch = useCallback(
+    (pr: BoardPr, runAs?: Stage, show = false) =>
+      track(
+        pr,
+        start({ prId: pr.id, stage: runAs ?? runStageFor(pr) }).then((run) => {
+          if (show) openPr(pr.id, 'runs', run.id)
+        }),
+      ),
+    [start, openPr, track],
+  )
+
   const actions = useMemo<CardActions>(
     () => ({
       open: (pr) => {
         if (justDropped.current) return
-        const live =
+        track(pr)
+        const showRuns =
           pr.run && (hasLiveRun(pr) || pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post')
-        openPr(pr.id, live ? 'runs' : undefined)
+        if (showRuns) openPr(pr.id, 'runs', pr.run?.id)
+        else openPr(pr.id)
       },
-      run: (pr, runAs) => {
-        launch(pr, runAs)
-        openPr(pr.id, 'runs')
-      },
-      cancel: (pr) => pr.run && cancel(pr.run.id),
-      dismiss: (pr) => pr.run && dismiss(pr.run.id),
-      star: (pr) => flag({ id: pr.id, starred: !pr.starred }),
-      hide: (pr) => flag({ id: pr.id, hidden: !pr.hidden }),
-      archive: (pr) => flag({ id: pr.id, archived: true }),
-      move: (pr, target) => stage({ id: pr.id, stage: target }),
+      run: (pr, runAs) => launch(pr, runAs, true),
+      cancel: (pr) => pr.run && track(pr, cancel(pr.run.id)),
+      dismiss: (pr) => pr.run && track(pr, dismiss(pr.run.id)),
+      star: (pr) => track(pr, flag({ id: pr.id, starred: !pr.starred })),
+      hide: (pr) => track(pr, flag({ id: pr.id, hidden: !pr.hidden })),
+      archive: (pr) => track(pr, flag({ id: pr.id, archived: true })),
+      move: (pr, target) => track(pr, stage({ id: pr.id, stage: target })),
     }),
-    [flag, stage, openPr, launch, cancel, dismiss],
+    [flag, stage, openPr, launch, cancel, dismiss, track],
   )
 
-  const onDragStart = useCallback((event: DragStartEvent) => {
-    setDragging((event.active.data.current?.pr as BoardPr | undefined) ?? null)
-  }, [])
+  const onDragStart = useCallback(
+    (event: DragStartEvent) => {
+      const pr = event.active.data.current?.pr as BoardPr | undefined
+      setDrag(pr ? { pr, columns: visibleColumns } : null)
+    },
+    [visibleColumns],
+  )
 
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
-      setDragging(null)
+      setDrag(null)
       justDropped.current = true
       setTimeout(() => {
         justDropped.current = false
@@ -222,17 +274,17 @@ export function Board({ tab }: { tab: BoardTab }) {
       const target = event.over?.id
       if (!pr || typeof target !== 'string' || target === pr.stage) return
       const column = boardColumns[tab].find((item) => item.stage === target)
-      if (!column) return
+      if (!column || hasLiveRun(pr)) return
       if (runColumns.has(column.stage)) {
-        if (hasLiveRun(pr) || pr.state !== 'OPEN') return
-        if (agentDropConfirmed) launch(pr)
-        else setPendingRun(pr)
+        if (pr.state !== 'OPEN') return
+        if (dropConfirmed[column.stage]) launch(pr)
+        else setPendingDrop({ pr, column: column.stage })
         return
       }
       if (column.agent) return
-      stage({ id: pr.id, stage: column.stage })
+      track(pr, stage({ id: pr.id, stage: column.stage }))
     },
-    [stage, tab, agentDropConfirmed, launch],
+    [stage, tab, dropConfirmed, launch, track],
   )
 
   const announcements = useMemo(
@@ -253,6 +305,7 @@ export function Board({ tab }: { tab: BoardTab }) {
   )
 
   const tabTotal = (prs ?? []).filter((pr) => pr.tab === tab && pr.archivedAt === null).length
+  const copy = pendingDrop && dropCopy[runStageFor(pendingDrop.pr)]
 
   return (
     <div className="space-y-5">
@@ -278,55 +331,52 @@ export function Board({ tab }: { tab: BoardTab }) {
           collisionDetection={collision}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
-          onDragCancel={() => setDragging(null)}
+          onDragCancel={() => setDrag(null)}
           accessibility={{ announcements }}
           autoScroll={{ threshold: { x: 0.08, y: 0.15 }, acceleration: 6 }}
         >
           <div className="-mx-1 flex items-start gap-3 overflow-x-auto px-1 pb-4">
-            {boardColumns[tab]
-              .filter(
-                (column) => !column.hideEmpty || (view.byStage.get(column.stage)?.length ?? 0) > 0,
-              )
-              .map((column) => (
-                <Column
-                  key={column.stage}
-                  tab={tab}
-                  column={column}
-                  prs={view.byStage.get(column.stage) ?? []}
-                  now={now}
-                  density={density}
-                  actions={actions}
-                />
-              ))}
+            {(drag?.columns ?? visibleColumns).map((column) => (
+              <Column
+                key={column.stage}
+                tab={tab}
+                column={column}
+                prs={view.byStage.get(column.stage) ?? []}
+                now={now}
+                density={density}
+                actions={actions}
+                failure={failure}
+              />
+            ))}
           </div>
           <DragOverlay dropAnimation={null}>
-            {dragging && <CardPreview pr={dragging} now={now} density={density} />}
+            {drag && <CardPreview pr={drag.pr} now={now} density={density} />}
           </DragOverlay>
         </DndContext>
       )}
-      <ErrorText error={startRun.error ?? cancelRun.error ?? dismissRun.error} />
-      <Dialog open={pendingRun !== null} onOpenChange={(open) => !open && setPendingRun(null)}>
-        {pendingRun && (
+      <Dialog open={pendingDrop !== null} onOpenChange={(open) => !open && setPendingDrop(null)}>
+        {pendingDrop && copy && (
           <DialogContent
-            title={`Start a ${stageLabels[runStageFor(pendingRun)].toLowerCase()} run?`}
-            description={`${pendingRun.repo} #${pendingRun.number}`}
+            title={copy.title}
+            description={`${pendingDrop.pr.repo} #${pendingDrop.pr.number}`}
             className="w-[min(480px,calc(100vw-48px))]"
           >
             <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Dropping a card here runs the bound skill with your default agent in a worktree for
-                this pull request. The agent reads and reports; it never commits, pushes or posts.
+              <p className="text-sm text-muted-foreground">{copy.body}</p>
+              <p className="text-xs text-muted-foreground">
+                Next time, dropping a card on {stageLabel(tab, pendingDrop.column)} starts the run
+                right away.
               </p>
               <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setPendingRun(null)}>
+                <Button variant="outline" onClick={() => setPendingDrop(null)}>
                   Cancel
                 </Button>
                 <Button
                   autoFocus
                   onClick={() => {
-                    confirmAgentDrop()
-                    launch(pendingRun)
-                    setPendingRun(null)
+                    confirmDrop(pendingDrop.column)
+                    launch(pendingDrop.pr)
+                    setPendingDrop(null)
                   }}
                 >
                   Start run
