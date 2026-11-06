@@ -10,7 +10,7 @@ import {
   RotateCcw,
 } from 'lucide-react'
 import { GithubIcon } from '@/components/github-icon'
-import { EmptyState, Page, QuickCard, Section } from '@/components/page'
+import { Page, QuickCard, Section } from '@/components/page'
 import { Switch } from '@/components/ui/switch'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { Badge } from '@/components/ui/badge'
@@ -19,6 +19,7 @@ import { ArchiveList } from '@/features/board/archive'
 import { Board } from '@/features/board/board'
 import { isNeedsMe } from '@/features/board/model'
 import { SyncIndicator } from '@/features/board/sync-indicator'
+import { RunsList } from '@/features/runs/runs-list'
 import { RepoSetup } from '@/features/onboarding/repo-setup'
 import { ResetConfiguration } from '@/features/onboarding/reset'
 import { StepAgent } from '@/features/onboarding/step-agent'
@@ -46,6 +47,9 @@ function greeting() {
 export function DashboardPage() {
   const { data: status } = useConfigStatus()
   const { data: prs = [] } = usePrs()
+  const running = prs.filter(
+    (pr) => pr.run && ['queued', 'preparing', 'running'].includes(pr.run.status),
+  ).length
   const active = prs.filter((pr) => pr.archivedAt === null && pr.state === 'OPEN')
   const toReview = active.filter((pr) => pr.tab === 'reviews' && isNeedsMe(pr)).length
   const mine = active.filter((pr) => pr.tab === 'mine').length
@@ -103,7 +107,7 @@ export function DashboardPage() {
               icon={Bot}
               label="Runs"
               description="Agents reviewing and addressing comments"
-              meta="0 running"
+              meta={`${running} running`}
             />
           </div>
         </Section>
@@ -139,11 +143,7 @@ export function ArchivePage() {
 export function RunsPage() {
   return (
     <Page eyebrow="Agents" title="Runs" description="Every agent run, live and past.">
-      <EmptyState
-        icon={Bot}
-        title="No agent runs"
-        description="Review and address-comments runs will stream here live."
-      />
+      <RunsList />
     </Page>
   )
 }

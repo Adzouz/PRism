@@ -206,6 +206,7 @@ export const boardTab = z.enum(boardTabs)
 export type BoardTab = z.infer<typeof boardTab>
 
 export const boardStages = [
+  'needs-you',
   'to-review',
   'reviewing',
   'verdict-ready',
@@ -227,10 +228,20 @@ export type BoardColumn = {
   label: string
   needsMe?: boolean
   agent?: boolean
+  hideEmpty?: boolean
+}
+
+const needsYouColumn: BoardColumn = {
+  stage: 'needs-you',
+  label: 'Needs you',
+  needsMe: true,
+  agent: true,
+  hideEmpty: true,
 }
 
 export const boardColumns: Record<BoardTab, BoardColumn[]> = {
   reviews: [
+    needsYouColumn,
     { stage: 'to-review', label: 'To review', needsMe: true },
     { stage: 'reviewing', label: 'Reviewing', agent: true },
     { stage: 'verdict-ready', label: 'Verdict ready', needsMe: true, agent: true },
@@ -240,6 +251,7 @@ export const boardColumns: Record<BoardTab, BoardColumn[]> = {
     { stage: 'done', label: 'Done' },
   ],
   mine: [
+    needsYouColumn,
     { stage: 'draft', label: 'Draft' },
     { stage: 'waiting-for-review', label: 'Waiting for review' },
     { stage: 'changes-requested', label: 'Changes requested', needsMe: true },
@@ -258,6 +270,217 @@ export type CiState = z.infer<typeof ciState>
 
 export const prLabel = z.object({ name: z.string(), color: z.string() })
 export type PrLabel = z.infer<typeof prLabel>
+
+export const runStatuses = [
+  'queued',
+  'preparing',
+  'running',
+  'needs_you',
+  'done',
+  'failed',
+  'cancelled',
+] as const
+export const runStatus = z.enum(runStatuses)
+export type RunStatus = z.infer<typeof runStatus>
+
+export const activeRunStatuses: readonly RunStatus[] = [
+  'queued',
+  'preparing',
+  'running',
+  'needs_you',
+]
+
+export const askOptions = z.object({
+  options: z.array(z.string()).optional(),
+  placeholder: z.string().optional(),
+})
+
+export const ask = z.object({
+  id: z.number(),
+  runId: z.number(),
+  prompt: z.string(),
+  options: z.array(z.string()),
+  placeholder: z.string().nullable(),
+  answer: z.string().nullable(),
+  createdAt: z.number(),
+  answeredAt: z.number().nullable(),
+})
+export type Ask = z.infer<typeof ask>
+
+export const severity = z.enum(['blocking', 'nit', 'refactor'])
+export const nitDecision = z.enum(['address', 'followup', 'skip'])
+export const findingSide = z.enum(['LEFT', 'RIGHT'])
+export const findingStatus = z.enum(['open', 'resolved', 'still_open', 'disputed', 'obsolete'])
+export const verdict = z.enum(['approve', 'comment', 'request_changes'])
+
+export const reportedFinding = z.object({
+  path: z.string().min(1),
+  line: z.number().int().positive().nullable(),
+  side: findingSide.default('RIGHT'),
+  severity,
+  nitDecision: nitDecision.optional(),
+  title: z.string().min(1),
+  body: z.string(),
+  suggestion: z.string().optional(),
+  priorFindingId: z.number().int().optional(),
+})
+
+export const dimensionScan = z.object({
+  dimension: z.string(),
+  status: z.enum(['clean', 'issues', 'skipped']),
+  note: z.string().optional(),
+})
+
+export const reviewReport = z.object({
+  verdict,
+  summary: z.string(),
+  dimensions: z.array(dimensionScan).default([]),
+})
+export type ReviewReport = z.infer<typeof reviewReport>
+
+export const threadChange = z.object({
+  threadId: z.string(),
+  action: z.enum(['fix', 'push_back', 'defer']),
+  note: z.string().optional(),
+})
+
+export const changesReport = z.object({
+  threads: z.array(threadChange),
+  filesTouched: z.array(z.string()).default([]),
+  checks: z
+    .array(z.object({ command: z.string(), ok: z.boolean(), note: z.string().optional() }))
+    .default([]),
+  summary: z.string().optional(),
+})
+export type ChangesReport = z.infer<typeof changesReport>
+
+export const draftReply = z.object({ threadId: z.string(), body: z.string() })
+export type DraftReply = z.infer<typeof draftReply>
+
+export const finding = z.object({
+  id: z.number(),
+  runId: z.number(),
+  path: z.string(),
+  line: z.number().nullable(),
+  side: findingSide,
+  severity,
+  nitDecision: nitDecision.nullable(),
+  title: z.string(),
+  body: z.string(),
+  suggestion: z.string().nullable(),
+  status: findingStatus,
+})
+export type Finding = z.infer<typeof finding>
+
+export const run = z.object({
+  id: z.number(),
+  prId: z.number(),
+  stage,
+  skillName: z.string().nullable(),
+  agent: agentId,
+  model: z.string(),
+  status: runStatus,
+  progress: z.string().nullable(),
+  sessionId: z.string().nullable(),
+  worktreePath: z.string().nullable(),
+  reviewedHeadOid: z.string().nullable(),
+  report: reviewReport.nullable(),
+  changes: changesReport.nullable(),
+  replies: z.array(draftReply),
+  threadIds: z.array(z.string()),
+  createdAt: z.number(),
+  startedAt: z.number().nullable(),
+  endedAt: z.number().nullable(),
+  dismissedAt: z.number().nullable(),
+  tokensIn: z.number(),
+  tokensOut: z.number(),
+  costUsd: z.number(),
+  error: z.string().nullable(),
+  ask: ask.nullable(),
+})
+export type Run = z.infer<typeof run>
+
+export const runEventKinds = [
+  'status',
+  'message',
+  'text',
+  'tool',
+  'tool_result',
+  'progress',
+  'ask',
+  'answer',
+  'denied',
+  'error',
+  'result',
+  'note',
+] as const
+export const runEventKind = z.enum(runEventKinds)
+export type RunEventKind = z.infer<typeof runEventKind>
+
+export const runEvent = z.object({
+  id: z.number(),
+  runId: z.number(),
+  ts: z.number(),
+  kind: runEventKind,
+  payload: z.record(z.string(), z.unknown()),
+})
+export type RunEvent = z.infer<typeof runEvent>
+
+export const threadComment = z.object({
+  id: z.string(),
+  author: z.string(),
+  avatar: z.string().nullable(),
+  body: z.string(),
+  createdAt: z.number(),
+  url: z.string(),
+})
+
+export const reviewThread = z.object({
+  id: z.string(),
+  path: z.string(),
+  line: z.number().nullable(),
+  isResolved: z.boolean(),
+  isOutdated: z.boolean(),
+  comments: z.array(threadComment),
+  totalComments: z.number(),
+})
+export type ReviewThread = z.infer<typeof reviewThread>
+
+export const threadStages: readonly Stage[] = ['address', 'draft-replies']
+
+export const runStagesByTab: Record<BoardTab, Stage[]> = {
+  reviews: ['review', 're-review', 'draft-replies', 'test-plan'],
+  mine: ['address', 'draft-replies', 'test-plan', 'review'],
+}
+
+export const appChoice = z.object({ id: z.string(), name: z.string() })
+export type AppChoice = z.infer<typeof appChoice>
+
+export const appPreferences = z.object({
+  editor: z.string().nullable(),
+  terminal: z.string().nullable(),
+})
+export type AppPreferences = z.infer<typeof appPreferences>
+
+export const installedApps = z.object({
+  editors: z.array(appChoice),
+  terminals: z.array(appChoice),
+  preferred: appPreferences,
+})
+export type InstalledApps = z.infer<typeof installedApps>
+
+export const boardRun = z.object({
+  id: z.number(),
+  stage,
+  status: runStatus,
+  progress: z.string().nullable(),
+  error: z.string().nullable(),
+  verdict: verdict.nullable(),
+  findings: z.number(),
+  ask: ask.nullable(),
+  stale: z.boolean(),
+})
+export type BoardRun = z.infer<typeof boardRun>
 
 export const boardPr = z.object({
   id: z.number(),
@@ -290,6 +513,7 @@ export const boardPr = z.object({
   starred: z.boolean(),
   hidden: z.boolean(),
   archivedAt: z.number().nullable(),
+  run: boardRun.nullable(),
 })
 export type BoardPr = z.infer<typeof boardPr>
 

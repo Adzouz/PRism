@@ -21,14 +21,24 @@ const emptyFilters: Filters = {
   search: '',
 }
 
+export type DrawerTab = 'overview' | 'runs'
+
 type BoardStore = {
   filters: Record<BoardTab, Filters>
   density: Density
   openPrId: number | null
+  drawerTab: DrawerTab
+  openRunId: number | null
+  dropConfirmed: Partial<Record<BoardStage, boolean>>
   setFilters: (tab: BoardTab, patch: Partial<Filters>) => void
   setDensity: (density: Density) => void
-  openPr: (id: number | null) => void
+  openPr: (id: number | null, tab?: DrawerTab, runId?: number | null) => void
+  setDrawerTab: (tab: DrawerTab) => void
+  selectRun: (runId: number | null) => void
+  confirmDrop: (column: BoardStage) => void
 }
+
+type PersistedBoard = Pick<BoardStore, 'filters' | 'density' | 'dropConfirmed'>
 
 export const useBoardStore = create<BoardStore>()(
   persist(
@@ -36,22 +46,39 @@ export const useBoardStore = create<BoardStore>()(
       filters: { reviews: emptyFilters, mine: emptyFilters },
       density: 'comfortable',
       openPrId: null,
+      drawerTab: 'overview',
+      openRunId: null,
+      dropConfirmed: {},
       setFilters: (tab, patch) =>
         set((state) => ({
           filters: { ...state.filters, [tab]: { ...state.filters[tab], ...patch } },
         })),
       setDensity: (density) => set({ density }),
-      openPr: (openPrId) => set({ openPrId }),
+      openPr: (openPrId, drawerTab = 'overview', openRunId = null) =>
+        set({ openPrId, drawerTab, openRunId }),
+      setDrawerTab: (drawerTab) => set({ drawerTab }),
+      selectRun: (openRunId) => set({ openRunId }),
+      confirmDrop: (column) =>
+        set((state) => ({ dropConfirmed: { ...state.dropConfirmed, [column]: true } })),
     }),
     {
       name: 'prism-board',
-      partialize: ({ filters, density }) => ({
+      version: 1,
+      partialize: ({ filters, density, dropConfirmed }): PersistedBoard => ({
         density,
+        dropConfirmed,
         filters: {
           reviews: { ...filters.reviews, search: '' },
           mine: { ...filters.mine, search: '' },
         },
       }),
+      migrate: (persisted, version) => {
+        const { agentDropConfirmed, ...state } = (persisted ?? {}) as PersistedBoard & {
+          agentDropConfirmed?: boolean
+        }
+        if (version >= 1) return state
+        return { ...state, dropConfirmed: agentDropConfirmed ? { reviewing: true } : {} }
+      },
     },
   ),
 )
@@ -60,8 +87,13 @@ const needsMeStages = (tab: BoardTab) =>
   new Set(boardColumns[tab].filter((column) => column.needsMe).map((column) => column.stage))
 
 export function isNeedsMe(pr: BoardPr) {
-  return pr.state === 'OPEN' && needsMeStages(pr.tab).has(pr.stage)
+  return (
+    pr.run?.status === 'needs_you' || (pr.state === 'OPEN' && needsMeStages(pr.tab).has(pr.stage))
+  )
 }
+
+export const hasLiveRun = (pr: BoardPr) =>
+  pr.run !== null && ['queued', 'preparing', 'running', 'needs_you'].includes(pr.run.status)
 
 export function matchesSearch(pr: BoardPr, search: string) {
   const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean)

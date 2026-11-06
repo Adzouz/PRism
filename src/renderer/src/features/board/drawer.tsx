@@ -20,10 +20,14 @@ import type { BoardPr, PrDetail } from '@shared/domain'
 import { ErrorText } from '@/components/page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { usePrDetail, usePrs, useSetFlags, useSetStage } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { isLive } from '../runs/parts'
+import { RunsPanel } from '../runs/runs-panel'
+import { WorktreeFooter } from '../runs/worktree-footer'
 import { Avatar } from './card'
-import { age, prSize, stageLabel, useBoardStore, useNow } from './model'
+import { age, hasLiveRun, prSize, stageLabel, useBoardStore, useNow } from './model'
 
 const reviewTone: Record<string, 'success' | 'destructive' | 'default' | 'accent'> = {
   APPROVED: 'success',
@@ -152,6 +156,7 @@ function Overview({ pr }: { pr: BoardPr }) {
               size="sm"
               variant="ghost"
               className="h-6 px-2 text-xs"
+              disabled={hasLiveRun(pr)}
               onClick={() => setStage.mutate({ id: pr.id, stage: null })}
             >
               <RotateCcw />
@@ -296,6 +301,8 @@ function Overview({ pr }: { pr: BoardPr }) {
 export function PrDrawer() {
   const openPrId = useBoardStore((state) => state.openPrId)
   const openPr = useBoardStore((state) => state.openPr)
+  const drawerTab = useBoardStore((state) => state.drawerTab)
+  const setDrawerTab = useBoardStore((state) => state.setDrawerTab)
   const { data: prs } = usePrs()
   const setFlags = useSetFlags()
   const pr = prs?.find((item) => item.id === openPrId) ?? null
@@ -356,9 +363,37 @@ export function PrDrawer() {
                   </Button>
                 </div>
               </header>
-              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-                <Overview pr={pr} />
-              </div>
+              <Tabs
+                value={drawerTab}
+                onValueChange={(value) => setDrawerTab(value === 'runs' ? 'runs' : 'overview')}
+                className="flex min-h-0 flex-1 flex-col"
+              >
+                <TabsList aria-label="Pull request sections" className="px-5">
+                  <TabsTrigger value="overview">Overview</TabsTrigger>
+                  <TabsTrigger value="runs">
+                    Runs
+                    {pr.run?.status === 'needs_you' && (
+                      <>
+                        <span aria-hidden className="size-1.5 rounded-full bg-warning" />
+                        <span className="sr-only">(needs your answer)</span>
+                      </>
+                    )}
+                    {pr.run && isLive(pr.run.status) && (
+                      <>
+                        <Loader2 className="size-3 animate-spin" />
+                        <span className="sr-only">(run in progress)</span>
+                      </>
+                    )}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="overview" className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                  <Overview pr={pr} />
+                </TabsContent>
+                <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                  <RunsPanel key={pr.id} pr={pr} />
+                </TabsContent>
+              </Tabs>
+              <WorktreeFooter pr={pr} />
               <DialogPrimitive.Close className="absolute top-5 right-5 rounded-md p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
                 <X className="size-4" />
                 <span className="sr-only">Close</span>
