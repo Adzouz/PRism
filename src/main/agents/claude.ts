@@ -165,7 +165,11 @@ export const claudeAdapter: AgentAdapter = {
       if (input.tools.isWaiting() && !isPrismTool(name)) {
         return 'Waiting on the user. End your turn now; the answer arrives as the next message.'
       }
-      return toolBlockReason(name, toolInput, { readOnly: input.readOnly, worktree: input.cwd })
+      return toolBlockReason(name, toolInput, {
+        readOnly: input.readOnly,
+        worktree: input.cwd,
+        shell: input.shell ?? undefined,
+      })
     }
 
     const canUseTool: CanUseTool = async (name, toolInput) => {

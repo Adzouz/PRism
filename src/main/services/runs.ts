@@ -521,16 +521,42 @@ export function boardRunFor(
   }
 }
 
-export function dismissRunsForPr(ctx: Ctx, prId: number, upToRunId?: number) {
+const finishedStatuses: RunStatus[] = ['done', 'failed', 'cancelled']
+
+const runGroups: Stage[][] = [
+  ['review', 're-review'],
+  ['address'],
+  ['test-plan'],
+  ['draft-replies'],
+]
+
+export function dismissRunsForPr(ctx: Ctx, prId: number) {
+  ctx.db
+    .update(runs)
+    .set({ dismissedAt: Date.now() })
+    .where(
+      and(eq(runs.prId, prId), isNull(runs.dismissedAt), inArray(runs.status, finishedStatuses)),
+    )
+    .run()
+}
+
+export function dismissRun(ctx: Ctx, runId: number) {
+  const run = getRunRow(ctx, runId)
+  const group = runGroups.find((stages) => stages.includes(run.stage as Stage)) ?? []
   return ctx.db
     .update(runs)
     .set({ dismissedAt: Date.now() })
     .where(
       and(
-        eq(runs.prId, prId),
+        eq(runs.prId, run.prId),
         isNull(runs.dismissedAt),
-        inArray(runs.status, ['done', 'failed', 'cancelled']),
-        upToRunId === undefined ? undefined : lte(runs.id, upToRunId),
+        inArray(runs.status, finishedStatuses),
+        lte(runs.id, runId),
+        or(
+          eq(runs.id, runId),
+          inArray(runs.stage, group),
+          inArray(runs.status, ['failed', 'cancelled']),
+        ),
       ),
     )
     .returning({ id: runs.id })
@@ -542,15 +568,7 @@ export function keepsPrTracked(ctx: Ctx, prId: number) {
   const row = ctx.db
     .select({ id: runs.id })
     .from(runs)
-    .where(
-      and(
-        eq(runs.prId, prId),
-        or(
-          inArray(runs.status, [...activeRunStatuses]),
-          and(eq(runs.status, 'done'), isNull(runs.dismissedAt)),
-        ),
-      ),
-    )
+    .where(and(eq(runs.prId, prId), isNull(runs.dismissedAt)))
     .get()
   return row !== undefined
 }

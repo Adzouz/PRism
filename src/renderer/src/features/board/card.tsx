@@ -81,7 +81,12 @@ function RunStrip({ pr, interactive }: { pr: BoardPr; interactive: boolean }) {
   if (!run) return null
   if (run.status === 'needs_you' && run.ask) {
     return interactive ? (
-      <div className="rounded-lg border border-warning/40 bg-warning/5 p-2">
+      <div
+        className="rounded-lg border border-warning/40 bg-warning/5 p-2"
+        onClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+      >
         <AnswerForm ask={run.ask} compact />
       </div>
     ) : (

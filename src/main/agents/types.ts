@@ -1,5 +1,6 @@
 import type { ChangesReport, DraftReply, Finding, ReviewReport, Stage } from '@shared/domain'
 import type { NewFinding } from '../services/runs'
+import type { ShellContext } from './guard'
 
 export type PrismTools = {
   reportFindings: (report: ReviewReport, findings: NewFinding[]) => string
@@ -23,6 +24,7 @@ export type SegmentInput = {
   resume: string | null
   cwd: string
   projectRoot: string | null
+  shell: ShellContext | null
   model: string
   stage: Stage
   readOnly: boolean

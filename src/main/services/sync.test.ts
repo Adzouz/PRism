@@ -370,7 +370,7 @@ describe('review and check edge cases', () => {
     ).toEqual({ name: 'x', state: 'pending' })
   })
 
-  it('keeps a review PR with a pending verdict until it is dismissed', async () => {
+  it('keeps a review PR with an undismissed run until it is dismissed', async () => {
     const { ctx, repo } = await makeCtx()
     const pr = makePr()
     let fixture: Fixture = { req: [pr] }
@@ -385,7 +385,7 @@ describe('review and check edge cases', () => {
       agent: 'claude',
       model: 'claude-haiku-5-5',
     })
-    updateRun(ctx, run.id, { status: 'done', endedAt: Date.now() })
+    updateRun(ctx, run.id, { status: 'failed', error: 'rate limited', endedAt: Date.now() })
 
     fixture = { nodes: [pr] }
     await syncRepo(ctx, api, repo, me)

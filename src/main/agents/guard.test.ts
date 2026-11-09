@@ -1,7 +1,7 @@
 import { execFile, execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import {
@@ -10,6 +10,7 @@ import {
   ghShimScript,
   prePushHookScript,
   pushBlockEnv,
+  type ShellContext,
   tokenize,
   toolBlockReason,
 } from './guard'
@@ -63,6 +64,8 @@ const blockedGh: string[][] = [
   ['api', '-Z', 'repos/acme/app'],
   ['api', '--', 'repos/acme/app'],
   ['api', 'repos/acme/app', '-X'],
+  ['api', '--method=', '--method=PUT', 'repos/acme/app/pulls/1/merge'],
+  ['api', '-X', '', '-X', 'POST', 'repos/acme/app/issues/1/comments', '-f', 'body=hi'],
 ]
 
 const allowedGh: string[][] = [
@@ -239,6 +242,136 @@ const blockedCommands = [
   'gh api $ENDPOINT',
   '/opt/homebrew/bin/gh pr merge 1',
   'GH pr merge 1',
+  'echo "${x:-$(git push)}"',
+  'echo "${x:-`gh pr merge 1`}"',
+  'echo ${x:-"$(gh pr merge 1)"}',
+  'echo ${x:-{} #}; gh pr merge 1',
+  `echo "\${x:-'}"; gh pr merge 1; echo "'}"`,
+  'echo "$\\\n(git push)"',
+  'echo $(\\\n(git push) )',
+  'echo $((echo hi) )',
+  'x=y; echo ${(e)x}',
+  'echo $~pattern',
+  'echo ${~pattern}',
+  'echo "${x@P}"',
+  'cat <<EOF\n$(git push)\nEOF',
+  'cat <<EOF\n`gh pr merge 1`\nEOF',
+  'cat <<EOF\n${x:-$(git push)}\nEOF',
+  'cat <<EOF\n$\\\n(git push)\nEOF',
+  'cat <<-EOF\n\t$(git push)\n\tEOF',
+  'bash <<EOF\ngit status\nEOF',
+  "sh <<'EOF'\necho hi\nEOF",
+  "cat <<'EOF'\nnotes\nEOF\ngh pr merge 1",
+  'cat <<EOF\nx\nEO\\\nF\ngit reset --hard\nEOF',
+  "cat <<$'EOF'\nx\nEOF\ngit reset --hard\n$'EOF'",
+  "git -c core.fsmonitor='GIT_CONFIG_PARAMETERS= GIT_CONFIG_COUNT=0 git -C . push -q --no-verify origin HEAD:main; false' status --short",
+  'git -c core.sshCommand=x fetch',
+  'git -c diff.external=x diff',
+  'git -c gpg.program=x log --show-signature',
+  "git -c credential.helper='!x' fetch",
+  "git -c protocol.ext.allow=always fetch 'ext::sh -c x'",
+  "git -c core.pager='sh -c x' log",
+  "git -c pager.log='less +!x' log",
+  'git -c log.showSignature=true log',
+  'git -c diff.x.textconv=y diff',
+  'git --config-env core.editor=E status',
+  'git --config-env=pager.log=P log',
+  'GIT_SSH_COMMAND=x git fetch',
+  'GIT_EXTERNAL_DIFF=x git diff',
+  'GIT_CONFIG_COUNT=0 pnpm test',
+  `GIT_CONFIG_PARAMETERS="'core.fsmonitor=x'" git status`,
+  'GIT_CONFIG_COUNT=0; git status',
+  "GIT_PAGER='sh -c x' git log",
+  'GIT_PAGER=$PAGER git log',
+  'export GIT_CONFIG_COUNT=0',
+  'export GIT_DIR',
+  'unset GIT_CONFIG_COUNT',
+  'env -u GIT_CONFIG_COUNT git status',
+  'env -uGIT_CONFIG_COUNT git status',
+  'env --unset=GIT_CONFIG_COUNT git status',
+  'env -i git status',
+  'env - git status',
+  'declare -x GIT_DIR=/tmp/x',
+  'typeset -x GIT_DIR=/tmp/x',
+  'local GIT_DIR=x',
+  'readonly GIT_DIR=x',
+  'sudo GIT_DIR=x git status',
+  'arch -e GIT_CONFIG_COUNT=0 git status',
+  'read GIT_CONFIG_COUNT',
+  'for GIT_CONFIG_COUNT in 0; do git status; done',
+  'printf -v GIT_CONFIG_COUNT 0',
+  "printf '%d' GIT_CONFIG_COUNT=0",
+  'let GIT_CONFIG_COUNT=0',
+  '(( GIT_CONFIG_COUNT = 0 ))',
+  '(\\\n( GIT_CONFIG_COUNT = 0 ))',
+  'echo $((GIT_CONFIG_COUNT=0))',
+  'echo $[GIT_CONFIG_COUNT=0]',
+  ': ${GIT_CONFIG_COUNT:=0}',
+  'x=(1); echo ${x[GIT_CONFIG_COUNT=0]}',
+  '[[ 1 -eq GIT_CONFIG_COUNT=0 ]]',
+  "EDITOR='sh -c x' git add -e",
+  "BROWSER='sh -c x' gh pr view 1 --web",
+  "PS4='$(touch x)' bash -xc true",
+  'git fetch . +abc123:refs/heads/x',
+  "git fetch --update-head-ok --prune origin '+refs/heads/*:refs/heads/*'",
+  'git fetch origin main:main',
+  'git fetch origin +main:refs/heads/main',
+  'git fetch origin HEAD:refs/heads/x',
+  'git fetch -u origin main',
+  'git fetch --stdin origin',
+  "git fetch --refmap='+refs/heads/*:refs/heads/*' origin main",
+  'git fetch --prune-tags origin',
+  'git fetch -pP origin',
+  'git fetch origin main:refs/remotes/../heads/main',
+  'noglob gh pr merge 1',
+  'nocorrect git reset --hard HEAD~3',
+  '- git clean -fdx',
+  'repeat 1 gh pr merge 1',
+  'if [[ -n x ]] gh pr merge 1',
+  'while true; gh pr merge 1',
+  '>! out gh pr merge 1',
+  '>>! out gh pr merge 1',
+  '&>! out gh pr merge 1',
+  '&>>! out gh pr merge 1',
+  '>! git reset --hard',
+  'hash g=/usr/bin/git; g reset --hard HEAD~1',
+  'hash -p /usr/bin/git g',
+  'alias g=git',
+  'trap "gh pr merge 1" EXIT',
+  'caffeinate -i gh pr merge 1',
+  'arch -arm64 git reset --hard HEAD~1',
+  'watch git reset --hard',
+  'find . -maxdepth 0 -exec gh pr merge 1 ;',
+  'find . -execdir git reset --hard \\;',
+  'find . -ok gh pr merge 1 +',
+  'find . -okdir git {} \\;',
+  'pnpm exec gh pr merge 1',
+  'pnpm --filter app exec git reset --hard',
+  'pnpm git reset --hard',
+  'pnpm dlx gh pr merge 1',
+  "pnpm exec -c 'gh pr merge 1'",
+  'npm exec gh pr merge 1',
+  'npm x -- git reset --hard',
+  'yarn exec gh pr merge 1',
+  'yarn dlx gh pr merge 1',
+  'bunx gh pr merge 1',
+  'bun x git reset --hard',
+  "bun exec 'gh pr merge 1'",
+  'npx --registry https://registry.example.com git reset --hard',
+  'xcrun git reset --hard',
+  'script -q /dev/null git reset --hard',
+  "sandbox-exec -p '(version 1)' git reset --hard",
+  'echo *(e:"git reset --hard":)',
+  'ls a(e:x:)',
+  'cat =(git status)',
+  'setopt globsubst',
+  'zsh -o globsubst -c "echo hi"',
+  "emulate sh -c 'echo hi'",
+  'source <(echo gh pr merge 1)',
+  "mapfile -C 'git reset --hard' lines < a.txt",
+  'compgen -C x y',
+  "dash -c '((git reset --hard))'",
+  "fish -c 'true; and gh pr merge 1'",
 ]
 
 const allowedCommands = [
@@ -315,6 +448,67 @@ const allowedCommands = [
   'ls src | xargs',
   'npx tsc --noEmit',
   'npx -y prettier --check .',
+  'echo "${PORT:-$DEFAULT_PORT}"',
+  'for f in "${files[@]}"; do echo "$f"; done',
+  'files=(src/*.ts); for f in "${files[@]}"; do echo "$f"; done',
+  'echo "${x:-{}}"',
+  'echo ${x//a/b} ${#x} "${x%%.*}"',
+  'echo "${x:-$(date)}"',
+  'echo $((x*2)) $(($x+1)) $(( (1+2)*3 ))',
+  '(( i++ ))',
+  'for (( i=0; i<3; i++ )); do echo $i; done',
+  'if (( count > 1 )); then echo many; fi',
+  "cat > src/average.ts <<'EOF'\n/**\n * Average of the values.\n */\nexport const average = (values: number[]) => values.reduce((a, b) => a + b, 0) / values.length\nEOF",
+  "cat > notes.md <<'EOF'\n* item\n$ pnpm install\nEOF",
+  "python3 - <<'EOF'\nprint(1)\nEOF",
+  'cat <<"EOF"\n$(x) `y`\nEOF',
+  'cat <<\\EOF\n$(x)\nEOF',
+  'cat <<EOF\n${HOME} $USER $(date)\nEOF',
+  'cat <<-EOF\n\tdone\n\tEOF\necho ok',
+  'cat <<EOF\nx\\\nEOF\ngit reset --hard\nEOF',
+  'git -c color.ui=always log',
+  'git -c core.quotepath=off status',
+  "git -c core.pager='less -FRX' log",
+  'git -c pager.log=false log',
+  'git -c log.decorate=short log',
+  'git -c advice.detachedHead=false status',
+  'git -c user.name=Octo -c user.email=octo@example.com log',
+  "git -c safe.directory='*' status",
+  'git --config-env=color.ui=COLOR log',
+  'GIT_PAGER=cat git log',
+  'GIT_PAGER= git log',
+  'GIT_TERMINAL_PROMPT=0 git fetch origin',
+  'GIT_OPTIONAL_LOCKS=0 git status',
+  'export GIT_PAGER=cat',
+  'unset GIT_PAGER',
+  'echo $GIT_DIR',
+  'rg GIT_CONFIG_COUNT src',
+  'env | grep GIT_',
+  'git fetch origin pull/7/head:refs/prism/pr-7',
+  "git fetch origin '+refs/heads/*:refs/remotes/origin/*'",
+  'git fetch --tags',
+  'git fetch --prune origin',
+  'git fetch -p',
+  'git fetch origin tag v1',
+  'git fetch git@github.com:acme/app.git main',
+  'git fetch origin refs/tags/v1:refs/tags/v1',
+  'git fetch --depth 1 origin main',
+  'git fetch -j 4 origin',
+  'noglob pnpm test',
+  'pnpm exec tsc --noEmit',
+  'pnpm --filter app exec vitest run',
+  'pnpm dlx create-vite app',
+  'npm exec -- eslint .',
+  'yarn exec jest',
+  'bunx tsc',
+  'caffeinate -i pnpm test',
+  'find . -name "*.ts" -exec grep -l foo {} +',
+  "trap 'rm -f out.txt' EXIT",
+  'echo hi >! out.txt',
+  'f() { pnpm test; }; f',
+  'source ~/.nvm/nvm.sh',
+  'set -euo pipefail',
+  'gh api repos/acme/app/pulls/1/comments \\\n  --paginate',
 ]
 
 const editCommands = [
@@ -369,6 +563,9 @@ describe('gh policy', () => {
     expect(ghBlockReason(['pr', 'create'])).toBe('gh pr create is blocked')
     expect(ghBlockReason(['auth', 'status', '-t'])).toBe('gh auth status --show-token is blocked')
     expect(ghBlockReason(['api', 'graphql', '--input', 'q.json'])).toBe('gh api --input is blocked')
+    expect(ghBlockReason(['api', '-X', '', 'repos/acme/app'])).toBe(
+      'gh api with an empty method is blocked',
+    )
   })
 })
 
@@ -393,6 +590,35 @@ describe('command guard', () => {
     expect(commandBlockReason('$(echo git) push')).toContain('by name')
     expect(commandBlockReason('eval "git status"')).toContain('eval is blocked')
     expect(commandBlockReason('echo "git push" | bash')).toContain('stdin')
+    expect(commandBlockReason('git -c core.sshCommand=x fetch')).toContain('only display settings')
+    expect(commandBlockReason('GIT_CONFIG_COUNT=0 pnpm test')).toContain(
+      'Changing GIT_CONFIG_COUNT is blocked',
+    )
+    expect(commandBlockReason('git fetch origin main:main')).toContain('git fetch into main')
+    expect(commandBlockReason("cat <<$'EOF'\nx\nEOF")).toContain('heredoc delimiter')
+    expect(commandBlockReason('ls *(e:x:)')).toContain('glob qualifiers')
+  })
+
+  it('lexes deeply nested expansions in linear time', () => {
+    const nest = (depth: number) => {
+      let command = 'x'
+      for (let level = 0; level < depth; level += 1) command = `"\${a:-${command}}"`
+      return `echo ${command}`
+    }
+    const start = performance.now()
+    expect(commandBlockReason(nest(10))).toBeNull()
+    expect(commandBlockReason(nest(40))).not.toBeNull()
+    expect(commandBlockReason(`echo ${'$('.repeat(40)}x${')'.repeat(40)}`)).not.toBeNull()
+    expect(commandBlockReason(`echo ${'$(('.repeat(40)}1${'))'.repeat(40)}`)).not.toBeNull()
+    expect(performance.now() - start).toBeLessThan(200)
+  })
+
+  it('stays fast on long commands', () => {
+    const start = performance.now()
+    expect(commandBlockReason('echo a; '.repeat(20000))).toBeNull()
+    expect(commandBlockReason(`${'A=1 '.repeat(5000)}git status`)).not.toBeNull()
+    expect(commandBlockReason(`cat <<EOF\n${'v $HOME $(date)\n'.repeat(5000)}EOF`)).toBeNull()
+    expect(performance.now() - start).toBeLessThan(1000)
   })
 
   it('tokenizes quotes, operators, redirections and line continuations', () => {
@@ -453,6 +679,131 @@ describe('tool guard', () => {
     expect(edit('escape/a.ts')).not.toBeNull()
     expect(edit(join(worktree, 'dangling.ts'))).not.toBeNull()
     expect(edit(`${worktree}/escape/../x.ts`)).not.toBeNull()
+  })
+
+  it('trims edit paths and expands ~ like Claude Code', () => {
+    const write = (file: string, guard = options) =>
+      toolBlockReason('Write', { file_path: file }, guard)
+
+    expect(write('~/.zshrc')).not.toBeNull()
+    expect(write(' /etc/hosts')).not.toBeNull()
+    expect(write('~/Library/Application Support/PRism/bin/gh')).not.toBeNull()
+    expect(write('~')).not.toBeNull()
+    expect(write('~root/x.ts')).not.toBeNull()
+    expect(write('~+/x.ts')).not.toBeNull()
+    expect(write(' src/a.ts \n')).toBeNull()
+    const home = { ...options, worktree: join(homedir(), 'prism-guard-worktree/pr-1') }
+    expect(write('~/prism-guard-worktree/pr-1/a.ts', home)).toBeNull()
+    expect(write('~/prism-guard-worktree/pr-2/a.ts', home)).not.toBeNull()
+  })
+
+  it('denies instead of throwing on deep or looping paths', async () => {
+    const deep = `/w/pr-1/${'a/'.repeat(20000)}x.ts`
+    const escape = `/w/pr-1/${'a/'.repeat(20000)}${'../'.repeat(20002)}etc/x`
+    expect(() => toolBlockReason('Write', { file_path: deep }, options)).not.toThrow()
+    expect(toolBlockReason('Write', { file_path: deep }, options)).toBeNull()
+    expect(toolBlockReason('Write', { file_path: escape }, options)).not.toBeNull()
+
+    const base = await mkdtemp(join(tmpdir(), 'prism-loop-'))
+    await symlink(join(base, 'b'), join(base, 'a'))
+    await symlink(join(base, 'a'), join(base, 'b'))
+    const guard = { readOnly: false, worktree: base }
+    expect(toolBlockReason('Write', { file_path: join(base, 'a/x.ts') }, guard)).toContain(
+      'could not check',
+    )
+  })
+})
+
+describe('shell context', () => {
+  const shell: ShellContext = {
+    aliases: new Map([
+      ['g', 'git'],
+      ['grhh', 'git reset --hard'],
+      ['gp', 'git push'],
+      ['gst', 'git status'],
+      ['please', 'sudo '],
+      ['gpa', 'gp --all'],
+    ]),
+    functions: new Map([
+      ['gcm', '\tgit commit -m "$*"'],
+      ['git', '\tcommand git "$@"'],
+      ['diff', '\tcommand diff --color "$@"'],
+      ['node', '\tunset -f node\n\tnode "$@"'],
+      ['ship', '\tgcm "$@"'],
+      ['ping', '\tpong'],
+      ['pong', '\tping\n\tpython3 - <<\'EOF\'\nimport os; os.system("git push")\nEOF'],
+      ['glob', '\tprint -l *(e:true:)'],
+    ]),
+  }
+
+  it.each([
+    'g commit -am wip',
+    'grhh HEAD~3',
+    'gp --no-verify',
+    'gpa',
+    'please g push',
+    'noglob grhh',
+    'cd src && g reset --hard',
+    'echo $(grhh)',
+    "bash -c 'gp'",
+  ])('blocks %j through user aliases', (command) => {
+    expect(commandBlockReason(command, { shell })).not.toBeNull()
+    expect(commandBlockReason(command)).toBeNull()
+  })
+
+  it.each([
+    'g status',
+    'gst',
+    'git status',
+    "'g' status",
+    'gh pr view 1',
+    "git log -S 'G'",
+    'diff a.txt b.txt',
+    'command diff a b',
+    'node -e 1 && diff a b',
+  ])('allows %j', (command) => {
+    expect(commandBlockReason(command, { shell })).toBeNull()
+  })
+
+  it('checks the body of user functions', () => {
+    expect(commandBlockReason('GIT_CONFIG_COUNT=0 gp --no-verify', { shell })).not.toBeNull()
+    expect(commandBlockReason('gcm wip', { shell })).toBe(
+      'gcm is a shell function that runs something PRism blocks: git commit is blocked: agents never commit, push or rewrite history',
+    )
+    expect(commandBlockReason("'gcm' wip", { shell })).not.toBeNull()
+    expect(commandBlockReason('\\gcm wip', { shell })).not.toBeNull()
+    expect(commandBlockReason('ship wip', { shell })).toContain('gcm is a shell function')
+    expect(commandBlockReason('ping', { shell })).toContain('git commit/push is blocked')
+    expect(commandBlockReason('glob', { shell })).toContain('glob is a shell function')
+    expect(commandBlockReason('gcm wip')).toBeNull()
+  })
+
+  it('checks each function once per command', () => {
+    const functions = new Map(
+      Array.from({ length: 30 }, (_, index): [string, string] => [
+        `f${index}`,
+        `f${index + 1}; f${index + 1}; f${index + 1}`,
+      ]),
+    )
+    const fanOut = { ...shell, functions }
+    const started = performance.now()
+    expect(commandBlockReason('f0', { shell: fanOut })).toBeNull()
+    expect(performance.now() - started).toBeLessThan(500)
+  })
+
+  it('caps alias expansion', () => {
+    const aliases = new Map(
+      Array.from({ length: 100 }, (_, index): [string, string] => [`a${index}`, `a${index + 1} `]),
+    )
+    const chain = { ...shell, aliases }
+    const words = Array.from({ length: 100 }, (_, index) => `a${index}`).join(' ')
+    expect(commandBlockReason(words, { shell: chain })).not.toBeNull()
+  })
+
+  it('passes the context through toolBlockReason', () => {
+    const guard = { readOnly: false, worktree: '/w/pr-1', shell }
+    expect(toolBlockReason('Bash', { command: 'grhh' }, guard)).not.toBeNull()
+    expect(toolBlockReason('Bash', { command: 'gst' }, guard)).toBeNull()
   })
 })
 
@@ -534,6 +885,62 @@ describe('push block env', () => {
     expect(() => git(clone, ['fetch', 'origin'], blocked)).not.toThrow()
     expect(git(clone, ['config', 'user.name'], blocked)).toBe('Octo Cat')
     git(clone, ['push', '-q', 'origin', 'HEAD:main'])
+    expect(git(remote, ['rev-parse', 'main'])).not.toBe(before)
+  })
+
+  it('adds one entry per distinct remote url', () => {
+    const url = 'https://github.com/acme/app.git'
+    const env = pushBlockEnv({}, [url, url, 'https://'])
+    const values = Object.entries(env)
+      .filter(([key]) => key.startsWith('GIT_CONFIG_VALUE_'))
+      .map(([, value]) => value)
+    expect(values.filter((value) => value === url)).toHaveLength(1)
+    expect(values.filter((value) => value === 'https://')).toHaveLength(1)
+    expect(env.GIT_CONFIG_COUNT).toBe(String(values.length))
+    expect(env[`GIT_CONFIG_KEY_${values.indexOf(url)}`]).toBe(blockedKey)
+  })
+
+  it('beats a longer pushInsteadOf rule from the user for listed remotes', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'prism-push-')))
+    const env: Record<string, string> = {
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      HOME: base,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_AUTHOR_NAME: 'Octo',
+      GIT_AUTHOR_EMAIL: 'octo@example.com',
+      GIT_COMMITTER_NAME: 'Octo',
+      GIT_COMMITTER_EMAIL: 'octo@example.com',
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: `url.file://${base}/.pushInsteadOf`,
+      GIT_CONFIG_VALUE_0: `file://${base}/`,
+    }
+    const git = (cwd: string, args: string[], gitEnv = env) =>
+      execFileSync('git', args, { cwd, env: gitEnv, encoding: 'utf8', stdio: 'pipe' }).trim()
+    const work = join(base, 'work')
+    const remote = join(base, 'remote.git')
+    const clone = join(base, 'clone')
+    const remoteUrl = `file://${remote}`
+    git(base, ['init', '-q', '-b', 'main', work])
+    await writeFile(join(work, 'a.txt'), 'one')
+    git(work, ['add', 'a.txt'])
+    git(work, ['commit', '-qm', 'one'])
+    git(base, ['clone', '-q', '--bare', work, remote])
+    git(base, ['clone', '-q', remoteUrl, clone])
+    await writeFile(join(clone, 'b.txt'), 'two')
+    git(clone, ['add', 'b.txt'])
+    git(clone, ['commit', '-qm', 'two'])
+    const before = git(remote, ['rev-parse', 'main'])
+    const listed = { ...env, ...pushBlockEnv(env, [remoteUrl]) }
+
+    expect(() => git(clone, ['push', '--no-verify', 'origin', 'HEAD:main'], listed)).toThrow(
+      /prism-push-blocked/,
+    )
+    expect(git(remote, ['rev-parse', 'main'])).toBe(before)
+    expect(() => git(clone, ['fetch', 'origin'], listed)).not.toThrow()
+    git(clone, ['push', '-q', '--no-verify', 'origin', 'HEAD:main'], {
+      ...env,
+      ...pushBlockEnv(env),
+    })
     expect(git(remote, ['rev-parse', 'main'])).not.toBe(before)
   })
 })

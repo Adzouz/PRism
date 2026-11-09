@@ -287,7 +287,4 @@ export const useDismissRun = () => useRunMutation((runId: number) => invoke('run
 export const useAnswer = () =>
   useRunMutation((input: { askId: number; answer: string }) => invoke('runs:answer', input))
 
-export function runStageFor(pr: Pick<BoardPr, 'tab' | 'derivedStage' | 'myReviewState'>): Stage {
-  if (pr.tab === 'mine') return 'address'
-  return pr.derivedStage === 're-review' || pr.myReviewState ? 're-review' : 'review'
-}
+export { runStageFor } from '@shared/domain'

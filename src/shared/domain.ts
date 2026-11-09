@@ -517,6 +517,15 @@ export const boardPr = z.object({
 })
 export type BoardPr = z.infer<typeof boardPr>
 
+export function runStageFor(
+  pr: Pick<BoardPr, 'tab' | 'derivedStage' | 'myReviewState' | 'run'>,
+): Stage {
+  if (pr.tab === 'mine') return 'address'
+  const reviewed =
+    pr.run?.status === 'done' && (pr.run.stage === 'review' || pr.run.stage === 're-review')
+  return pr.derivedStage === 're-review' || pr.myReviewState || reviewed ? 're-review' : 'review'
+}
+
 export const checkState = z.enum(['success', 'failure', 'pending', 'neutral', 'skipped'])
 export type CheckState = z.infer<typeof checkState>
 

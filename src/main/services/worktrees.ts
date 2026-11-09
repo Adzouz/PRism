@@ -64,6 +64,26 @@ export function parseWorktreeList(output: string): WorktreeEntry[] {
     .filter((entry) => entry.path)
 }
 
+export async function remoteUrls(clone: string) {
+  const output = (await tryGit(clone, ['remote', '-v'])) ?? ''
+  return [...new Set(output.split('\n').flatMap((line) => line.split(/\s+/)[1] ?? []))]
+}
+
+export async function unblockedPushRemotes(clone: string, env: Record<string, string>) {
+  const names = ((await tryGit(clone, ['remote'])) ?? '').split('\n').filter(Boolean)
+  const unblocked: { remote: string; url: string }[] = []
+  for (const remote of names) {
+    const result = await run('git', ['-C', clone, 'remote', 'get-url', '--push', '--all', remote], {
+      env,
+      timeout: 60_000,
+    })
+    for (const url of result.stdout.split('\n').filter(Boolean)) {
+      if (!url.startsWith('prism-push-blocked:')) unblocked.push({ remote, url })
+    }
+  }
+  return unblocked
+}
+
 async function listRemotes(clone: string) {
   const output = (await tryGit(clone, ['remote', '-v'])) ?? ''
   const remotes = new Map<string, string>()
@@ -136,23 +156,22 @@ async function prepareLocked(
   const branch = localBranchName(pr)
   const remote = branch === null ? base.name : await headRemote(clone, pr, base)
   const pullRef = `refs/prism/pr-${pr.number}`
+  const checkoutRef = `refs/prism/pr-${pr.number}-checkout`
   const branchRef = `refs/remotes/${remote}/${pr.headRef}`
   const fetchPull = () => tryGit(clone, ['fetch', base.name, `+pull/${pr.number}/head:${pullRef}`])
   const oidOf = (ref: string) => tryGit(clone, ['rev-parse', '--verify', `${ref}^{commit}`])
 
+  const previous = await oidOf(checkoutRef)
   await git(clone, ['fetch', base.name, pr.baseRef])
   let startRef: string
-  let previous: string | null
   if (branch === null) {
     log(`Fetching pull/${pr.number}/head and ${base.name}/${pr.baseRef}`)
-    previous = await oidOf(pullRef)
     if ((await fetchPull()) === null) {
       throw new Error(`Could not fetch pull/${pr.number}/head from ${base.name}`)
     }
     startRef = pullRef
   } else {
     log(`Fetching ${remote}/${pr.headRef} and ${base.name}/${pr.baseRef}`)
-    previous = await oidOf(branchRef)
     const fetched = await tryGit(clone, ['fetch', remote, `+${pr.headRef}:${branchRef}`])
     startRef = fetched !== null ? branchRef : pullRef
     if (fetched === null && (await fetchPull()) === null) {
@@ -169,7 +188,8 @@ async function prepareLocked(
   const [main, ...all] = parseWorktreeList(await git(clone, ['worktree', 'list', '--porcelain']))
   const entries = all.filter((entry) => !entry.prunable)
   await mkdir(root, { recursive: true })
-  const target = join(await realpath(root), `pr-${pr.number}`)
+  const realRoot = await realpath(root)
+  const target = join(realRoot, `pr-${pr.number}`)
   const targets = new Set([target, join(root, `pr-${pr.number}`)])
   const matches = (entry: WorktreeEntry) =>
     (branch !== null && entry.branch === branch) || targets.has(entry.path)
@@ -182,6 +202,9 @@ async function prepareLocked(
   if (existing) {
     path = existing.path
     log(`Reusing worktree ${path}`)
+    if ((await realpath(path).catch(() => path)).startsWith(`${realRoot}/`)) {
+      await installGuard(clone, path, options.hooksDir)
+    }
   } else {
     if (await exists(target)) throw new Error(`${target} exists but is not a worktree of ${clone}`)
     const hasBranch =
@@ -196,6 +219,7 @@ async function prepareLocked(
           ? ['worktree', 'add', ...force, target, branch]
           : ['worktree', 'add', ...force, '-b', branch, target, startRef]
     await git(clone, args)
+    await installGuard(clone, target, options.hooksDir)
     if (branch !== null && detached) {
       log(`${branch} is checked out in ${clone}; using a detached worktree`)
     }
@@ -205,7 +229,6 @@ async function prepareLocked(
     path = target
     created = true
     log(`Created worktree ${path}${branch === null || detached ? ' (detached)' : ` on ${branch}`}`)
-    await installGuard(clone, path, options.hooksDir)
   }
 
   const head = await git(path, ['rev-parse', 'HEAD'])
@@ -225,13 +248,7 @@ async function prepareLocked(
       log(warning)
     }
   }
-  return {
-    path,
-    branch,
-    remote,
-    baseRemote: base.name,
-    created,
-    headOid: await git(path, ['rev-parse', 'HEAD']),
-    warning,
-  }
+  const headOid = await git(path, ['rev-parse', 'HEAD'])
+  await git(clone, ['update-ref', checkoutRef, headOid])
+  return { path, branch, remote, baseRemote: base.name, created, headOid, warning }
 }

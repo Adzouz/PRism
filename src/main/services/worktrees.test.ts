@@ -3,7 +3,14 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { parseWorktreeList, prepareWorktree, type PrCheckout } from './worktrees'
+import { pushBlockEnv } from '../agents/guard'
+import {
+  parseWorktreeList,
+  prepareWorktree,
+  remoteUrls,
+  unblockedPushRemotes,
+  type PrCheckout,
+} from './worktrees'
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-C', cwd, ...args], {
@@ -100,6 +107,40 @@ describe('worktrees', () => {
     expect(second).toMatchObject({ path: first.path, headOid: rewritten, warning: null })
   })
 
+  it('follows a force-push even when the clone fetched in between', async () => {
+    const { work, origin, clone, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'e.txt', 'rewritten')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    git(clone, 'fetch', '-q', 'origin')
+    const second = await prepareWorktree(options, pr({ headOid: rewritten }))
+    expect(second).toMatchObject({ path: first.path, headOid: rewritten, warning: null })
+  })
+
+  it('keeps a commit pushed from the worktree when the branch is force-pushed', async () => {
+    const { work, origin, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    const mine = await commit(first.path, 'mine.txt', 'pushed by me')
+    git(first.path, 'push', '-q', '--no-verify', 'origin', 'HEAD:feature')
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'e.txt', 'rewritten')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    const second = await prepareWorktree(options, pr({ headOid: rewritten }))
+    expect(second.headOid).toBe(mine)
+    expect(second.warning).toContain(rewritten.slice(0, 7))
+  })
+
+  it('reinstalls the push guard on a reused worktree', async () => {
+    const { base, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    git(first.path, 'config', '--worktree', '--unset', 'core.hooksPath')
+    await prepareWorktree(options, pr({ headOid: head }))
+    expect(git(first.path, 'config', 'core.hooksPath')).toBe(join(base, 'hooks'))
+  })
+
   it('keeps local commits after a force-push', async () => {
     const { work, origin, head, options } = await setup()
     const first = await prepareWorktree(options, pr({ headOid: head }))
@@ -153,6 +194,15 @@ describe('worktrees', () => {
     const second = await prepareWorktree(linked, pr({ headOid: head }))
     expect(first.created).toBe(true)
     expect(second).toMatchObject({ path: first.path, created: false })
+  })
+
+  it('lists remotes whose pushes the push block cannot cover', async () => {
+    const { origin, clone } = await setup()
+    expect(await remoteUrls(clone)).toEqual([origin])
+    const env = pushBlockEnv({}, await remoteUrls(clone))
+    expect(await unblockedPushRemotes(clone, env)).toEqual([])
+    git(clone, 'config', 'remote.origin.pushurl', origin)
+    expect(await unblockedPushRemotes(clone, env)).toEqual([{ remote: 'origin', url: origin }])
   })
 
   it('adds a remote for fork pull requests', async () => {

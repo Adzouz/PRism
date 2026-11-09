@@ -40,6 +40,17 @@ type BoardStore = {
 
 type PersistedBoard = Pick<BoardStore, 'filters' | 'density' | 'dropConfirmed'>
 
+export function migrateBoard(persisted: unknown, version: number) {
+  const { agentDropConfirmed, ...state } = (persisted ?? {}) as Partial<PersistedBoard> & {
+    agentDropConfirmed?: boolean
+  }
+  if (version >= 1) return state as PersistedBoard
+  return {
+    ...state,
+    dropConfirmed: agentDropConfirmed ? { reviewing: true } : {},
+  } as PersistedBoard
+}
+
 export const useBoardStore = create<BoardStore>()(
   persist(
     (set) => ({
@@ -72,13 +83,7 @@ export const useBoardStore = create<BoardStore>()(
           mine: { ...filters.mine, search: '' },
         },
       }),
-      migrate: (persisted, version) => {
-        const { agentDropConfirmed, ...state } = (persisted ?? {}) as PersistedBoard & {
-          agentDropConfirmed?: boolean
-        }
-        if (version >= 1) return state
-        return { ...state, dropConfirmed: agentDropConfirmed ? { reviewing: true } : {} }
-      },
+      migrate: migrateBoard,
     },
   ),
 )

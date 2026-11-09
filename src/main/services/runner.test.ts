@@ -243,7 +243,9 @@ describe('agent runner', () => {
       'verdict-ready',
     ])
     expect(listPrs(ctx)[0]!.run).toMatchObject({ verdict: 'request_changes', findings: 1 })
-    const prompt = vi.mocked(adapter.run).mock.calls[0]![0]
+    const prompt = vi
+      .mocked(adapter.run)
+      .mock.calls.find(([input]) => input.cwd.endsWith('pr-1'))![0]
     expect(prompt.prompt).toContain('Review carefully.')
     expect(prompt.prompt).toContain('acme/app#1')
     expect(prompt.readOnly).toBe(true)
@@ -487,6 +489,23 @@ describe('agent runner', () => {
     runner.dismiss(second.id)
     expect(listPrs(ctx)[0]).toMatchObject({ stage: 'to-review', run: null })
     expect(getRun(ctx, first.id).dismissedAt).not.toBeNull()
+  })
+
+  it('keeps the verdict when a run of another stage is dismissed', async () => {
+    const { ctx, ids } = await setup()
+    const { runner } = makeRunner(ctx, async (input) => {
+      if (input.stage === 'test-plan') return { ...ok('s'), error: 'rate limited' }
+      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      return ok('s')
+    })
+    const review = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, review.id).status === 'done' && !runner.isActive(review.id))
+    const plan = runner.start({ prId: ids[0]!, stage: 'test-plan' })
+    await until(() => getRun(ctx, plan.id).status === 'failed' && !runner.isActive(plan.id))
+    runner.dismiss(plan.id)
+    expect(getRun(ctx, plan.id).dismissedAt).not.toBeNull()
+    expect(getRun(ctx, review.id).dismissedAt).toBeNull()
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'verdict-ready', run: { id: review.id } })
   })
 
   it('gives re-reviews the open findings of earlier reviews and the last reviewed head', async () => {

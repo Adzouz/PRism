@@ -75,12 +75,15 @@ describe.skipIf(!live)('claude adapter (live)', () => {
       }),
     )
     const commits = git(clone, 'rev-list', '--all')
-    const { env, executable } = await defaultAgentEnv(await mkdtemp(join(tmpdir(), 'prism-ud-')))
+    const { env, executable, shell } = await defaultAgentEnv(
+      await mkdtemp(join(tmpdir(), 'prism-ud-')),
+    )
     const { state, value } = tools()
     const events: AgentEvent[] = []
     const shared: Omit<SegmentInput, 'prompt' | 'resume'> = {
       cwd: worktree,
       projectRoot: clone,
+      shell,
       model: 'claude-haiku-5-5',
       stage: 'review',
       readOnly: true,
