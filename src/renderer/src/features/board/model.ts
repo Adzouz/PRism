@@ -21,7 +21,7 @@ const emptyFilters: Filters = {
   search: '',
 }
 
-export type DrawerTab = 'overview' | 'runs'
+export type DrawerTab = 'overview' | 'runs' | 'post'
 
 type BoardStore = {
   filters: Record<BoardTab, Filters>

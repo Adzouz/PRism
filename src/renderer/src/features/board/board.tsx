@@ -239,9 +239,9 @@ export function Board({ tab }: { tab: BoardTab }) {
       open: (pr) => {
         if (justDropped.current) return
         track(pr)
-        const showRuns =
-          pr.run && (hasLiveRun(pr) || pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post')
-        if (showRuns) openPr(pr.id, 'runs', pr.run?.id)
+        const toPost = pr.run && (pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post')
+        if (toPost) openPr(pr.id, 'post', pr.run?.id)
+        else if (pr.run && hasLiveRun(pr)) openPr(pr.id, 'runs', pr.run.id)
         else openPr(pr.id)
       },
       run: (pr, runAs) => launch(pr, runAs, true),

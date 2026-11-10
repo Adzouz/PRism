@@ -24,6 +24,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { usePrDetail, usePrs, useSetFlags, useSetStage } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { isLive } from '../runs/parts'
+import { PostPanel } from '../post/post-panel'
 import { RunsPanel } from '../runs/runs-panel'
 import { WorktreeFooter } from '../runs/worktree-footer'
 import { Avatar } from './card'
@@ -365,7 +366,9 @@ export function PrDrawer() {
               </header>
               <Tabs
                 value={drawerTab}
-                onValueChange={(value) => setDrawerTab(value === 'runs' ? 'runs' : 'overview')}
+                onValueChange={(value) =>
+                  setDrawerTab(value === 'runs' || value === 'post' ? value : 'overview')
+                }
                 className="flex min-h-0 flex-1 flex-col"
               >
                 <TabsList aria-label="Pull request sections" className="px-5">
@@ -385,12 +388,24 @@ export function PrDrawer() {
                       </>
                     )}
                   </TabsTrigger>
+                  <TabsTrigger value="post">
+                    Post
+                    {(pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post') && (
+                      <>
+                        <span aria-hidden className="size-1.5 rounded-full bg-primary" />
+                        <span className="sr-only">(ready to post)</span>
+                      </>
+                    )}
+                  </TabsTrigger>
                 </TabsList>
                 <TabsContent value="overview" className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                   <Overview pr={pr} />
                 </TabsContent>
                 <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                   <RunsPanel key={pr.id} pr={pr} />
+                </TabsContent>
+                <TabsContent value="post" className="min-h-0 flex-1 overflow-y-auto px-6 pt-5">
+                  <PostPanel key={pr.id} pr={pr} />
                 </TabsContent>
               </Tabs>
               <WorktreeFooter pr={pr} />

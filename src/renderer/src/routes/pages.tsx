@@ -9,9 +9,11 @@ import {
   GitPullRequestArrow,
   RotateCcw,
 } from 'lucide-react'
+import { postModeLabels, type PostMode, type Repo } from '@shared/domain'
 import { GithubIcon } from '@/components/github-icon'
 import { Page, QuickCard, Section } from '@/components/page'
 import { Switch } from '@/components/ui/switch'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -31,8 +33,11 @@ import {
   useAction,
   useBoardSettings,
   useConfigStatus,
+  usePostMode,
   usePrs,
   useRepos,
+  useSetPostMode,
+  useSetRepoPostMode,
   useSkillsChanged,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -148,6 +153,77 @@ export function RunsPage() {
   )
 }
 
+function PostModePicker({
+  value,
+  onChange,
+  inherit,
+  label,
+}: {
+  value: PostMode | null
+  onChange: (value: PostMode | null) => void
+  inherit?: string
+  label: string
+}) {
+  return (
+    <ToggleGroup
+      type="single"
+      value={value ?? 'default'}
+      onValueChange={(next) => next && onChange(next === 'default' ? null : (next as PostMode))}
+      aria-label={label}
+      className="bg-secondary/50"
+    >
+      {inherit && (
+        <ToggleGroupItem value="default" className="h-7 px-2.5 text-xs">
+          Default ({inherit})
+        </ToggleGroupItem>
+      )}
+      {(['draft', 'submit'] as const).map((mode) => (
+        <ToggleGroupItem key={mode} value={mode} className="h-7 px-2.5 text-xs">
+          {postModeLabels[mode]}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  )
+}
+
+function PostingOptions() {
+  const { data: mode } = usePostMode()
+  const save = useSetPostMode()
+  return (
+    <div className="flex max-w-2xl flex-wrap items-center justify-between gap-4 rounded-2xl bg-surface p-5">
+      <div>
+        <p className="text-base font-medium">Post reviews</p>
+        <p className="text-sm text-muted-foreground">
+          How PRism posts a review after you confirm it. Each repository can override this.
+        </p>
+      </div>
+      {mode && (
+        <PostModePicker
+          label="Default post mode"
+          value={mode}
+          onChange={(next) => next && save.mutate(next)}
+        />
+      )}
+    </div>
+  )
+}
+
+function RepoPostMode({ repo }: { repo: Repo }) {
+  const { data: mode } = usePostMode()
+  const save = useSetRepoPostMode()
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-surface px-4 py-3">
+      <p className="text-sm font-medium">Post reviews</p>
+      <PostModePicker
+        label={`Post mode for ${repo.owner}/${repo.name}`}
+        value={repo.postMode}
+        inherit={mode ? postModeLabels[mode].toLowerCase() : 'global'}
+        onChange={(postMode) => save.mutate({ id: repo.id, postMode })}
+      />
+    </div>
+  )
+}
+
 function BoardOptions() {
   const { data: settings } = useBoardSettings()
   const save = useAction(
@@ -222,7 +298,8 @@ export function SettingsPage() {
                   </span>
                 </button>
                 {expanded && (
-                  <div className="border-t p-4">
+                  <div className="space-y-4 border-t p-4">
+                    <RepoPostMode repo={repo} />
                     <RepoSetup repo={repo} />
                   </div>
                 )}
@@ -239,6 +316,9 @@ export function SettingsPage() {
       </Section>
       <Section title="Board">
         <BoardOptions />
+      </Section>
+      <Section title="Posting">
+        <PostingOptions />
       </Section>
       <Section title="Appearance">
         <div className="flex max-w-2xl items-center justify-between gap-4 rounded-2xl bg-surface p-5">

@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react'
 import {
+  gateKindOf,
   runStagesByTab,
   stageLabels,
   threadStages,
@@ -53,9 +54,9 @@ import {
 import { lastComment, threadWhere, ThreadPicker } from './threads'
 import { Transcript } from './transcript'
 
-const severityOrder: Finding['severity'][] = ['blocking', 'refactor', 'nit']
+export const severityOrder: Finding['severity'][] = ['blocking', 'refactor', 'nit']
 
-const severityTone: Record<Finding['severity'], 'destructive' | 'warning' | 'default'> = {
+export const severityTone: Record<Finding['severity'], 'destructive' | 'warning' | 'default'> = {
   blocking: 'destructive',
   refactor: 'warning',
   nit: 'default',
@@ -79,7 +80,7 @@ const actionTone: Record<
 const terminal = (run: Run) =>
   run.status === 'done' || run.status === 'failed' || run.status === 'cancelled'
 
-function Heading({ children }: { children: ReactNode }) {
+export function Heading({ children }: { children: ReactNode }) {
   return (
     <h3 className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
       {children}
@@ -118,7 +119,7 @@ function Findings({ runId }: { runId: number }) {
   )
 }
 
-function ThreadContext({ thread, id }: { thread: ReviewThread | undefined; id: string }) {
+export function ThreadContext({ thread, id }: { thread: ReviewThread | undefined; id: string }) {
   return (
     <div className="mb-1.5 space-y-0.5">
       <p className="truncate font-mono text-xs text-muted-foreground">
@@ -241,6 +242,8 @@ function RunDetail({
   const dismiss = useDismissRun()
   const resume = useResumeInTerminal()
   const terminalName = useTerminalName()
+  const selectRun = useBoardStore((state) => state.selectRun)
+  const setDrawerTab = useBoardStore((state) => state.setDrawerTab)
   const live = isLive(run.status)
   const wantsThreads = run.threadIds.length > 0 || run.replies.length > 0 || run.changes !== null
   const { data: threadList } = usePrThreads(run.prId, wantsThreads)
@@ -275,6 +278,19 @@ function RunDetail({
             >
               <SquareTerminal />
               Resume in {terminalName}
+            </Button>
+          )}
+          {run.status === 'done' && gateKindOf[run.stage] && (
+            <Button
+              size="sm"
+              className="h-7"
+              onClick={() => {
+                selectRun(run.id)
+                setDrawerTab('post')
+              }}
+            >
+              <Send />
+              Post
             </Button>
           )}
           {done && run.dismissedAt === null && (
