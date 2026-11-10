@@ -1404,7 +1404,10 @@ function shellBlockReason(shell: string, args: Word[], check: Check): string | n
       if (globSubst(name)) return evalExpansion
       if (name === 'command' && split !== -1) scripts.push({ ...word, text: text.slice(split + 1) })
       else if (name === 'command') command = true
-      else if (split === -1 && ['rcfile', 'init-file', 'emulate'].includes(name)) index += 1
+      else if (split === -1 && ['rcfile', 'init-file', 'emulate'].includes(name)) {
+        if (args[index]?.dynamic) return dynamicCommand
+        index += 1
+      }
       continue
     }
     const flags = text.slice(1)
