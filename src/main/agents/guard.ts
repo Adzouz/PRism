@@ -525,7 +525,8 @@ function readParam(
   const scratch = newWord()
   let ambiguous = false
   let index = from
-  if (/[ \t\n|]/.test(src[skipContinuations(src, from)] ?? '')) target.blocked ??= braceSubstitution
+  if (/[ \t\n|<>]/.test(src[skipContinuations(src, from)] ?? ''))
+    target.blocked ??= braceSubstitution
   while (index < src.length && src[index] !== '}') {
     const char = src[index]!
     if (char === '\\') index += 2
@@ -1403,7 +1404,7 @@ function shellBlockReason(shell: string, args: Word[], check: Check): string | n
       if (globSubst(name)) return evalExpansion
       if (name === 'command' && split !== -1) scripts.push({ ...word, text: text.slice(split + 1) })
       else if (name === 'command') command = true
-      else if (split === -1 && (name === 'rcfile' || name === 'init-file')) index += 1
+      else if (split === -1 && ['rcfile', 'init-file', 'emulate'].includes(name)) index += 1
       continue
     }
     const flags = text.slice(1)
@@ -2253,11 +2254,12 @@ function shellContextReason(words: Word[], check: Check): string | null {
   const shell = check.shell
   const head = words[0]!
   if (!shell) return null
+  const user = { ...check, dialect: undefined }
   if (canExpandAlias(head, shell)) {
-    const reason = tokensBlockReason(aliasTokens(words, shell, 0), deeper(check))
+    const reason = tokensBlockReason(aliasTokens(words, shell, 0), deeper(user))
     if (reason) return reason
   }
-  return functionReason(head.text, check)
+  return functionReason(head.text, user)
 }
 
 const gitServerPrograms = new Set([

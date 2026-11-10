@@ -484,6 +484,8 @@ const blockedCommands = [
   'x=${ git reset --hard HEAD~1; }',
   'echo ${| git reset --hard HEAD~1; }',
   "ksh -c 'x=${ git reset --hard HEAD~1; }'",
+  "ksh -c 'x=${</dev/null; git reset -q --hard HEAD~1;}'",
+  "zsh --emulate sh -c 'git reset --hard HEAD~1'",
   "ksh -c 'true &>/dev/null gh pr merge 14'",
   "dash -c 'echo $([[ -f x ]] && echo y)'",
   "fish -C 'git reset --hard' -c true",
@@ -668,6 +670,8 @@ const allowedCommands = [
   'npm --workspace app run build',
   'npm version patch --git-tag-version --no-git-tag-version',
   'git fetch --no-multiple origin main',
+  `sh -c "bash -c '[[ -f x ]]'"`,
+  "zsh --emulate sh -c 'echo ok'",
 ]
 
 const editCommands = [
@@ -969,6 +973,16 @@ describe('shell context', () => {
     expect(commandBlockReason('ping', { shell })).toContain('git commit/push is blocked')
     expect(commandBlockReason('glob', { shell })).toContain('glob is a shell function')
     expect(commandBlockReason('gcm wip')).toBeNull()
+  })
+
+  it('reads user functions and aliases with bash and zsh rules inside sh scripts', () => {
+    const user = {
+      aliases: new Map([['ll', 'ls -l &>/dev/null']]),
+      functions: new Map([['cd', 'builtin cd "$@" && [[ -f .nvmrc ]] && nvm use']]),
+    }
+    expect(commandBlockReason("sh -c 'cd packages/app && npm test'", { shell: user })).toBeNull()
+    expect(commandBlockReason("ksh -c 'll'", { shell: user })).toBeNull()
+    expect(commandBlockReason("sh -c '[[ -f x ]] && ll'", { shell: user })).not.toBeNull()
   })
 
   it('checks each function once per command', () => {
