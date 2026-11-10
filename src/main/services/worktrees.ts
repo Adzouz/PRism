@@ -65,8 +65,13 @@ export function parseWorktreeList(output: string): WorktreeEntry[] {
 }
 
 export async function remoteUrls(clone: string) {
-  const output = (await tryGit(clone, ['remote', '-v'])) ?? ''
-  return [...new Set(output.split('\n').flatMap((line) => line.split(/\s+/)[1] ?? []))]
+  const output =
+    (await tryGit(clone, ['config', '-z', '--get-regexp', '^remote\\..*\\.(url|pushurl)$'])) ?? ''
+  const urls = output
+    .split('\0')
+    .filter((entry) => entry.includes('\n'))
+    .map((entry) => entry.slice(entry.indexOf('\n') + 1))
+  return [...new Set(urls.filter(Boolean))]
 }
 
 export async function unblockedPushRemotes(clone: string, env: Record<string, string>) {
@@ -202,7 +207,7 @@ async function prepareLocked(
   if (existing) {
     path = existing.path
     log(`Reusing worktree ${path}`)
-    if ((await realpath(path).catch(() => path)).startsWith(`${realRoot}/`)) {
+    if ((await realpath(path).catch(() => path)) === target) {
       await installGuard(clone, path, options.hooksDir)
     }
   } else {
@@ -249,6 +254,6 @@ async function prepareLocked(
     }
   }
   const headOid = await git(path, ['rev-parse', 'HEAD'])
-  await git(clone, ['update-ref', checkoutRef, headOid])
+  if (headOid === wanted) await git(clone, ['update-ref', checkoutRef, headOid])
   return { path, branch, remote, baseRemote: base.name, created, headOid, warning }
 }

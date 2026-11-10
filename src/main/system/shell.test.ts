@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { parseAliases, parseFunctions, probeShell, rcFile } from './shell'
+import { agentShell, parseAliases, parseFunctions, probeShell, rcFile } from './shell'
 
 const rc = `alias g=git
 alias gst='git status'
@@ -55,6 +55,30 @@ describe('shell probe', () => {
     expect(rcFile('/bin/zsh', '/h')).toBe('/h/.zshrc')
     expect(rcFile('/opt/homebrew/bin/bash', '/h')).toBe('/h/.bashrc')
     expect(rcFile('/bin/sh', '/h')).toBe('/h/.profile')
+  })
+
+  it('picks the shell the CLI runs commands in', () => {
+    expect(agentShell({ SHELL: '/opt/homebrew/bin/bash' })).toBe('/opt/homebrew/bin/bash')
+    expect(agentShell({ CLAUDE_CODE_SHELL: '/usr/local/bin/zsh', SHELL: '/bin/bash' })).toBe(
+      '/usr/local/bin/zsh',
+    )
+    expect(agentShell({ SHELL: '/opt/homebrew/bin/fish' })).toBe('/bin/zsh')
+    expect(agentShell({})).toBe('/bin/zsh')
+  })
+
+  it('fails when the probe does not finish', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'prism-home-'))
+    await writeFile(join(home, '.bashrc'), `${rc}sleep 5\n`)
+    await expect(probeShell({ shell: '/bin/bash', home, timeout: 500 })).rejects.toThrow(
+      'did not finish',
+    )
+  })
+
+  it('does not wait for input while sourcing the rc', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'prism-home-'))
+    await writeFile(join(home, '.bashrc'), `read -r answer\n${rc}`)
+    const context = await probeShell({ shell: '/bin/bash', home, timeout: 3000 })
+    expect(context.aliases.get('g')).toBe('git')
   })
 
   it.skipIf(!existsSync('/bin/zsh'))('reads aliases and functions from a zsh rc', async () => {

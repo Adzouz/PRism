@@ -372,6 +372,81 @@ const blockedCommands = [
   'compgen -C x y',
   "dash -c '((git reset --hard))'",
   "fish -c 'true; and gh pr merge 1'",
+  'echo $(case $x in a) git reset --hard ;; esac)',
+  'case x in x) git push;; esac',
+  'case $(gh pr merge 1) in a) ;; esac',
+  'case x in $(gh pr merge 1)) ;; esac',
+  'for case in in; do gh pr merge 1; done',
+  '( noglob case x in a | gh pr merge 1 )\necho done',
+  'if [[ x == (a|x) ]] gh pr merge 5',
+  '[[ x == (#) ]] ; gh pr merge 4',
+  '[[ ( -n x )]] && gh pr merge 1',
+  '[[ x ]]| gh pr merge 1',
+  'echo $( [[ x ) | gh pr merge 1 ]]',
+  '[[ x == (a ]] ; gh pr merge 1 ; ]] )',
+  'x=GIT_CONFIG_COUNT; export $x=0; git -C { push --no-verify origin HEAD:main',
+  'git --git-dir } reset --hard HEAD~1',
+  '{ git -C } push; }',
+  'echo (#|*) ; gh pr merge 3',
+  "echo a=(e:'gh pr merge 6':)",
+  'git -C <-> reset --hard',
+  'true\r# ; gh pr merge 1',
+  'cat <<EOF\r\nx\nEOF\r\ngh pr merge 2\nEOF',
+  'echo $(cat <<EOF\n)\ngh pr merge 23\nEOF\n)',
+  "bash -c 'echo $(cat <<EOF\n)\ngh pr merge 25\nEOF\n)'",
+  'echo `cat <<EOF\nx\nEOF\n`',
+  "functions[f]='gh pr merge 61'; f",
+  "functions+=(f 'gh pr merge 1'); f",
+  'commands[pnpm]=/usr/bin/git; pnpm commit -m x',
+  "aliases[ls]='gh pr merge 1'\nls",
+  'BASH_CMDS[ls]=/usr/bin/git; ls push',
+  'dis_functions[x]=y',
+  'functions -c gpush pnpm; pnpm',
+  'functions -M f',
+  'autoload -Uz x; x',
+  '/usr/libexec/git-core/git-commit --allow-empty -qm x',
+  'x=GIT_CONFIG_COUNT; unset $x',
+  "unset -m 'G*'",
+  'x=GIT_CONFIG_COUNT; (( $x = 0 ))',
+  'x=GIT_CONFIG_COUNT; (( $x-- ))',
+  'x=GIT_CONFIG_COUNT; let $x=0',
+  'x=GIT_CONFIG_COUNT; printf -v $x 0',
+  'x=GIT_CONFIG_COUNT; read $x <<< 0',
+  'x=GIT_CONFIG_COUNT; : ${(P)x::=0}',
+  'x=GIT_CONFIG_COUNT; getopts ab $x',
+  'for x GIT_CONFIG_COUNT in 1 0; do git status; done',
+  '(( GIT_CONFIG_COUNT &&= 0 ))',
+  'zstyle -s :x y GIT_CONFIG_COUNT',
+  "zstyle -e ':x' y 'gh pr merge 1'",
+  'strftime -s GIT_CONFIG_COUNT %s 0',
+  'zparseopts -a GIT_CONFIG_COUNT x',
+  'set -A GIT_CONFIG_COUNT 0',
+  'exec -c git status',
+  "zsh -oerrexit -c 'gh pr merge 8'",
+  "git fetch -q --refm='+refs/heads/*:refs/heads/*' origin main",
+  "git fetch --refma '+refs/heads/*:refs/heads/*' origin main",
+  'git fetch --set-upstream origin main',
+  'git fetch --set-up origin main',
+  'git fetch . +HEAD:refs/prism/pr-7-checkout',
+  'git fetch origin pull/7/head:refs/prism/pr-7',
+  'git branch --form -l new-branch',
+  "npm -c 'gh pr merge 11' exec",
+  "npm --call 'gh pr merge 12' exec",
+  "npm --cal='gh pr merge 12' exec",
+  "npm_config_call='gh pr merge 13' npm exec",
+  "NPM_CONFIG_CALL='gh pr merge 13' npm exec",
+  'xcrun -sdk macosx git branch x',
+  "dash -c 'true &>/dev/null gh pr merge 14'",
+  "sh -c 'true &>>/dev/null gh pr merge 15'",
+  "ksh -c 'true &>/dev/null gh pr merge 16'",
+  `PAGER='sh -c "gh pr merge 21"' script -q /dev/null git log -1`,
+  "GH_PAGER='sh -c x' gh pr view 1",
+  "MANPAGER='sh -c x' man git",
+  "LESS='+!gh pr merge 1' git log",
+  "LESSOPEN='|x %s' git log",
+  'python3 -c \'import os; os.system("git push")\'',
+  "cat <<'EOF' | node\nrequire('child_process').execSync('git push')\nEOF",
+  'gtimeout 10 git commit -am x',
 ]
 
 const allowedCommands = [
@@ -484,7 +559,7 @@ const allowedCommands = [
   'echo $GIT_DIR',
   'rg GIT_CONFIG_COUNT src',
   'env | grep GIT_',
-  'git fetch origin pull/7/head:refs/prism/pr-7',
+  'git fetch origin pull/7/head:refs/remotes/pr/7',
   "git fetch origin '+refs/heads/*:refs/remotes/origin/*'",
   'git fetch --tags',
   'git fetch --prune origin',
@@ -509,6 +584,25 @@ const allowedCommands = [
   'source ~/.nvm/nvm.sh',
   'set -euo pipefail',
   'gh api repos/acme/app/pulls/1/comments \\\n  --paginate',
+  'for f in $(git diff --name-only); do case $f in *.ts) echo ts;; *.md) echo md;; esac; done',
+  'case "$(basename "$SHELL")" in zsh) echo z ;; bash) echo b ;; esac',
+  'case "$x" in\n  (a | b) echo ab ;;\n  # other\n  *) echo other\nesac',
+  'echo $(case $x in a) echo a ;; esac)',
+  'x=main; [[ $x =~ ^(main|master)$ ]] && echo default',
+  '[[ $x =~ ^(feat|fix)\\(.+\\): ]] && echo ok',
+  'if [[ -f a && ( -f b || -f c ) ]]; then echo yes; fi',
+  '(( ${#files[@]} > 0 )) && echo some',
+  "rg -n 'git push' src",
+  'grep -rn "git commit" docs/',
+  '# do not git push here\npnpm test',
+  "cat > CONTRIBUTING.md <<'EOF'\nRun the tests, then git commit and git push.\nEOF",
+  "echo 'Do not git push from here'",
+  'function f { pnpm test; }; f',
+  'declare -A m=([a]=1 [b]=2); echo ${m[a]}',
+  'PAGER=cat git log -1',
+  "zsh -o errexit -c 'pnpm test'",
+  "bash -c 'pnpm build &>/dev/null'",
+  'xcrun -sdk macosx --show-sdk-path',
 ]
 
 const editCommands = [
@@ -517,6 +611,7 @@ const editCommands = [
   'git mv src/a.ts src/b.ts',
   'git apply fix.patch',
   'git restore --staged src/a.ts',
+  'git restore --stag src/a.ts',
 ]
 
 function sh(file: string, args: string[], env: Record<string, string> = {}) {
@@ -597,6 +692,29 @@ describe('command guard', () => {
     expect(commandBlockReason('git fetch origin main:main')).toContain('git fetch into main')
     expect(commandBlockReason("cat <<$'EOF'\nx\nEOF")).toContain('heredoc delimiter')
     expect(commandBlockReason('ls *(e:x:)')).toContain('glob qualifiers')
+    expect(commandBlockReason('git -C { push')).toContain('Quote it')
+    expect(commandBlockReason('echo $(cat <<EOF\nx\nEOF\n)')).toContain('Write tool')
+    expect(commandBlockReason('x=GIT_DIR; unset $x')).toContain('literal name')
+    expect(commandBlockReason("zsh -oerrexit -c 'true'")).toContain('-o errexit')
+    expect(commandBlockReason('true\r')).toContain('carriage returns')
+    expect(commandBlockReason("rg 'git push' src; node -e 'git push'")).toBe(
+      'git commit/push is blocked',
+    )
+  })
+
+  it('refuses commands over 64 KB and points to the Write tool', () => {
+    expect(commandBlockReason(`echo ${'a'.repeat(64 * 1024)}`)).toContain('Write tool')
+    expect(commandBlockReason(`echo ${'a'.repeat(60 * 1024)}`)).toBeNull()
+  })
+
+  it('checks adversarial commands up to 64 KB in linear time', () => {
+    const fill = (unit: string) => unit.repeat(Math.floor((63 * 1024) / unit.length))
+    const start = performance.now()
+    expect(commandBlockReason(`printf '%s' '${fill('a[')}' >! /tmp/x`)).toBeNull()
+    expect(commandBlockReason(`echo ${fill('-/git ')}`)).toBeNull()
+    expect(commandBlockReason(`echo {${fill('}')}`)).toBeNull()
+    expect(commandBlockReason(`let '${fill('a[')}'`)).toBeNull()
+    expect(performance.now() - start).toBeLessThan(500)
   })
 
   it('lexes deeply nested expansions in linear time', () => {
@@ -615,9 +733,9 @@ describe('command guard', () => {
 
   it('stays fast on long commands', () => {
     const start = performance.now()
-    expect(commandBlockReason('echo a; '.repeat(20000))).toBeNull()
+    expect(commandBlockReason('echo a; '.repeat(8000))).toBeNull()
     expect(commandBlockReason(`${'A=1 '.repeat(5000)}git status`)).not.toBeNull()
-    expect(commandBlockReason(`cat <<EOF\n${'v $HOME $(date)\n'.repeat(5000)}EOF`)).toBeNull()
+    expect(commandBlockReason(`cat <<EOF\n${'v $HOME $(date)\n'.repeat(3500)}EOF`)).toBeNull()
     expect(performance.now() - start).toBeLessThan(1000)
   })
 
@@ -788,6 +906,18 @@ describe('shell context', () => {
     const fanOut = { ...shell, functions }
     const started = performance.now()
     expect(commandBlockReason('f0', { shell: fanOut })).toBeNull()
+    expect(performance.now() - started).toBeLessThan(500)
+  })
+
+  it('caps the work of alias fan-out', () => {
+    const aliases = new Map(
+      Array.from({ length: 22 }, (_, index): [string, string] => [
+        `f${index}`,
+        `f${index + 1}; f${index + 1}`,
+      ]),
+    )
+    const started = performance.now()
+    expect(commandBlockReason('f0', { shell: { ...shell, aliases } })).toContain('too complex')
     expect(performance.now() - started).toBeLessThan(500)
   })
 

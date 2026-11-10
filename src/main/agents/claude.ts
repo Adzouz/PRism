@@ -161,19 +161,27 @@ export const claudeAdapter: AgentAdapter = {
     if (input.signal.aborted) abort.abort()
     input.signal.addEventListener('abort', () => abort.abort(), { once: true })
 
-    const check = (name: string, toolInput: Record<string, unknown>) => {
+    const checked = new Map<string, string | null>()
+    const check = (name: string, toolInput: Record<string, unknown>, id: string | undefined) => {
       if (input.tools.isWaiting() && !isPrismTool(name)) {
         return 'Waiting on the user. End your turn now; the answer arrives as the next message.'
       }
-      return toolBlockReason(name, toolInput, {
+      const key = id === undefined ? null : `${id}\0${name}\0${JSON.stringify(toolInput)}`
+      if (key !== null && checked.has(key)) return checked.get(key)!
+      const reason = toolBlockReason(name, toolInput, {
         readOnly: input.readOnly,
         worktree: input.cwd,
         shell: input.shell ?? undefined,
       })
+      if (key !== null) {
+        checked.set(key, reason)
+        if (checked.size > 32) checked.delete(checked.keys().next().value!)
+      }
+      return reason
     }
 
-    const canUseTool: CanUseTool = async (name, toolInput) => {
-      const reason = check(name, toolInput)
+    const canUseTool: CanUseTool = async (name, toolInput, { toolUseID }) => {
+      const reason = check(name, toolInput, toolUseID)
       if (reason) {
         input.onEvent({ kind: 'denied', tool: name, reason })
         return { behavior: 'deny', message: `PRism: ${reason}` }
@@ -181,10 +189,10 @@ export const claudeAdapter: AgentAdapter = {
       return { behavior: 'allow', updatedInput: toolInput }
     }
 
-    const preToolUse: HookCallback = async (hookInput) => {
+    const preToolUse: HookCallback = async (hookInput, toolUseID) => {
       if (hookInput.hook_event_name !== 'PreToolUse') return {}
       const toolInput = (hookInput.tool_input ?? {}) as Record<string, unknown>
-      const reason = check(hookInput.tool_name, toolInput)
+      const reason = check(hookInput.tool_name, toolInput, toolUseID)
       if (!reason) return {}
       input.onEvent({ kind: 'denied', tool: hookInput.tool_name, reason })
       return {

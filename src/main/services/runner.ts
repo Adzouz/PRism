@@ -21,7 +21,7 @@ import {
 import type { AgentAdapter, AgentEvent, PrismTools } from '../agents/types'
 import { prs } from '../db/schema'
 import { userEnv, userPath, which } from '../system/exec'
-import { probeShell } from '../system/shell'
+import { agentShell, probeShell } from '../system/shell'
 import { openInEditor, openInTerminal, resumeCommand, runInTerminal } from './apps'
 import { getAgentConfig } from './config'
 import type { Ctx } from './context'
@@ -75,6 +75,7 @@ export type RunnerDeps = {
     env: Record<string, string>
     executable: string | null
     shell?: ShellContext | null
+    shellError?: string | null
   }>
   prepare?: typeof prepareWorktree
 }
@@ -131,21 +132,23 @@ export async function defaultAgentEnv(userData: string) {
   env.PATH = `${bin}:${await userPath()}`
   env.GH_PROMPT_DISABLED = '1'
   env.GIT_TERMINAL_PROMPT = '0'
-  return { env, executable: await which('claude'), shell: await shellContextFor(env) }
+  return { env, executable: await which('claude'), ...(await shellContextFor(env)) }
 }
 
 let shellProbe: Promise<ShellContext> | null = null
 
-function shellContextFor(env: Record<string, string>) {
-  shellProbe ??= probeShell({
-    shell: env.CLAUDE_CODE_SHELL || env.SHELL || '/bin/zsh',
+async function shellContextFor(env: Record<string, string>) {
+  const probe = (shellProbe ??= probeShell({
+    shell: agentShell(env),
     home: env.HOME || homedir(),
     env,
-  }).catch(() => {
-    shellProbe = null
-    return { aliases: new Map(), functions: new Map() }
-  })
-  return shellProbe
+  }))
+  try {
+    return { shell: await probe, shellError: null }
+  } catch (error) {
+    if (shellProbe === probe) shellProbe = null
+    return { shell: null, shellError: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 export function createRunner(deps: RunnerDeps) {
@@ -361,14 +364,19 @@ export function createRunner(deps: RunnerDeps) {
         extraDirs = first.skillDir ? [first.skillDir] : []
         prompt = first.prompt
       }
-      const { env, executable, shell = null } = await agentEnv()
+      const { env, executable, shell = null, shellError = null } = await agentEnv()
       Object.assign(env, pushBlockEnv(env, projectRoot ? await remoteUrls(projectRoot) : []))
       if (projectRoot && !run.sessionId) {
         for (const { remote, url } of await unblockedPushRemotes(projectRoot, env)) {
           event(runId, 'note', {
-            text: `PRism's push block does not cover the remote ${remote} (${url}), which has its own push URL. The command guard and the pre-push hook still apply.`,
+            text: `PRism's push block does not cover the remote ${remote}: pushes to it go to ${url}. The command guard and the pre-push hook still apply.`,
           })
         }
+      }
+      if (shellError) {
+        event(runId, 'note', {
+          text: 'PRism could not read your shell aliases and functions, so commands that use them are not checked in this run. It tries again on the next run.',
+        })
       }
       const tools = prismTools(runId)
       let resume = getRunRow(ctx, runId).sessionId

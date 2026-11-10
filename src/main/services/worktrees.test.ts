@@ -131,6 +131,8 @@ describe('worktrees', () => {
     const second = await prepareWorktree(options, pr({ headOid: rewritten }))
     expect(second.headOid).toBe(mine)
     expect(second.warning).toContain(rewritten.slice(0, 7))
+    const third = await prepareWorktree(options, pr({ headOid: rewritten }))
+    expect(third.headOid).toBe(mine)
   })
 
   it('reinstalls the push guard on a reused worktree', async () => {
@@ -139,6 +141,26 @@ describe('worktrees', () => {
     git(first.path, 'config', '--worktree', '--unset', 'core.hooksPath')
     await prepareWorktree(options, pr({ headOid: head }))
     expect(git(first.path, 'config', 'core.hooksPath')).toBe(join(base, 'hooks'))
+  })
+
+  it("leaves the user's own worktree under the root unguarded", async () => {
+    const { base, clone, head, options } = await setup()
+    const own = join(base, 'wts', 'feature-dev')
+    git(clone, 'worktree', 'add', '-q', own, 'feature')
+    const result = await prepareWorktree(options, pr({ headOid: head }))
+    expect(result).toMatchObject({ path: own, created: false })
+    expect(git(own, 'config', '--default', '', 'core.hooksPath')).toBe('')
+  })
+
+  it('keeps an unpushed commit on later runs', async () => {
+    const { head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    const local = await commit(first.path, 'mine.txt', 'local work')
+    await prepareWorktree(options, pr({ headOid: head }))
+    const third = await prepareWorktree(options, pr({ headOid: head }))
+    expect(third.headOid).toBe(local)
+    expect(third.warning).toContain(head.slice(0, 7))
+    expect(git(first.path, 'rev-parse', 'feature')).toBe(local)
   })
 
   it('keeps local commits after a force-push', async () => {
@@ -152,6 +174,8 @@ describe('worktrees', () => {
     const second = await prepareWorktree(options, pr({ headOid: rewritten }))
     expect(second.headOid).toBe(local)
     expect(second.warning).toContain(rewritten.slice(0, 7))
+    const third = await prepareWorktree(options, pr({ headOid: rewritten }))
+    expect(third.headOid).toBe(local)
   })
 
   it('checks out pull/<n>/head for a pull request from a deleted fork', async () => {
@@ -203,6 +227,27 @@ describe('worktrees', () => {
     expect(await unblockedPushRemotes(clone, env)).toEqual([])
     git(clone, 'config', 'remote.origin.pushurl', origin)
     expect(await unblockedPushRemotes(clone, env)).toEqual([{ remote: 'origin', url: origin }])
+  })
+
+  it('blocks the configured url when insteadOf rewrites it', async () => {
+    const { base, clone } = await setup()
+    const url = 'https://github.com/acme/app.git'
+    git(clone, 'remote', 'set-url', 'origin', url)
+    const globalConfig = join(base, 'gitconfig')
+    await writeFile(
+      globalConfig,
+      '[url "git@github.com:"]\n\tinsteadOf = https://github.com/\n[url "git@github-work:acme/"]\n\tpushInsteadOf = https://github.com/acme/\n',
+    )
+    const saved = process.env.GIT_CONFIG_GLOBAL
+    process.env.GIT_CONFIG_GLOBAL = globalConfig
+    try {
+      expect(await remoteUrls(clone)).toEqual([url])
+      const env = pushBlockEnv({}, await remoteUrls(clone))
+      expect(await unblockedPushRemotes(clone, env)).toEqual([])
+    } finally {
+      if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL
+      else process.env.GIT_CONFIG_GLOBAL = saved
+    }
   })
 
   it('adds a remote for fork pull requests', async () => {

@@ -414,7 +414,8 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
   const start = useStartRun()
   const openRunId = useBoardStore((state) => state.openRunId)
   const selectRun = useBoardStore((state) => state.selectRun)
-  const [stage, setStage] = useState<Stage>(() => runStageFor(pr))
+  const [pickedStage, setStage] = useState<Stage | null>(null)
+  const stage = pickedStage ?? runStageFor(pr)
   const [chosenThreads, setChosenThreads] = useState<Set<string> | null>(null)
   const isOpen = pr.state === 'OPEN'
   const needsThreads = isOpen && threadStages.includes(stage)

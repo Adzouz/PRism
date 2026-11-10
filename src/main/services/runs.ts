@@ -542,7 +542,10 @@ export function dismissRunsForPr(ctx: Ctx, prId: number) {
 
 export function dismissRun(ctx: Ctx, runId: number) {
   const run = getRunRow(ctx, runId)
-  const group = runGroups.find((stages) => stages.includes(run.stage as Stage)) ?? []
+  const group =
+    run.status === 'done'
+      ? runGroups.find((stages) => stages.includes(run.stage as Stage))
+      : undefined
   return ctx.db
     .update(runs)
     .set({ dismissedAt: Date.now() })
@@ -554,7 +557,7 @@ export function dismissRun(ctx: Ctx, runId: number) {
         lte(runs.id, runId),
         or(
           eq(runs.id, runId),
-          inArray(runs.stage, group),
+          group ? inArray(runs.stage, group) : undefined,
           inArray(runs.status, ['failed', 'cancelled']),
         ),
       ),

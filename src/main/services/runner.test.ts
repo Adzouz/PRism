@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -10,7 +11,7 @@ import { setSetting } from '../db/settings'
 import type { Ctx } from './context'
 import type { GithubApi } from './gh-api'
 import { listPrs, setPrStage } from './prs'
-import { createRunner } from './runner'
+import { createRunner, type RunnerDeps } from './runner'
 import {
   boardRunFor,
   getRun,
@@ -159,7 +160,11 @@ const ok = (sessionId: string, total = 1): SegmentResult => ({
   error: null,
 })
 
-function makeRunner(ctx: Ctx, run: (input: SegmentInput) => Promise<SegmentResult>) {
+function makeRunner(
+  ctx: Ctx,
+  run: (input: SegmentInput) => Promise<SegmentResult>,
+  agentEnv: RunnerDeps['agentEnv'] = async () => ({ env: {}, executable: null }),
+) {
   const adapter: AgentAdapter = { run: vi.fn<AgentAdapter['run']>(run) }
   const runs: Run[] = []
   const events: RunEvent[] = []
@@ -172,7 +177,7 @@ function makeRunner(ctx: Ctx, run: (input: SegmentInput) => Promise<SegmentResul
       event: (item) => events.push(item),
       prsChanged: () => {},
     },
-    agentEnv: async () => ({ env: {}, executable: null }),
+    agentEnv,
     prepare,
   })
   return { runner, adapter, runs, events }
@@ -506,6 +511,78 @@ describe('agent runner', () => {
     expect(getRun(ctx, plan.id).dismissedAt).not.toBeNull()
     expect(getRun(ctx, review.id).dismissedAt).toBeNull()
     expect(listPrs(ctx)[0]).toMatchObject({ stage: 'verdict-ready', run: { id: review.id } })
+  })
+
+  it('keeps the verdict when a failed re-review is dismissed', async () => {
+    const { ctx, ids } = await setup()
+    const skill = ctx.db.select().from(skills).get()!
+    ctx.db
+      .insert(stageBindings)
+      .values({ scope: 'global', stage: 're-review', skillId: skill.id, validatedAt: 1 })
+      .run()
+    const { runner } = makeRunner(ctx, async (input) => {
+      if (input.stage === 're-review') return { ...ok('s'), error: 'rate limited' }
+      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      return ok('s')
+    })
+    const review = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, review.id).status === 'done' && !runner.isActive(review.id))
+    const again = runner.start({ prId: ids[0]!, stage: 're-review' })
+    await until(() => getRun(ctx, again.id).status === 'failed' && !runner.isActive(again.id))
+    runner.dismiss(again.id)
+    expect(getRun(ctx, again.id).dismissedAt).not.toBeNull()
+    expect(getRun(ctx, review.id).dismissedAt).toBeNull()
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'verdict-ready', run: { id: review.id } })
+  })
+
+  it('blocks pushes to the clone remotes and hands the shell context to the agent', async () => {
+    const { ctx, ids } = await setup()
+    const clone = await mkdtemp(join(tmpdir(), 'prism-clone-'))
+    execFileSync('git', ['init', '-q', clone])
+    const inClone = (...args: string[]) => execFileSync('git', ['-C', clone, ...args])
+    inClone('remote', 'add', 'origin', 'https://github.com/acme/app.git')
+    inClone('remote', 'add', 'mirror', 'https://example.com/acme/app.git')
+    inClone('config', 'remote.mirror.pushurl', 'https://example.com/acme/push.git')
+    ctx.db.update(repos).set({ localPath: clone }).run()
+    const shell = { aliases: new Map([['g', 'git']]), functions: new Map<string, string>() }
+    const { runner, adapter, events } = makeRunner(
+      ctx,
+      async (input) => {
+        input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+        return ok('s')
+      },
+      async () => ({ env: {}, executable: null, shell }),
+    )
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
+    const input = vi.mocked(adapter.run).mock.calls[0]![0]
+    expect(input.shell).toBe(shell)
+    const blocked = Object.entries(input.env)
+      .filter(([key]) => key.startsWith('GIT_CONFIG_VALUE_'))
+      .map(([, value]) => value)
+    expect(blocked).toContain('https://github.com/acme/app.git')
+    const notes = events.filter((item) => item.kind === 'note').map((item) => item.payload.text)
+    expect(notes).toContainEqual(
+      expect.stringContaining(
+        'remote mirror: pushes to it go to https://example.com/acme/push.git',
+      ),
+    )
+  })
+
+  it('notes a failed shell probe in the transcript', async () => {
+    const { ctx, ids } = await setup()
+    const { runner, events } = makeRunner(
+      ctx,
+      async (input) => {
+        input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+        return ok('s')
+      },
+      async () => ({ env: {}, executable: null, shell: null, shellError: 'timed out' }),
+    )
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
+    const notes = events.filter((item) => item.kind === 'note').map((item) => item.payload.text)
+    expect(notes).toContainEqual(expect.stringContaining('could not read your shell aliases'))
   })
 
   it('gives re-reviews the open findings of earlier reviews and the last reviewed head', async () => {

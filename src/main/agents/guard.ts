@@ -272,6 +272,9 @@ interface Word {
   commands: Token[][]
   blocked: string | null
   fromAlias?: ReadonlySet<string>
+  start?: boolean
+  inert?: boolean
+  body?: string
 }
 
 interface Operator {
@@ -281,8 +284,15 @@ interface Operator {
 
 type Token = Word | Operator
 
+class Refusal extends Error {}
+
+const refuse = (reason: string): never => {
+  throw new Refusal(reason)
+}
+
 const byLength = (ops: string[]) => ops.sort((a, b) => b.length - a.length)
-const separators = byLength(['&&', '||', ';;', '|&', ';', '&', '|', '(', ')'])
+const separators = byLength(['&&', '||', ';;&', ';;', ';&', ';|', '|&', ';', '&', '|', '(', ')'])
+const caseTerminators = new Set([';;', ';;&', ';&', ';|'])
 const redirections = byLength([
   '&>>!',
   '&>>|',
@@ -330,12 +340,52 @@ const prefixWords = new Set([
   'or',
   'not',
 ])
-const commandKeywords = new Set([...prefixWords, 'for', 'select', 'foreach', 'time', 'repeat'])
+const startKeywords = new Set([
+  'if',
+  'then',
+  'else',
+  'elif',
+  'do',
+  'while',
+  'until',
+  '!',
+  'time',
+  'coproc',
+])
+const declarationBuiltins = new Set([
+  'export',
+  'declare',
+  'typeset',
+  'local',
+  'readonly',
+  'integer',
+  'float',
+])
+const conditionOperators = new Set(['==', '=', '!=', '=~'])
+const quoteChars = '\\\'"$`'
+const caseEnd = /esac(?=[\s;&|)<>]|$)/y
+const numericGlob = /<\d*-\d*>/y
+
+const matchesAt = (pattern: RegExp, text: string, at: number) => {
+  pattern.lastIndex = at
+  return pattern.test(text)
+}
 
 const tooComplex = 'This command is too complex for PRism to check. Split it into simpler commands.'
 const tooDeep = 'This command is nested too deeply for PRism to check'
+const tooLong =
+  'This command is longer than 64 KB. Write long content to a file with the Write tool, then run a short command.'
+const carriageReturn =
+  'Commands with carriage returns (\\r) are blocked: shells do not read them as line breaks. Use plain newlines.'
 const globPattern =
-  'PRism cannot check zsh glob qualifiers or patterns with parentheses, like *(…) or =(…). Quote the pattern or use find.'
+  'PRism cannot check zsh glob qualifiers or patterns like *(…), (a|b), <1-9> or name=(…) here. Quote the pattern, or use [[ … ]], case or find.'
+const loneBrace = 'PRism cannot check a lone { or } outside a brace group. Quote it, like "{".'
+const substitutionHeredoc =
+  'Heredocs inside $(…), backticks or arrays are blocked. Write the content to a file with the Write tool first.'
+const casePattern =
+  'PRism cannot check this case pattern. Use plain patterns like a|b*) without parentheses, ; or line breaks.'
+const conditionPattern =
+  'PRism cannot check this [[ … ]] condition. Balance its parentheses, and keep ;, &, <, > and line breaks out of parenthesized patterns.'
 const evalExpansion =
   'PRism cannot check expansions that run text as code, like ${(e)…}, ${~…} or globsubst. Use plain $VAR.'
 const heredocDelimiter =
@@ -503,8 +553,9 @@ function paramReason(body: string): string | null {
   if (flags && /[e%]/.test(flags[1]!)) return evalExpansion
   const rest = flags ? body.slice(flags[0].length) : body
   if (/^[\^=~+#!]*~/.test(rest) || /@P$/.test(rest)) return evalExpansion
-  const assigned = /^[\^=~+#!]*([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?:{0,2}=/.exec(rest)
-  return (assigned && variableReason(assigned[1]!, 'bind')) || arithmeticReason(body)
+  const assigned = /^([\^=~+#!]*)([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?:{0,2}=/.exec(rest)
+  if (assigned && (flags?.[1]!.includes('P') || assigned[1]!.includes('!'))) return dynamicName
+  return (assigned && variableReason(assigned[2]!, 'bind')) || arithmeticReason(body)
 }
 
 function readArithmetic(
@@ -548,7 +599,7 @@ function readArithmetic(
   const raw = src.slice(at, end)
   target.dynamic = true
   target.commands.push(...scratch.commands)
-  target.blocked ??= scratch.blocked ?? blocked ?? arithmeticReason(joinContinuations(raw))
+  target.blocked ??= scratch.blocked ?? blocked ?? arithmeticReason(joinContinuations(raw), true)
   target.text += raw
   return end
 }
@@ -568,46 +619,109 @@ function heredocWord(text: string, level: number): Word {
   return scratch
 }
 
-function lex(src: string, start = 0, nested = false, level = 0): { tokens: Token[]; end: number } {
+type CasePhase = 'subject' | 'in' | 'pattern' | 'body'
+
+function lex(
+  src: string,
+  start = 0,
+  nested = false,
+  level = 0,
+  array = false,
+): { tokens: Token[]; end: number } {
   enter(level)
   const tokens: Token[] = []
   const heredocs: { word: Word; strip: boolean }[] = []
+  const cases: CasePhase[] = []
   let delimiterStrip = null as boolean | null
   let word = null as Word | null
   let glob = -1
   let brace = -1
+  let braceList = false
   let depth = 0
   let index = start
+  let commandStart = !array
+  let assignments = !array
+  let declaring = false
+  let condition = false
+  let groups = 0
+  let operand = false
 
   const current = () => (word ??= newWord())
 
-  const flush = () => {
-    const done = word
+  const reset = () => {
     word = null
     glob = -1
     brace = -1
+    braceList = false
+  }
+
+  const flush = () => {
+    const done = word
+    reset()
     if (!done) return
+    const redirected = tokens.at(-1)?.kind === 'redirect'
+    done.start = commandStart && !redirected
     if (delimiterStrip !== null) {
       heredocs.push({ word: done, strip: delimiterStrip })
       delimiterStrip = null
     }
-    if (!done.quoted && (done.text === '{' || done.text === '}')) {
-      tokens.push({ kind: 'op', text: done.text })
-    } else tokens.push(done)
+    const text = done.quoted ? null : done.text
+    if (text === '{' || text === '}') {
+      const keyword = tokens.at(-2)
+      const named =
+        text === '{' &&
+        keyword?.kind === 'word' &&
+        keyword.start === true &&
+        keyword.text === 'function'
+      if (!done.start && !named) refuse(loneBrace)
+      push('op', text)
+      return
+    }
+    tokens.push(done)
+    if (redirected) {
+      commandStart = false
+      assignments = false
+      return
+    }
+    if (condition) {
+      if (text === ']]') push('op', ';')
+      else operand = text !== null && conditionOperators.has(text)
+      return
+    }
+    const phase = cases.at(-1)
+    if (text === 'esac' && (phase === 'pattern' || (phase === 'body' && done.start))) cases.pop()
+    else if (phase === 'subject') cases[cases.length - 1] = 'in'
+    else if (phase === 'in') {
+      if (text === 'in') cases[cases.length - 1] = 'pattern'
+      else cases.pop()
+    }
+    if (done.start && text === 'case') cases.push('subject')
+    if (done.start && text === '[[') {
+      condition = true
+      groups = 0
+    }
+    const assigns = assignments && assignment.test(done.text)
+    if (assignments && !assigns && text !== null && declarationBuiltins.has(text)) declaring = true
+    const always = text === 'always' && tokens.at(-2)?.text === '}'
+    commandStart = done.start && text !== null && (startKeywords.has(text) || always)
+    assignments = commandStart || assigns || declaring
   }
 
   const push = (kind: Operator['kind'], text: string) => {
     flush()
     delimiterStrip = null
     tokens.push({ kind, text })
+    if (kind === 'redirect') return
+    commandStart = !array
+    assignments = !array
+    declaring = false
+    condition = false
+    operand = false
+    if (caseTerminators.has(text) && cases.at(-1) === 'body') cases[cases.length - 1] = 'pattern'
   }
 
   const dropFdPrefix = () => {
-    if (word && !word.quoted && !word.dynamic && fdPrefix.test(word.text)) {
-      word = null
-      glob = -1
-      brace = -1
-    }
+    if (word && !word.quoted && !word.dynamic && fdPrefix.test(word.text)) reset()
   }
 
   const appendPlain = (char: string) => {
@@ -615,24 +729,92 @@ function lex(src: string, start = 0, nested = false, level = 0): { tokens: Token
     if (char === '*' || char === '?') target.dynamic = true
     if (char === '[') glob = target.text.length
     if (char === ']' && glob !== -1) target.dynamic = true
-    if (char === '{') brace = target.text.length
-    if (char === '}' && brace !== -1 && /,|\.\./.test(target.text.slice(brace))) {
-      target.dynamic = true
+    if (char === '{') {
+      brace = target.text.length
+      braceList = false
     }
+    if (brace !== -1 && (char === ',' || (char === '.' && target.text.endsWith('.')))) {
+      braceList = true
+    }
+    if (char === '}' && braceList) target.dynamic = true
     target.text += char
   }
 
-  const atCommandStart = () => {
+  const readPart = (at: number, target: Word): number => {
+    const char = src[at]!
+    const next = src[at + 1]
+    if (char === '\\') {
+      if (next === '\n') return at + 2
+      target.quoted = true
+      target.text += next ?? char
+      return at + (next === undefined ? 1 : 2)
+    }
+    if (char === "'") {
+      const end = src.indexOf("'", at + 1)
+      const stop = end === -1 ? src.length : end
+      target.quoted = true
+      target.text += src.slice(at + 1, stop)
+      return stop + 1
+    }
+    if (char === '"') return readDouble(src, at + 1, target, level + 1)
+    if (char === '`') return readBacktick(src, at + 1, target, level + 1)
+    if (next === "'") return readAnsiC(src, at, target)
+    if (next === '"') {
+      target.dynamic = true
+      return readDouble(src, at + 2, target, level + 1)
+    }
+    return readDollar(src, at, target, level + 1, false)
+  }
+
+  const readPattern = (from: number) => {
+    const target: Word = { ...newWord(), inert: true }
+    let at = src[from] === '(' ? from + 1 : from
+    while (at < src.length && src[at] !== ')') {
+      const char = src[at]!
+      if ('(;&\n'.includes(char) || ('<>'.includes(char) && src[at + 1] === '(')) {
+        refuse(casePattern)
+      }
+      if (quoteChars.includes(char)) at = readPart(at, target)
+      else {
+        target.text += char
+        at += 1
+      }
+    }
+    tokens.push(target)
+    push('op', ')')
+    cases[cases.length - 1] = 'body'
+    return Math.min(at + 1, src.length)
+  }
+
+  const readOperand = (from: number) => {
+    const target = current()
+    let parens = 0
+    let at = from
+    while (at < src.length) {
+      const char = src[at]!
+      if (' \t\n;&|<>)'.includes(char)) {
+        if (parens === 0) break
+        if (!' \t|)'.includes(char)) refuse(conditionPattern)
+      }
+      if (char === '(') parens += 1
+      if (char === ')') parens -= 1
+      if (quoteChars.includes(char)) at = readPart(at, target)
+      else {
+        target.text += char
+        at += 1
+      }
+    }
+    operand = false
+    return at
+  }
+
+  const afterFor = () => {
     const last = tokens.at(-1)
-    return (
-      !last ||
-      last.kind === 'op' ||
-      (last.kind === 'word' && !last.quoted && commandKeywords.has(last.text))
-    )
+    return last?.kind === 'word' && last.start === true && !last.quoted && last.text === 'for'
   }
 
   const readArray = (from: number, target: Word) => {
-    const inner = lex(src, from + 1, true, level + 1)
+    const inner = lex(src, from + 1, true, level + 1, true)
     for (const token of inner.tokens) {
       if (token.kind !== 'word') continue
       target.commands.push(...token.commands)
@@ -647,7 +829,8 @@ function lex(src: string, start = 0, nested = false, level = 0): { tokens: Token
     const end = readArithmetic(src, from, inner + 1, target, level + 1)
     target.dynamic = false
     target.quoted = true
-    tokens.push(target, { kind: 'op', text: '))' })
+    tokens.push(target)
+    push('op', '))')
     return end
   }
 
@@ -675,9 +858,10 @@ function lex(src: string, start = 0, nested = false, level = 0): { tokens: Token
           break
         }
       }
+      delimiter.body = src.slice(bodyStart, bodyEnd)
       if (delimiter.dynamic) delimiter.blocked ??= heredocDelimiter
       else if (!delimiter.quoted) {
-        const body = heredocWord(src.slice(bodyStart, bodyEnd), level + 1)
+        const body = heredocWord(delimiter.body, level + 1)
         delimiter.commands.push(...body.commands)
         delimiter.blocked ??= body.blocked
       }
@@ -688,58 +872,61 @@ function lex(src: string, start = 0, nested = false, level = 0): { tokens: Token
   while (index < src.length) {
     const char = src[index]!
     const next = src[index + 1]
-    if (char === '\\') {
-      if (next === '\n') {
-        index += 2
+    if (word === null && !' \t\n#'.includes(char)) {
+      if (cases.at(-1) === 'pattern' && !matchesAt(caseEnd, src, index)) {
+        index = readPattern(index)
         continue
       }
-      const target = current()
-      target.quoted = true
-      target.text += next ?? char
-      index += next === undefined ? 1 : 2
-    } else if (char === "'") {
-      const end = src.indexOf("'", index + 1)
-      const stop = end === -1 ? src.length : end
-      const target = current()
-      target.quoted = true
-      target.text += src.slice(index + 1, stop)
-      index = stop + 1
-    } else if (char === '"') index = readDouble(src, index + 1, current(), level + 1)
-    else if (char === '$' && next === "'") index = readAnsiC(src, index, current())
-    else if (char === '$' && next === '"') {
-      const target = current()
-      target.dynamic = true
-      index = readDouble(src, index + 2, target, level + 1)
-    } else if (char === '$') index = readDollar(src, index, current(), level + 1, false)
-    else if (char === '`') index = readBacktick(src, index + 1, current(), level + 1)
+      if (operand && !src.startsWith(']]', index)) {
+        index = readOperand(index)
+        continue
+      }
+    }
+    if (char === '\\' && next === '\n') index += 2
+    else if (quoteChars.includes(char)) index = readPart(index, current())
     else if (char === '#' && word === null) {
       while (index < src.length && src[index] !== '\n') index += 1
-    } else if (char === '\n' || char === '\r') {
-      push('op', '\n')
+    } else if (char === '\n') {
+      if (condition) flush()
+      else push('op', '\n')
       index += 1
-      if (char === '\n' && heredocs.length > 0) index = readHeredocs(index)
+      if (heredocs.length > 0) index = readHeredocs(index)
     } else if (char === ' ' || char === '\t') {
       flush()
       index += 1
     } else if ((char === '<' || char === '>') && src[skipContinuations(src, index + 1)] === '(') {
       index = readNested(src, index, skipContinuations(src, index + 1) + 1, current(), level)
+    } else if (condition && (')<>&|'.includes(char) || (char === '(' && word === null))) {
+      flush()
+      if (condition) {
+        if (char === ')' && groups === 0) refuse(conditionPattern)
+        if (char === '(') groups += 1
+        if (char === ')') groups -= 1
+        appendPlain(char)
+        flush()
+        index += 1
+      }
     } else if (char === '(' && word !== null && !word.quoted && arrayAssignment.test(word.text)) {
+      if (!assignments) refuse(globPattern)
       index = readArray(index, word)
     } else if (
       char === '(' &&
       word === null &&
       src[skipContinuations(src, index + 1)] === '(' &&
-      atCommandStart()
+      (commandStart || afterFor())
     ) {
       index = readArithmeticCommand(index, skipContinuations(src, index + 1))
     } else {
-      if (char === '(' && word !== null && next !== ')') word.blocked ??= globPattern
+      if (char === '(' && next !== ')' && (word !== null || !commandStart)) refuse(globPattern)
+      if (char === '<' && matchesAt(numericGlob, src, index)) refuse(globPattern)
       const redirection = redirections.find((op) => src.startsWith(op, index))
       const separator = redirection ? undefined : separators.find((op) => src.startsWith(op, index))
       if (redirection) {
+        const heredoc = redirection === '<<' || redirection === '<<-'
+        if (heredoc && level > 0) refuse(substitutionHeredoc)
         dropFdPrefix()
         push('redirect', redirection)
-        if (redirection === '<<' || redirection === '<<-') delimiterStrip = redirection === '<<-'
+        if (heredoc) delimiterStrip = redirection === '<<-'
         index += redirection.length
       } else if (separator) {
         if (nested && separator === ')') {
@@ -770,13 +957,18 @@ const dynamicCommand =
   'PRism cannot check commands built at run time ($VAR, $(…), backticks, globs). Run the command by name with literal arguments.'
 const dynamicGit = 'PRism cannot check git arguments built at run time. Use literal arguments.'
 const dynamicGh = 'PRism cannot check gh arguments built at run time. Use literal arguments.'
+const dynamicName = 'PRism cannot check variable names built at run time. Use a literal name.'
 const stdinShell = 'Running a script from stdin is blocked. Run the commands directly.'
 const envSplit = 'env --split-string is blocked. Run the command directly.'
 const envClear =
   'Clearing the environment is blocked: PRism relies on it. Run the command directly.'
+const attachedOption = 'Pass shell options as separate words, like -o errexit.'
+const backgroundRedirect =
+  'sh, dash and ksh read &> as & and >, which runs the rest as another command. Use >file 2>&1.'
 
 const assignment = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/
 const shells = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh'])
+const interpreters = /^(?:python[\d.]*|node|ruby|perl|php|osascript|g?awk|deno|bun)$/
 
 const commandName = (text: string) => (text.split('/').at(-1) ?? '').replace(/^=/, '').toLowerCase()
 const isPrefixOf = (name: string, options: string[]) =>
@@ -797,11 +989,13 @@ interface Check {
   shell: ShellContext | undefined
   depth: number
   checkedFunctions: Set<string>
+  budget: { left: number }
 }
 
 const deeper = (check: Check): Check => ({ ...check, depth: check.depth + 1 })
 
 const allowedGitVariables = new Set(['GIT_TERMINAL_PROMPT', 'GIT_OPTIONAL_LOCKS'])
+const pagerVariables = new Set(['GIT_PAGER', 'PAGER', 'GH_PAGER', 'MANPAGER'])
 const programVariables = new Set([
   'EDITOR',
   'VISUAL',
@@ -810,7 +1004,22 @@ const programVariables = new Set([
   'GH_BROWSER',
   'PS4',
   'PROMPT4',
+  'LESS',
+  'LESSOPEN',
+  'LESSCLOSE',
+  'LESSKEY',
+  'functions',
+  'commands',
+  'aliases',
+  'galiases',
+  'saliases',
+  'builtins',
+  'options',
+  'BASH_CMDS',
+  'BASH_ALIASES',
 ])
+const runsPrograms = (name: string) =>
+  programVariables.has(name) || name.startsWith('dis_') || /^npm_config_/i.test(name)
 
 type VariableUse = 'set' | 'bind' | 'unset' | 'export'
 
@@ -818,23 +1027,37 @@ const safePager = (value: string) =>
   /^(?:cat|more|false|true|less(?:\s+-[aABcCdeEfFgGiIJKLmMnNqQrRsSuUVwWX]+)*)?$/.test(value)
 
 function variableReason(name: string, use: VariableUse, value = ''): string | null {
-  if (name.startsWith('GIT_')) {
+  const keeps = use === 'unset' || use === 'export'
+  if (pagerVariables.has(name)) {
+    if (keeps || (use === 'set' && safePager(value))) return null
+  } else if (name.startsWith('GIT_')) {
     if (allowedGitVariables.has(name)) return null
-    const keepsPager = use === 'unset' || use === 'export' || (use === 'set' && safePager(value))
-    if (name === 'GIT_PAGER' && keepsPager) return null
-  } else if (!programVariables.has(name) || use === 'unset' || use === 'export') return null
+  } else if (!runsPrograms(name) || keeps) return null
   return `Changing ${name} is blocked: it can make git, gh or the shell run other programs`
 }
 
-const arithmeticAssignment =
-  /(?<![\w$])([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\]\s*)?(?:(?:[-+*/%&|^]|<<|>>|\*\*)?=(?!=)|\+\+|--)|(?:\+\+|--)\s*([A-Za-z_][A-Za-z0-9_]*)/g
+const arithmeticOperator = String.raw`\s*(?:\[[^\][]*\]\s*)?(?:(?:[-+*/%&|^]|<<|>>|\*\*|&&|\|\||\^\^)?=(?!=)|\+\+|--)`
+const arithmeticAssignment = new RegExp(
+  String.raw`(?<![\w$])([A-Za-z_][A-Za-z0-9_]*)${arithmeticOperator}|(?:\+\+|--)\s*([A-Za-z_][A-Za-z0-9_]*)`,
+  'g',
+)
+const dynamicArithmeticAssignment = new RegExp(
+  String.raw`(?:\$[\w@*]+|[)}\x60"])${arithmeticOperator}|(?:\+\+|--)\s*[$\x60"]`,
+)
 
-function arithmeticReason(text: string): string | null {
+function arithmeticReason(text: string, strict = false): string | null {
   for (const match of text.matchAll(arithmeticAssignment)) {
     const reason = variableReason((match[1] ?? match[2])!, 'bind')
     if (reason) return reason
   }
-  return null
+  if (!strict) return null
+  let operands = text
+  let previous = ''
+  while (previous !== operands) {
+    previous = operands
+    operands = operands.replace(/\$\{[^{}]*\}/g, '$_')
+  }
+  return dynamicArithmeticAssignment.test(operands) ? dynamicName : null
 }
 
 function assignmentReason(word: Word): string | null {
@@ -845,10 +1068,17 @@ function assignmentReason(word: Word): string | null {
   return variableReason(name, use, rest.slice(operator.length)) ?? arithmeticReason(rest)
 }
 
+const dynamicSuffix = (word: Word, name: string) =>
+  word.dynamic && /^[$`]/.test(word.text.slice(name.length))
+
 function bindReason(words: Word[]): string | null {
   for (const word of words) {
     const name = leadingName(word.text)
-    const reason = name ? variableReason(name, 'bind') : null
+    if (!name || dynamicSuffix(word, name)) {
+      if (word.dynamic) return dynamicName
+      continue
+    }
+    const reason = variableReason(name, 'bind')
     if (reason) return reason
   }
   return null
@@ -856,8 +1086,12 @@ function bindReason(words: Word[]): string | null {
 
 function declarationReason(args: Word[], unset: boolean): string | null {
   for (const word of args) {
+    if (/^[-+]/.test(word.text) && !word.dynamic) continue
     const name = leadingName(word.text)
-    if (!name) continue
+    if (!name || dynamicSuffix(word, name)) {
+      if (word.dynamic) return dynamicName
+      continue
+    }
     const rest = word.text.slice(name.length)
     const operator = /^(?:\[[^\]]*\])?\+?=/.exec(rest)?.[0]
     const use: VariableUse = unset
@@ -874,23 +1108,34 @@ function declarationReason(args: Word[], unset: boolean): string | null {
   return null
 }
 
+interface Segment {
+  words: Word[]
+  all: Word[]
+  bash: Word[] | null
+  input: string[]
+  pipe: boolean
+}
+
+const newSegment = (): Segment => ({ words: [], all: [], bash: null, input: [], pipe: false })
+
 function splitSegments(tokens: Token[]) {
-  const segments: { words: Word[]; all: Word[]; bash: Word[] | null }[] = [
-    { words: [], all: [], bash: null },
-  ]
+  const segments = [newSegment()]
   let target: string | null = null
   for (const token of tokens) {
     const segment = segments.at(-1)!
     if (token.kind === 'word') {
       segment.all.push(token)
-      if (target === null) {
+      if (target === '<<' || target === '<<-') segment.input.push(token.body ?? '')
+      if (target === '<<<') segment.input.push(token.text)
+      if (target === null && !token.inert) {
         segment.words.push(token)
         segment.bash?.push(token)
-      } else if (target.endsWith('!')) (segment.bash ??= [...segment.words]).push(token)
+      } else if (target?.endsWith('!')) (segment.bash ??= [...segment.words]).push(token)
       target = null
     } else if (token.kind === 'redirect') target = token.text
     else {
-      segments.push({ words: [], all: [], bash: null })
+      segment.pipe = token.text === '|' || token.text === '|&'
+      segments.push(newSegment())
       target = null
     }
   }
@@ -1059,7 +1304,7 @@ function scriptArgs(args: Word[], check: Check): Word[] | string {
         ? { ...word, text: text.slice('--command='.length) }
         : args[index + 1]
       if (script?.dynamic) return dynamicCommand
-      return (script && scriptBlockReason(script.text, deeper(check))) ?? []
+      return (script && scriptReason(script.text, check)) ?? []
     }
     const valueAt = text.split('').findIndex((flag) => 'tFTIOBE'.includes(flag))
     index += !text.startsWith('--') && valueAt === text.length - 1 ? 2 : 1
@@ -1067,13 +1312,23 @@ function scriptArgs(args: Word[], check: Check): Word[] | string {
   return args.slice(index + 1)
 }
 
+function execArgs(args: Word[]): Word[] | string {
+  const rest = skipOptions(args, 'a')
+  if (typeof rest === 'string') return rest
+  const options = args.slice(0, args.length - rest.length)
+  return options.some((word) => /^-[^-]*c/.test(word.text)) ? envClear : rest
+}
+
+const xcrunOption = (word: Word) =>
+  /^-(?:sdk|toolchain)$/.test(word.text) ? { ...word, text: `-${word.text}` } : word
+
 type Wrapper = (args: Word[], check: Check) => Word[] | string
 
 const wrappers = new Map<string, Wrapper>([
   ['env', envArgs],
   ['command', (args) => skipOptions(args)],
   ['builtin', (args) => skipOptions(args)],
-  ['exec', (args) => skipOptions(args, 'a')],
+  ['exec', execArgs],
   ['nice', (args) => skipOptions(args, 'n', ['adjustment'])],
   ['nohup', (args) => skipOptions(args)],
   ['time', (args) => skipOptions(args, 'of', ['format', 'output'])],
@@ -1098,7 +1353,7 @@ const wrappers = new Map<string, Wrapper>([
   ['repeat', (args) => args.slice(1)],
   ['caffeinate', (args) => skipOptions(args, 'tw')],
   ['arch', archArgs],
-  ['xcrun', (args) => skipOptions(args, '', ['sdk', 'toolchain'])],
+  ['xcrun', (args) => skipOptions(args.map(xcrunOption), '', ['sdk', 'toolchain'])],
   ['sandbox-exec', (args) => skipOptions(args, 'fnpD')],
   ['script', scriptArgs],
 ])
@@ -1128,15 +1383,14 @@ function shellBlockReason(shell: string, args: Word[], check: Check): string | n
       continue
     }
     const flags = text.slice(1)
+    if (/[oO]./.test(flags)) return attachedOption
     if (flags.includes('c')) command = true
     if (flags.includes('s')) stdin = true
-    const values = args.slice(
-      index,
-      index + flags.split('').filter((flag) => flag === 'o' || flag === 'O').length,
-    )
-    if (values.some((value) => value.dynamic)) return dynamicCommand
-    if (values.some((value) => globSubst(value.text))) return evalExpansion
-    index += values.length
+    if (!/[oO]$/.test(flags)) continue
+    const value = args[index]
+    if (value?.dynamic) return dynamicCommand
+    if (value && globSubst(value.text)) return evalExpansion
+    index += 1
   }
   const rest = args.slice(index)
   if (command && rest[0]) scripts.push(rest[0])
@@ -1146,7 +1400,8 @@ function shellBlockReason(shell: string, args: Word[], check: Check): string | n
   for (const script of scripts) {
     if (script.dynamic) return dynamicCommand
     if (shell === 'dash' && script.text.includes('((')) return tooComplex
-    const reason = scriptBlockReason(script.text, deeper(check))
+    if (shell !== 'bash' && shell !== 'zsh' && script.text.includes('&>')) return backgroundRedirect
+    const reason = scriptReason(script.text, check)
     if (reason) return reason
   }
   return null
@@ -1227,7 +1482,7 @@ function runnerReason(args: Word[], check: Check): string | null {
       const script =
         split === -1 ? args.slice(index + 1) : [{ ...word, text: text.slice(split + 1) }]
       if (script.some((part) => part.dynamic)) return dynamicCommand
-      return scriptBlockReason(joined(script), deeper(check))
+      return scriptReason(joined(script), check)
     }
     const value = split === -1 && runnerValues.has(option)
     unknown = split === -1 && !value && !runnerFlags.has(option)
@@ -1241,7 +1496,25 @@ function runnerReason(args: Word[], check: Check): string | null {
   return runnerReason(command.slice(1), deeper(check))
 }
 
+const callsScript = (option: string) =>
+  option === '-c' || (option.length >= 5 && '--call'.startsWith(option))
+
+function npmCallReason(args: Word[], check: Check): string | null {
+  for (let index = 0; index < args.length; index += 1) {
+    const text = args[index]!.text
+    const split = text.indexOf('=')
+    if (!callsScript(split === -1 ? text : text.slice(0, split))) continue
+    const script = split === -1 ? args[index + 1] : { ...args[index]!, text: text.slice(split + 1) }
+    if (script?.dynamic) return dynamicCommand
+    const reason = script ? scriptReason(script.text, check) : null
+    if (reason) return reason
+  }
+  return null
+}
+
 function packageReason(tool: string, args: Word[], check: Check): string | null {
+  const call = tool === 'npm' ? npmCallReason(args, check) : null
+  if (call) return call
   let index = 0
   let shellMode = false
   while (index < args.length) {
@@ -1258,7 +1531,7 @@ function packageReason(tool: string, args: Word[], check: Check): string | null 
   const runs = ['exec', 'x', 'dlx'].includes(sub.text)
   if ((tool === 'bun' && sub.text === 'exec') || (shellMode && runs)) {
     if (rest.some((word) => word.dynamic)) return dynamicCommand
-    return scriptBlockReason(joined(rest), deeper(check))
+    return scriptReason(joined(rest), check)
   }
   if (runs) return runnerReason(rest, deeper(check))
   if (tool === 'pnpm' && checkedCommand(commandName(sub.text))) {
@@ -1294,7 +1567,7 @@ function watchReason(args: Word[], check: Check): string | null {
   const rest = skipOptions(args, 'nq', ['interval'])
   if (typeof rest === 'string') return rest
   if (rest.some((word) => word.dynamic)) return dynamicCommand
-  return scriptBlockReason(joined(rest), deeper(check))
+  return scriptReason(joined(rest), check)
 }
 
 function trapReason(args: Word[], check: Check): string | null {
@@ -1304,7 +1577,7 @@ function trapReason(args: Word[], check: Check): string | null {
   const action = args[index]
   if (!action) return null
   if (action.dynamic) return dynamicCommand
-  return scriptBlockReason(action.text, deeper(check))
+  return scriptReason(action.text, check)
 }
 
 function emulateReason(args: Word[], check: Check): string | null {
@@ -1314,7 +1587,7 @@ function emulateReason(args: Word[], check: Check): string | null {
     if (!/^-[A-Za-z]*c$/.test(text)) continue
     const script = args[index + 1]
     if (script?.dynamic) return dynamicCommand
-    return script ? scriptBlockReason(script.text, deeper(check)) : null
+    return script ? scriptReason(script.text, check) : null
   }
   return null
 }
@@ -1324,7 +1597,7 @@ function mapfileReason(args: Word[], check: Check): string | null {
     if (args[index]!.text !== '-C') continue
     const callback = args[index + 1]
     if (callback?.dynamic) return dynamicCommand
-    const reason = callback ? scriptBlockReason(callback.text, deeper(check)) : null
+    const reason = callback ? scriptReason(callback.text, check) : null
     if (reason) return reason
   }
   return bindReason(args)
@@ -1342,10 +1615,16 @@ function printReason(args: Word[]): string | null {
   return null
 }
 
+const arithmeticTests = new Set(['-eq', '-ne', '-lt', '-le', '-gt', '-ge'])
+
 function conditionReason(args: Word[], check: Check): string | null {
   const close = args.findIndex((word) => !word.quoted && word.text === ']]')
-  for (const word of close === -1 ? args : args.slice(0, close)) {
-    const reason = arithmeticReason(word.text)
+  const operands = close === -1 ? args : args.slice(0, close)
+  for (const [index, word] of operands.entries()) {
+    const strict = [operands[index - 1], operands[index + 1]].some(
+      (near) => near !== undefined && arithmeticTests.has(near.text),
+    )
+    const reason = arithmeticReason(word.text, strict)
     if (reason) return reason
   }
   return close === -1 ? null : segmentBlockReason(args.slice(close + 1), deeper(check))
@@ -1358,12 +1637,27 @@ function sourceReason(args: Word[]): string | null {
   return readsStdin(file.text) ? stdinShell : null
 }
 
+function zstyleReason(args: Word[]): string | null {
+  const option = args[0]
+  if (option?.dynamic) return dynamicName
+  if (option?.text === '-e') return evalExpansion
+  if (/^-[sab]$/.test(option?.text ?? '')) return bindReason(args.slice(3, 4))
+  return option?.text === '-g' ? bindReason(args.slice(1, 2)) : null
+}
+
 type CommandCheck = (args: Word[], check: Check) => string | null
 
 const declare: CommandCheck = (args) => declarationReason(args, false)
-const bindFirst: CommandCheck = (args) => bindReason(args.slice(0, 1))
 const optionsReason: CommandCheck = (args) =>
   args.some((word) => globSubst(word.text)) ? evalExpansion : null
+const optionValue = (args: Word[], option: RegExp) => {
+  const at = args.findIndex((word) => option.test(word.text))
+  return at === -1 ? [] : args.slice(at + 1, at + 2)
+}
+const loopReason: CommandCheck = (args) => {
+  const end = args.findIndex((word) => word.text === 'in' && !word.quoted)
+  return bindReason(end === -1 ? args : args.slice(0, end))
+}
 
 const commandChecks = new Map<string, CommandCheck>([
   ['source', sourceReason],
@@ -1384,6 +1678,14 @@ const commandChecks = new Map<string, CommandCheck>([
         : null,
   ],
   [
+    'functions',
+    (args) =>
+      args.some((word) => /^[-+][A-Za-z]*[cM]/.test(word.text))
+        ? 'functions -c and -M are blocked. Run the command directly.'
+        : null,
+  ],
+  ['autoload', () => 'autoload is blocked. Run the command directly.'],
+  [
     'compgen',
     (args) =>
       args.some((word) => /^-[A-Za-z]*[CF]/.test(word.text))
@@ -1394,28 +1696,35 @@ const commandChecks = new Map<string, CommandCheck>([
   ['watch', watchReason],
   ['setopt', optionsReason],
   ['unsetopt', optionsReason],
-  ['set', optionsReason],
+  ['set', (args, check) => optionsReason(args, check) ?? bindReason(optionValue(args, /^[-+]A$/))],
   ['emulate', emulateReason],
   ['[[', conditionReason],
-  ['let', (args) => args.map((word) => arithmeticReason(word.text)).find(Boolean) ?? null],
+  ['let', (args) => args.map((word) => arithmeticReason(word.text, true)).find(Boolean) ?? null],
   ['printf', printReason],
   ['print', printReason],
   ['read', bindReason],
-  ['getopts', bindReason],
+  ['getopts', (args) => bindReason(args.slice(1, 2))],
   ['vared', bindReason],
+  ['strftime', (args) => bindReason(optionValue(args, /^-[A-Za-z]*s$/))],
+  ['zstyle', zstyleReason],
+  [
+    'zparseopts',
+    (args) =>
+      bindReason(args.flatMap((word) => word.text.split('=').map((text) => ({ ...word, text })))),
+  ],
   ['mapfile', mapfileReason],
   ['readarray', mapfileReason],
-  ['for', bindFirst],
-  ['select', bindFirst],
-  ['foreach', bindFirst],
-  ['export', declare],
-  ['declare', declare],
-  ['typeset', declare],
-  ['local', declare],
-  ['readonly', declare],
-  ['integer', declare],
-  ['float', declare],
-  ['unset', (args) => declarationReason(args, true)],
+  ['for', loopReason],
+  ['select', loopReason],
+  ['foreach', loopReason],
+  ...[...declarationBuiltins].map((name): [string, CommandCheck] => [name, declare]),
+  [
+    'unset',
+    (args) =>
+      args.some((word) => /^-[A-Za-z]*m/.test(word.text))
+        ? 'unset -m is blocked. Unset each variable by name.'
+        : declarationReason(args, true),
+  ],
   ['npx', runnerReason],
   ['pnpx', runnerReason],
   ['bunx', runnerReason],
@@ -1427,9 +1736,11 @@ const commandChecks = new Map<string, CommandCheck>([
 
 const checkedCommand = (name: string) =>
   name === 'git' ||
+  name.startsWith('git-') ||
   name === 'gh' ||
   name === 'eval' ||
   shells.has(name) ||
+  interpreters.test(name) ||
   wrappers.has(name) ||
   commandChecks.has(name)
 
@@ -1551,8 +1862,8 @@ function listOnlyReason(command: string, args: string[], rules: ListRules): stri
     if (arg.startsWith('--')) {
       const name = longName(arg)
       if (isPrefixOf(name, rules.long)) return `git ${command} --${name} is blocked`
-      if (listFlags.includes(name)) list = true
-      if (rules.values.includes(name) && !arg.includes('=')) index += 1
+      if (isPrefixOf(name, listFlags)) list = true
+      if (isPrefixOf(name, rules.values) && !arg.includes('=')) index += 1
     } else if (isShortCluster(arg)) {
       const flag = arg.split('').find((char) => rules.short.includes(char))
       if (flag) return `git ${command} -${flag} is blocked`
@@ -1590,8 +1901,8 @@ const fetchValues = [
   'submodule-prefix',
   'filter',
 ]
-const fetchBlocked = ['update-head-ok', 'upload-pack', 'stdin', 'prune-tags']
-const fetchDestinations = ['refs/remotes/', 'refs/prism/', 'refs/tags/']
+const fetchBlocked = ['update-head-ok', 'upload-pack', 'stdin', 'prune-tags', 'set-upstream']
+const fetchDestinations = ['refs/remotes/', 'refs/tags/']
 
 function refspecReason(spec: string): string | null {
   const body = spec.startsWith('+') ? spec.slice(1) : spec
@@ -1601,7 +1912,7 @@ function refspecReason(spec: string): string | null {
   const allowed = fetchDestinations.some((prefix) => destination.startsWith(prefix))
   return allowed && !destination.includes('..')
     ? null
-    : `git fetch into ${destination} is blocked: fetch into refs/remotes/, refs/prism/ or refs/tags/`
+    : `git fetch into ${destination} is blocked: fetch into refs/remotes/ or refs/tags/`
 }
 
 function fetchReason(args: string[]): string | null {
@@ -1621,8 +1932,13 @@ function fetchReason(args: string[]): string | null {
       }
       if (name === 'multiple') multiple = true
       const value =
-        split !== -1 ? arg.slice(split + 1) : fetchValues.includes(name) ? args[++index] : undefined
-      const reason = name === 'refmap' && value !== undefined ? refspecReason(value) : null
+        split !== -1
+          ? arg.slice(split + 1)
+          : isPrefixOf(name, fetchValues)
+            ? args[++index]
+            : undefined
+      const reason =
+        isPrefixOf(name, ['refmap']) && value !== undefined ? refspecReason(value) : null
       if (reason) return reason
     } else if (isShortCluster(arg)) {
       for (let at = 1; at < arg.length; at += 1) {
@@ -1687,9 +2003,9 @@ const gitArgChecks = new Map<string, (args: string[]) => string | null>([
   [
     'restore',
     (args) => {
-      const staged = args.some(
-        (arg) => arg === '--staged' || (isShortCluster(arg) && arg.includes('S')),
-      )
+      const staged =
+        longOptionIn(args, ['staged'], 2) ||
+        args.some((arg) => isShortCluster(arg) && arg.includes('S'))
       const worktree =
         longOptionIn(args, ['worktree']) ||
         args.some((arg) => isShortCluster(arg) && arg.includes('W'))
@@ -1810,11 +2126,9 @@ function functionReason(name: string, check: Check): string | null {
   check.checkedFunctions.add(name)
   let reason: string | null
   try {
-    reason =
-      scriptBlockReason(body, deeper(check)) ??
-      (gitWriteBackstop.test(body) ? gitWriteBlocked : null)
-  } catch {
-    reason = tooComplex
+    reason = scriptReason(body, check)
+  } catch (error) {
+    reason = error instanceof Refusal ? error.message : tooComplex
   }
   return reason && `${name} is a shell function that runs something PRism blocks: ${reason}`
 }
@@ -1830,19 +2144,28 @@ function shellContextReason(words: Word[], check: Check): string | null {
   return functionReason(head.text, check)
 }
 
-function finalReason(name: string, args: Word[], check: Check): string | null {
+function finalReason(name: string, args: Word[], check: Check, input: string[]): string | null {
   if (name === 'git') return gitBlockReason(args, check.readOnly)
+  if (name.startsWith('git-')) {
+    return gitBlockReason([{ ...newWord(), text: name.slice(4) }, ...args], check.readOnly)
+  }
   if (name === 'gh') {
     if (args.some((word) => word.dynamic)) return dynamicGh
     return ghBlockReason(args.map((word) => word.text))
   }
   if (name === 'eval') return 'eval is blocked. Run the command directly.'
   if (shells.has(name)) return shellBlockReason(name, args, check)
-  return commandChecks.get(name)?.(args, check) ?? null
+  const code = interpreters.test(name)
+    ? backstopReason([...args.map((word) => word.text), ...input].join('\n'))
+    : null
+  return code ?? commandChecks.get(name)?.(args, check) ?? null
 }
 
-function segmentBlockReason(segment: Word[], check: Check): string | null {
+function segmentBlockReason(segment: Word[], check: Check, input: string[] = []): string | null {
   if (check.depth > maxNesting) return tooDeep
+  if (segment.length === 0) return null
+  check.budget.left -= 1
+  if (check.budget.left < 0) return tooComplex
   let words = segment
   for (let steps = 0; steps <= 2 * maxNesting; steps += 1) {
     const head = words[0]
@@ -1862,7 +2185,7 @@ function segmentBlockReason(segment: Word[], check: Check): string | null {
     if (shellReason) return shellReason
     const name = commandName(head.text)
     const wrapper = wrappers.get(name)
-    if (!wrapper) return finalReason(name, words.slice(1), check)
+    if (!wrapper) return finalReason(name, words.slice(1), check, input)
     const next = wrapper(words.slice(1), check)
     if (typeof next === 'string') return next
     words = next
@@ -1872,7 +2195,8 @@ function segmentBlockReason(segment: Word[], check: Check): string | null {
 
 function tokensBlockReason(tokens: Token[], check: Check): string | null {
   if (check.depth > maxNesting) return tooDeep
-  for (const { words, all, bash } of splitSegments(tokens)) {
+  let piped: string[] = []
+  for (const { words, all, bash, input, pipe } of splitSegments(tokens)) {
     for (const word of all) {
       if (word.blocked) return word.blocked
       for (const inner of word.commands) {
@@ -1880,8 +2204,13 @@ function tokensBlockReason(tokens: Token[], check: Check): string | null {
         if (nestedReason) return nestedReason
       }
     }
-    const reason = segmentBlockReason(words, check) ?? (bash && segmentBlockReason(bash, check))
+    const stdin = [...piped, ...input]
+    const reason =
+      segmentBlockReason(words, check, stdin) ??
+      (bash && segmentBlockReason(bash, check, stdin)) ??
+      backstopReason(joined(words.filter((word) => !word.quoted)))
     if (reason) return reason
+    piped = pipe ? [...input, joined(words)] : []
   }
   return null
 }
@@ -1890,27 +2219,41 @@ function scriptBlockReason(script: string, check: Check): string | null {
   return tokensBlockReason(lex(script).tokens, check)
 }
 
-const gitWriteBackstop = /(^|[^\w-])git\s+(?:-\S+\s+)*(commit|push)\b/i
 const gitWriteBlocked = 'git commit/push is blocked'
+
+function backstopReason(text: string): string | null {
+  let afterGit = false
+  for (const token of text.split(/\s+/)) {
+    if (afterGit && /^(?:commit|push)\b/i.test(token)) return gitWriteBlocked
+    afterGit = (afterGit && token.startsWith('-')) || /(?:^|[^\w-])git$/i.test(token)
+  }
+  return null
+}
+
+function scriptReason(script: string, check: Check): string | null {
+  return scriptBlockReason(script, deeper(check)) ?? backstopReason(script)
+}
+
+const maxCommandLength = 64 * 1024
+const maxWork = 50_000
 
 export function commandBlockReason(
   command: string,
   options: { readOnly?: boolean; shell?: ShellContext } = {},
 ): string | null {
-  let reason: string | null
+  if (command.length > maxCommandLength) return tooLong
+  if (command.includes('\r')) return carriageReturn
   try {
-    reason = scriptBlockReason(command, {
+    return scriptBlockReason(command, {
       readOnly: options.readOnly ?? false,
       shell: options.shell,
       depth: 0,
       checkedFunctions: new Set(),
+      budget: { left: maxWork },
     })
-  } catch {
-    reason = tooComplex
+  } catch (error) {
+    return error instanceof Refusal ? error.message : tooComplex
   }
-  if (reason) return reason
-  if (gitWriteBackstop.test(command)) return gitWriteBlocked
-  return null
 }
 
 const editTools = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
