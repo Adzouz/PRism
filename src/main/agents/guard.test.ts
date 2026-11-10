@@ -447,6 +447,30 @@ const blockedCommands = [
   'python3 -c \'import os; os.system("git push")\'',
   "cat <<'EOF' | node\nrequire('child_process').execSync('git push')\nEOF",
   'gtimeout 10 git commit -am x',
+  'git fetch --recurse-submodules origin +main:main',
+  'git fetch --recurse-submodules . +HEAD:refs/prism/pr-7-checkout',
+  'git fetch --recurse-sub origin main:main',
+  'case x in a) ;; esac\\\n | git commit --allow-empty -qm wip',
+  'case x in a) ;; es\\\nac | git commit --allow-empty -qm wip',
+  'case $x in a',
+  "dash -c '[[ x || git reset --hard HEAD~1'",
+  "dash -c '(\\\n(git reset --hard HEAD~1))'",
+  "sh -c '[[ x || git reset --hard HEAD~1'",
+  "csh -c 'nice +5 git reset --hard'",
+  "tcsh -c 'alias g git; g reset --hard'",
+  "fish -c 'git reset --hard'",
+  'npm version patch',
+  'npm verison patch',
+  'pnpm version minor',
+  'yarn version --patch',
+  'yarn version',
+  'bun pm version patch',
+  'setopt braceccl',
+  'set -o BRACE_CCL',
+  "zsh -o braceccl -c 'true'",
+  '/opt/homebrew/opt/git/libexec/git-core/git-commit -qm x',
+  '/Library/Developer/CommandLineTools/usr/libexec/GIT-CORE/git-push origin',
+  'git-commit -qm x',
 ]
 
 const allowedCommands = [
@@ -603,6 +627,21 @@ const allowedCommands = [
   "zsh -o errexit -c 'pnpm test'",
   "bash -c 'pnpm build &>/dev/null'",
   'xcrun -sdk macosx --show-sdk-path',
+  'git fetch --recurse-submodules origin',
+  'git fetch --recurse-submodules=on-demand origin main',
+  'git fetch --recurse-submodules origin main:refs/remotes/origin/main',
+  'git fetch --no-recurse-submodules --depth 50 origin',
+  "sh -c 'echo $((1 + 2))'",
+  "bash -c '[[ -f package.json ]] && pnpm test'",
+  'npm version',
+  'npm version --json',
+  'npm version patch --no-git-tag-version',
+  'npm --no-git-tag-version version patch',
+  "printf 'usage: run --options=fast\\n'",
+  'url="https://example.com/api?options=1"; echo "$url"',
+  '[[ $arg == --options=* ]] && echo yes',
+  'cfg="aliases=off"',
+  './scripts/git-changed-files.sh',
 ]
 
 const editCommands = [
@@ -692,11 +731,14 @@ describe('command guard', () => {
     expect(commandBlockReason('git fetch origin main:main')).toContain('git fetch into main')
     expect(commandBlockReason("cat <<$'EOF'\nx\nEOF")).toContain('heredoc delimiter')
     expect(commandBlockReason('ls *(e:x:)')).toContain('glob qualifiers')
-    expect(commandBlockReason('git -C { push')).toContain('Quote it')
-    expect(commandBlockReason('echo $(cat <<EOF\nx\nEOF\n)')).toContain('Write tool')
+    expect(commandBlockReason('git -C { push')).toContain('"; }"')
+    expect(commandBlockReason('echo $(cat <<EOF\nx\nEOF\n)')).toContain('inline in single quotes')
     expect(commandBlockReason('x=GIT_DIR; unset $x')).toContain('literal name')
     expect(commandBlockReason("zsh -oerrexit -c 'true'")).toContain('-o errexit')
     expect(commandBlockReason('true\r')).toContain('carriage returns')
+    expect(commandBlockReason('npm version patch')).toContain('--no-git-tag-version')
+    expect(commandBlockReason("dash -c '[[ -f x ]]'")).toContain('bash -c')
+    expect(commandBlockReason("csh -c 'true'")).toContain('bash -c or zsh -c')
     expect(commandBlockReason("rg 'git push' src; node -e 'git push'")).toBe(
       'git commit/push is blocked',
     )
@@ -714,6 +756,9 @@ describe('command guard', () => {
     expect(commandBlockReason(`echo ${fill('-/git ')}`)).toBeNull()
     expect(commandBlockReason(`echo {${fill('}')}`)).toBeNull()
     expect(commandBlockReason(`let '${fill('a[')}'`)).toBeNull()
+    const nested = '${'.repeat(16 * 1024) + '}'.repeat(16 * 1024)
+    expect(commandBlockReason(`let '${nested}'`)).toContain('too complex')
+    expect(commandBlockReason(`[[ 1 -eq '${nested}' ]]`)).toContain('too complex')
     expect(performance.now() - start).toBeLessThan(500)
   })
 

@@ -374,20 +374,21 @@ const matchesAt = (pattern: RegExp, text: string, at: number) => {
 const tooComplex = 'This command is too complex for PRism to check. Split it into simpler commands.'
 const tooDeep = 'This command is nested too deeply for PRism to check'
 const tooLong =
-  'This command is longer than 64 KB. Write long content to a file with the Write tool, then run a short command.'
+  'This command is longer than 64 KB. Split it into shorter commands; in stages that can edit, write long content to a file with the Write tool first.'
 const carriageReturn =
   'Commands with carriage returns (\\r) are blocked: shells do not read them as line breaks. Use plain newlines.'
 const globPattern =
-  'PRism cannot check zsh glob qualifiers or patterns like *(…), (a|b), <1-9> or name=(…) here. Quote the pattern, or use [[ … ]], case or find.'
-const loneBrace = 'PRism cannot check a lone { or } outside a brace group. Quote it, like "{".'
+  "PRism cannot check zsh glob qualifiers or patterns like *(…), (a|b), <1-9> or name=(…) here. Quote the pattern, or use [[ … ]], case or find. In a heredoc body, quote the delimiter (<<'EOF')."
+const loneBrace =
+  'PRism cannot check a lone { or } outside a brace group. End a brace group with "; }", or quote the brace, like "{".'
 const substitutionHeredoc =
-  'Heredocs inside $(…), backticks or arrays are blocked. Write the content to a file with the Write tool first.'
+  "Heredocs inside $(…), backticks or arrays are blocked. Put the text inline in single quotes, or write it to a file first with a top-level heredoc (cat > file <<'EOF') and read the file."
 const casePattern =
   'PRism cannot check this case pattern. Use plain patterns like a|b*) without parentheses, ; or line breaks.'
 const conditionPattern =
   'PRism cannot check this [[ … ]] condition. Balance its parentheses, and keep ;, &, <, > and line breaks out of parenthesized patterns.'
 const evalExpansion =
-  'PRism cannot check expansions that run text as code, like ${(e)…}, ${~…} or globsubst. Use plain $VAR.'
+  'PRism cannot check expansions that run text as code, like ${(e)…}, ${~…}, globsubst or braceccl. Use plain $VAR.'
 const heredocDelimiter =
   "PRism cannot check this heredoc delimiter. Use a plain word like EOF or 'EOF'."
 
@@ -771,7 +772,11 @@ function lex(
     let at = src[from] === '(' ? from + 1 : from
     while (at < src.length && src[at] !== ')') {
       const char = src[at]!
-      if ('(;&\n'.includes(char) || ('<>'.includes(char) && src[at + 1] === '(')) {
+      if (
+        '(;&\n'.includes(char) ||
+        ('<>'.includes(char) && src[at + 1] === '(') ||
+        (char === '\\' && src[at + 1] === '\n')
+      ) {
         refuse(casePattern)
       }
       if (quoteChars.includes(char)) at = readPart(at, target)
@@ -780,10 +785,11 @@ function lex(
         at += 1
       }
     }
+    if (at >= src.length) refuse(casePattern)
     tokens.push(target)
     push('op', ')')
     cases[cases.length - 1] = 'body'
-    return Math.min(at + 1, src.length)
+    return at + 1
   }
 
   const readOperand = (from: number) => {
@@ -965,6 +971,12 @@ const envClear =
 const attachedOption = 'Pass shell options as separate words, like -o errexit.'
 const backgroundRedirect =
   'sh, dash and ksh read &> as & and >, which runs the rest as another command. Use >file 2>&1.'
+const unmodelledShell =
+  'PRism checks bash and zsh syntax only, so csh, tcsh and fish scripts are blocked. Use bash -c or zsh -c.'
+const posixSyntax =
+  'sh and dash may not have [[ … ]] or (( … )), so PRism cannot check them there. Use [ … ] and $(( … )), or bash -c.'
+const posixShells = new Set(['sh', 'dash'])
+const unmodelledShells = new Set(['csh', 'tcsh', 'fish'])
 
 const assignment = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/
 const shells = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh'])
@@ -1047,15 +1059,17 @@ const dynamicArithmeticAssignment = new RegExp(
 
 function arithmeticReason(text: string, strict = false): string | null {
   for (const match of text.matchAll(arithmeticAssignment)) {
-    const reason = variableReason((match[1] ?? match[2])!, 'bind')
+    const name = (match[1] ?? match[2])!
+    const reason = name.startsWith('GIT_') ? variableReason(name, 'bind') : null
     if (reason) return reason
   }
   if (!strict) return null
   let operands = text
-  let previous = ''
-  while (previous !== operands) {
-    previous = operands
-    operands = operands.replace(/\$\{[^{}]*\}/g, '$_')
+  for (let round = 0; ; round += 1) {
+    const next = operands.replace(/\$\{[^{}]*\}/g, '$_')
+    if (next === operands) break
+    if (round === maxNesting) return tooComplex
+    operands = next
   }
   return dynamicArithmeticAssignment.test(operands) ? dynamicName : null
 }
@@ -1399,15 +1413,18 @@ function shellBlockReason(shell: string, args: Word[], check: Check): string | n
   }
   for (const script of scripts) {
     if (script.dynamic) return dynamicCommand
-    if (shell === 'dash' && script.text.includes('((')) return tooComplex
-    if (shell !== 'bash' && shell !== 'zsh' && script.text.includes('&>')) return backgroundRedirect
+    if (unmodelledShells.has(shell)) return unmodelledShell
+    const text = script.text.replaceAll('\\\n', '')
+    if (posixShells.has(shell) && /\[\[|(?:^|[^$])\(\(/.test(text)) return posixSyntax
+    if (shell !== 'bash' && shell !== 'zsh' && text.includes('&>')) return backgroundRedirect
     const reason = scriptReason(script.text, check)
     if (reason) return reason
   }
   return null
 }
 
-const globSubst = (text: string) => text.toLowerCase().replaceAll('_', '').includes('globsubst')
+const globSubst = (text: string) =>
+  /globsubst|braceccl/.test(text.toLowerCase().replaceAll('_', ''))
 
 const runnerValues = new Set([
   '-p',
@@ -1512,6 +1529,23 @@ function npmCallReason(args: Word[], check: Check): string | null {
   return null
 }
 
+const versionBlocked =
+  'npm, pnpm, yarn and bun version commands commit and tag. Pass --no-git-tag-version, or edit package.json.'
+const noGitTag = /^--(?:no-git-tag-version|git-tag-version=(?:false|0))$/
+
+function versionArgs(tool: string, sub: string, rest: Word[]) {
+  if (tool === 'bun') return sub === 'pm' && rest[0]?.text === 'version' ? rest.slice(1) : null
+  return sub === 'version' || sub === 'verison' ? rest : null
+}
+
+function versionReason(tool: string, sub: string, rest: Word[], args: Word[]): string | null {
+  const bump = versionArgs(tool, sub, rest)
+  if (!bump) return null
+  if (bump.some((word) => word.dynamic)) return dynamicCommand
+  if (args.some((word) => noGitTag.test(word.text))) return null
+  return tool === 'yarn' || bump.some((word) => !word.text.startsWith('-')) ? versionBlocked : null
+}
+
 function packageReason(tool: string, args: Word[], check: Check): string | null {
   const call = tool === 'npm' ? npmCallReason(args, check) : null
   if (call) return call
@@ -1528,6 +1562,8 @@ function packageReason(tool: string, args: Word[], check: Check): string | null 
   const sub = args[index]
   if (!sub) return null
   const rest = args.slice(index + 1)
+  const version = versionReason(tool, sub.text, rest, args)
+  if (version) return version
   const runs = ['exec', 'x', 'dlx'].includes(sub.text)
   if ((tool === 'bun' && sub.text === 'exec') || (shellMode && runs)) {
     if (rest.some((word) => word.dynamic)) return dynamicCommand
@@ -1901,7 +1937,46 @@ const fetchValues = [
   'submodule-prefix',
   'filter',
 ]
+const fetchFlags = [
+  'verbose',
+  'quiet',
+  'all',
+  'set-upstream',
+  'append',
+  'atomic',
+  'force',
+  'multiple',
+  'tags',
+  'prefetch',
+  'prune',
+  'prune-tags',
+  'recurse-submodules',
+  'dry-run',
+  'porcelain',
+  'write-fetch-head',
+  'keep',
+  'update-head-ok',
+  'progress',
+  'unshallow',
+  'refetch',
+  'update-shallow',
+  'ipv4',
+  'ipv6',
+  'negotiate-only',
+  'auto-maintenance',
+  'auto-gc',
+  'show-forced-updates',
+  'write-commit-graph',
+  'stdin',
+]
+const fetchOptions = [...fetchFlags, ...fetchValues]
 const fetchBlocked = ['update-head-ok', 'upload-pack', 'stdin', 'prune-tags', 'set-upstream']
+
+function resolveOption(name: string, options: string[]) {
+  if (options.includes(name)) return name
+  const matches = options.filter((option) => option.startsWith(name))
+  return matches.length === 1 ? matches[0]! : null
+}
 const fetchDestinations = ['refs/remotes/', 'refs/tags/']
 
 function refspecReason(spec: string): string | null {
@@ -1930,15 +2005,15 @@ function fetchReason(args: string[]): string | null {
       if (name !== 'prune' && name.length >= 2 && isPrefixOf(name, fetchBlocked)) {
         return `git fetch --${name} is blocked`
       }
-      if (name === 'multiple') multiple = true
+      const option = resolveOption(name, fetchOptions)
+      if (option === 'multiple') multiple = true
       const value =
         split !== -1
           ? arg.slice(split + 1)
-          : isPrefixOf(name, fetchValues)
+          : option !== null && fetchValues.includes(option)
             ? args[++index]
             : undefined
-      const reason =
-        isPrefixOf(name, ['refmap']) && value !== undefined ? refspecReason(value) : null
+      const reason = option === 'refmap' && value !== undefined ? refspecReason(value) : null
       if (reason) return reason
     } else if (isShortCluster(arg)) {
       for (let at = 1; at < arg.length; at += 1) {
@@ -2144,11 +2219,21 @@ function shellContextReason(words: Word[], check: Check): string | null {
   return functionReason(head.text, check)
 }
 
-function finalReason(name: string, args: Word[], check: Check, input: string[]): string | null {
+const gitProgram = (name: string, path: string) =>
+  name.startsWith('git-') && (!path.includes('/') || path.toLowerCase().includes('/git-core/'))
+    ? name.slice(4)
+    : null
+
+function finalReason(
+  name: string,
+  args: Word[],
+  check: Check,
+  input: string[],
+  path = name,
+): string | null {
   if (name === 'git') return gitBlockReason(args, check.readOnly)
-  if (name.startsWith('git-')) {
-    return gitBlockReason([{ ...newWord(), text: name.slice(4) }, ...args], check.readOnly)
-  }
+  const sub = gitProgram(name, path)
+  if (sub !== null) return gitBlockReason([{ ...newWord(), text: sub }, ...args], check.readOnly)
   if (name === 'gh') {
     if (args.some((word) => word.dynamic)) return dynamicGh
     return ghBlockReason(args.map((word) => word.text))
@@ -2185,7 +2270,7 @@ function segmentBlockReason(segment: Word[], check: Check, input: string[] = [])
     if (shellReason) return shellReason
     const name = commandName(head.text)
     const wrapper = wrappers.get(name)
-    if (!wrapper) return finalReason(name, words.slice(1), check, input)
+    if (!wrapper) return finalReason(name, words.slice(1), check, input, head.text)
     const next = wrapper(words.slice(1), check)
     if (typeof next === 'string') return next
     words = next
