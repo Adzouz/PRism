@@ -382,7 +382,8 @@ const globPattern =
 const loneBrace =
   'PRism cannot check a lone { or } outside a brace group. End a brace group with "; }", or quote the brace, like "{".'
 const substitutionHeredoc =
-  "Heredocs inside $(…), backticks or arrays are blocked. Put the text inline in single quotes, or write it to a file first with a top-level heredoc (cat > file <<'EOF') and read the file."
+  "Heredocs inside $(…), backticks or arrays are blocked. Pass the text inline in single quotes, like -f query='…'. For a command that reads a file, write the file first with a top-level heredoc (cat > file <<'EOF')."
+const braceSubstitution = 'PRism cannot check ${ …; } command substitutions. Use $(…).'
 const casePattern =
   'PRism cannot check this case pattern. Use plain patterns like a|b*) without parentheses, ; or line breaks.'
 const conditionPattern =
@@ -524,6 +525,7 @@ function readParam(
   const scratch = newWord()
   let ambiguous = false
   let index = from
+  if (/[ \t\n|]/.test(src[skipContinuations(src, from)] ?? '')) target.blocked ??= braceSubstitution
   while (index < src.length && src[index] !== '}') {
     const char = src[index]!
     if (char === '\\') index += 2
@@ -770,6 +772,7 @@ function lex(
   const readPattern = (from: number) => {
     const target: Word = { ...newWord(), inert: true }
     let at = src[from] === '(' ? from + 1 : from
+    if (src.startsWith('esac', at)) refuse(casePattern)
     while (at < src.length && src[at] !== ')') {
       const char = src[at]!
       if (
@@ -972,10 +975,15 @@ const attachedOption = 'Pass shell options as separate words, like -o errexit.'
 const backgroundRedirect =
   'sh, dash and ksh read &> as & and >, which runs the rest as another command. Use >file 2>&1.'
 const unmodelledShell =
-  'PRism checks bash and zsh syntax only, so csh, tcsh and fish scripts are blocked. Use bash -c or zsh -c.'
+  'PRism checks bash and zsh syntax only, so csh, tcsh and fish are blocked. Use bash -c or zsh -c.'
 const posixSyntax =
   'sh and dash may not have [[ … ]] or (( … )), so PRism cannot check them there. Use [ … ] and $(( … )), or bash -c.'
-const posixShells = new Set(['sh', 'dash'])
+type Dialect = 'posix' | 'ksh'
+const dialects = new Map<string, Dialect>([
+  ['sh', 'posix'],
+  ['dash', 'posix'],
+  ['ksh', 'ksh'],
+])
 const unmodelledShells = new Set(['csh', 'tcsh', 'fish'])
 
 const assignment = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/
@@ -1002,6 +1010,7 @@ interface Check {
   depth: number
   checkedFunctions: Set<string>
   budget: { left: number }
+  dialect?: Dialect
 }
 
 const deeper = (check: Check): Check => ({ ...check, depth: check.depth + 1 })
@@ -1373,6 +1382,7 @@ const wrappers = new Map<string, Wrapper>([
 ])
 
 function shellBlockReason(shell: string, args: Word[], check: Check): string | null {
+  if (unmodelledShells.has(shell)) return unmodelledShell
   const scripts: Word[] = []
   let command = false
   let stdin = false
@@ -1413,11 +1423,7 @@ function shellBlockReason(shell: string, args: Word[], check: Check): string | n
   }
   for (const script of scripts) {
     if (script.dynamic) return dynamicCommand
-    if (unmodelledShells.has(shell)) return unmodelledShell
-    const text = script.text.replaceAll('\\\n', '')
-    if (posixShells.has(shell) && /\[\[|(?:^|[^$])\(\(/.test(text)) return posixSyntax
-    if (shell !== 'bash' && shell !== 'zsh' && text.includes('&>')) return backgroundRedirect
-    const reason = scriptReason(script.text, check)
+    const reason = scriptReason(script.text, { ...check, dialect: dialects.get(shell) })
     if (reason) return reason
   }
   return null
@@ -1531,38 +1537,70 @@ function npmCallReason(args: Word[], check: Check): string | null {
 
 const versionBlocked =
   'npm, pnpm, yarn and bun version commands commit and tag. Pass --no-git-tag-version, or edit package.json.'
+const gitTagFlag = /^--(?:no-)?git-tag-version(?:=|$)/
 const noGitTag = /^--(?:no-git-tag-version|git-tag-version=(?:false|0))$/
+
+const isVersionCommand = (tool: string, sub: string) =>
+  sub === 'version' ||
+  sub === 'verison' ||
+  (tool === 'npm' && sub.length >= 4 && ['version', 'verison'].some((name) => name.startsWith(sub)))
 
 function versionArgs(tool: string, sub: string, rest: Word[]) {
   if (tool === 'bun') return sub === 'pm' && rest[0]?.text === 'version' ? rest.slice(1) : null
-  return sub === 'version' || sub === 'verison' ? rest : null
+  return isVersionCommand(tool, sub) ? rest : null
 }
 
 function versionReason(tool: string, sub: string, rest: Word[], args: Word[]): string | null {
   const bump = versionArgs(tool, sub, rest)
   if (!bump) return null
   if (bump.some((word) => word.dynamic)) return dynamicCommand
-  if (args.some((word) => noGitTag.test(word.text))) return null
+  const tagFlag = args.findLast((word) => gitTagFlag.test(word.text))
+  if (tagFlag && noGitTag.test(tagFlag.text)) return null
   return tool === 'yarn' || bump.some((word) => !word.text.startsWith('-')) ? versionBlocked : null
 }
 
 function packageReason(tool: string, args: Word[], check: Check): string | null {
   const call = tool === 'npm' ? npmCallReason(args, check) : null
-  if (call) return call
+  return call ?? packageCommandReason(tool, args, args, false, check)
+}
+
+function packageCommandReason(
+  tool: string,
+  args: Word[],
+  all: Word[],
+  shellMode: boolean,
+  check: Check,
+): string | null {
+  if (check.depth > maxNesting) return tooDeep
   let index = 0
-  let shellMode = false
+  let unknown = false
   while (index < args.length) {
     const word = args[index]!
     if (word.dynamic) return dynamicCommand
     const text = word.text
     if (!text.startsWith('-') || text === '-') break
     if (text === '-c' || text === '--shell-mode') shellMode = true
-    index += !text.includes('=') && runnerValues.has(text) ? 2 : 1
+    const value = !text.includes('=') && runnerValues.has(text)
+    unknown = !text.includes('=') && !value && !runnerFlags.has(text)
+    index += value ? 2 : 1
   }
   const sub = args[index]
   if (!sub) return null
   const rest = args.slice(index + 1)
-  const version = versionReason(tool, sub.text, rest, args)
+  const reason = subcommandReason(tool, sub, rest, all, shellMode, check)
+  if (reason || !unknown) return reason
+  return packageCommandReason(tool, rest, all, shellMode, deeper(check))
+}
+
+function subcommandReason(
+  tool: string,
+  sub: Word,
+  rest: Word[],
+  all: Word[],
+  shellMode: boolean,
+  check: Check,
+): string | null {
+  const version = versionReason(tool, sub.text, rest, all)
   if (version) return version
   const runs = ['exec', 'x', 'dlx'].includes(sub.text)
   if ((tool === 'bun' && sub.text === 'exec') || (shellMode && runs)) {
@@ -1571,7 +1609,7 @@ function packageReason(tool: string, args: Word[], check: Check): string | null 
   }
   if (runs) return runnerReason(rest, deeper(check))
   if (tool === 'pnpm' && checkedCommand(commandName(sub.text))) {
-    return segmentBlockReason(args.slice(index), deeper(check))
+    return segmentBlockReason([sub, ...rest], deeper(check))
   }
   return null
 }
@@ -2007,6 +2045,9 @@ function fetchReason(args: string[]): string | null {
       }
       const option = resolveOption(name, fetchOptions)
       if (option === 'multiple') multiple = true
+      if (name.startsWith('no-') && resolveOption(name.slice(3), fetchFlags) === 'multiple') {
+        multiple = false
+      }
       const value =
         split !== -1
           ? arg.slice(split + 1)
@@ -2165,7 +2206,7 @@ function gitBlockReason(args: Word[], readOnly: boolean): string | null {
   if (!subcommand) return null
   const sub = gitSubcommandAliases.get(subcommand.text) ?? subcommand.text
   if (!gitReadCommands.has(sub) && !gitEditCommands.has(sub)) {
-    return `git ${sub} is blocked: agents never commit, push or rewrite history`
+    return `git ${sub} is blocked: PRism only allows git commands that read or stage changes (agents never commit, push or rewrite history)`
   }
   if (readOnly && gitEditCommands.has(sub)) return `git ${sub} is not allowed in a read-only stage`
   const check = gitArgChecks.get(sub)
@@ -2219,10 +2260,21 @@ function shellContextReason(words: Word[], check: Check): string | null {
   return functionReason(head.text, check)
 }
 
-const gitProgram = (name: string, path: string) =>
-  name.startsWith('git-') && (!path.includes('/') || path.toLowerCase().includes('/git-core/'))
-    ? name.slice(4)
-    : null
+const gitServerPrograms = new Set([
+  'receive-pack',
+  'upload-pack',
+  'upload-archive',
+  'shell',
+  'cvsserver',
+])
+
+function gitProgram(name: string, path: string) {
+  if (!name.startsWith('git-')) return null
+  const sub = name.slice(4)
+  const mapped =
+    !path.includes('/') || /(?:^|\/)git-core\//i.test(path) || gitServerPrograms.has(sub)
+  return mapped ? sub : null
+}
 
 function finalReason(
   name: string,
@@ -2278,8 +2330,22 @@ function segmentBlockReason(segment: Word[], check: Check, input: string[] = [])
   return tooComplex
 }
 
+function dialectReason(tokens: Token[], dialect: Dialect): string | null {
+  for (const token of tokens) {
+    if (token.kind === 'redirect' && token.text.startsWith('&>')) return backgroundRedirect
+    if (dialect !== 'posix') continue
+    if (token.kind === 'op' && token.text === '))') return posixSyntax
+    if (token.kind === 'word' && token.start && !token.quoted && token.text === '[[') {
+      return posixSyntax
+    }
+  }
+  return null
+}
+
 function tokensBlockReason(tokens: Token[], check: Check): string | null {
   if (check.depth > maxNesting) return tooDeep
+  const dialect = check.dialect ? dialectReason(tokens, check.dialect) : null
+  if (dialect) return dialect
   let piped: string[] = []
   for (const { words, all, bash, input, pipe } of splitSegments(tokens)) {
     for (const word of all) {

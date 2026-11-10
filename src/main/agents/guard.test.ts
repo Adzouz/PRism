@@ -471,6 +471,22 @@ const blockedCommands = [
   '/opt/homebrew/opt/git/libexec/git-core/git-commit -qm x',
   '/Library/Developer/CommandLineTools/usr/libexec/GIT-CORE/git-push origin',
   'git-commit -qm x',
+  'git-core/git-commit -qm x',
+  '/usr/bin/git-receive-pack .',
+  'npm -m release-%s version patch',
+  'npm --preid beta version prerelease',
+  'npm --tag-version-prefix v version patch',
+  'npm vers patch',
+  'npm veri patch',
+  'npm version patch --no-git-tag-version --git-tag-version',
+  'git fetch --multiple --no-multiple . +feature:refs/heads/hijack',
+  '( { case x in a) ;; esac} | git commit --allow-empty -qm wip )',
+  'x=${ git reset --hard HEAD~1; }',
+  'echo ${| git reset --hard HEAD~1; }',
+  "ksh -c 'x=${ git reset --hard HEAD~1; }'",
+  "ksh -c 'true &>/dev/null gh pr merge 14'",
+  "dash -c 'echo $([[ -f x ]] && echo y)'",
+  "fish -C 'git reset --hard' -c true",
 ]
 
 const allowedCommands = [
@@ -642,6 +658,16 @@ const allowedCommands = [
   '[[ $arg == --options=* ]] && echo yes',
   'cfg="aliases=off"',
   './scripts/git-changed-files.sh',
+  `git ls-files '*.ts' | xargs sh -c 'grep -n "^[[:space:]]*console\\.log" "$@"' _`,
+  `sh -c 'sed -E "s/[[:space:]]+$//" file.txt'`,
+  `find src -name '*.ts' -exec sh -c 'grep -l "[[:upper:]]" "$1"' _ {} \\;`,
+  "sh -c 'echo $(((1+2)*3))'",
+  `sh -c 'echo "a &> b"'`,
+  "ksh -c '[[ -f package.json ]] && echo ok'",
+  'npm view react version',
+  'npm --workspace app run build',
+  'npm version patch --git-tag-version --no-git-tag-version',
+  'git fetch --no-multiple origin main',
 ]
 
 const editCommands = [
@@ -739,6 +765,10 @@ describe('command guard', () => {
     expect(commandBlockReason('npm version patch')).toContain('--no-git-tag-version')
     expect(commandBlockReason("dash -c '[[ -f x ]]'")).toContain('bash -c')
     expect(commandBlockReason("csh -c 'true'")).toContain('bash -c or zsh -c')
+    expect(commandBlockReason('git-cliff --latest')).toContain(
+      'git cliff is blocked: PRism only allows git commands that read or stage changes',
+    )
+    expect(commandBlockReason('x=${ git status; }')).toContain('Use $(…)')
     expect(commandBlockReason("rg 'git push' src; node -e 'git push'")).toBe(
       'git commit/push is blocked',
     )
@@ -931,7 +961,7 @@ describe('shell context', () => {
   it('checks the body of user functions', () => {
     expect(commandBlockReason('GIT_CONFIG_COUNT=0 gp --no-verify', { shell })).not.toBeNull()
     expect(commandBlockReason('gcm wip', { shell })).toBe(
-      'gcm is a shell function that runs something PRism blocks: git commit is blocked: agents never commit, push or rewrite history',
+      'gcm is a shell function that runs something PRism blocks: git commit is blocked: PRism only allows git commands that read or stage changes (agents never commit, push or rewrite history)',
     )
     expect(commandBlockReason("'gcm' wip", { shell })).not.toBeNull()
     expect(commandBlockReason('\\gcm wip', { shell })).not.toBeNull()
