@@ -121,6 +121,9 @@ void app.whenReady().then(() => {
     'theme:isDark': () => nativeTheme.shouldUseDarkColors,
     ...onboardingHandlers(ctx, {
       beforeRepoRemoved: (repoId) => runner?.cancelForRepo(repoId),
+      afterRepoAdded: () => {
+        if (isOnboarded(ctx)) void sync.syncNow(true)
+      },
       beforeReset: () => runner?.cancelAll(),
     }),
     ...boardHandlers(ctx, api, sync, prsChanged),

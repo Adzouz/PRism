@@ -311,8 +311,8 @@ export function PrDrawer() {
   return (
     <DialogPrimitive.Root open={pr !== null} onOpenChange={(open) => !open && openPr(null)}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/30 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
-        <DialogPrimitive.Content className="fixed inset-y-3 right-3 z-50 flex w-[min(620px,calc(100vw-48px))] flex-col rounded-2xl border bg-background shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-right-8 data-[state=open]:fade-in-0">
+        <DialogPrimitive.Overlay className="no-drag fixed inset-0 z-40 bg-black/30 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Content className="no-drag fixed inset-y-3 right-3 z-50 flex w-[min(620px,calc(100vw-48px))] flex-col rounded-2xl border bg-background shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-right-8 data-[state=open]:fade-in-0">
           {pr && (
             <>
               <header className="space-y-3 border-b px-6 pt-6 pb-4">

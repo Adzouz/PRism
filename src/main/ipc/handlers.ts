@@ -63,6 +63,7 @@ async function pick(options: Electron.OpenDialogOptions) {
 
 export type LifecycleHooks = {
   beforeRepoRemoved?: (repoId: number) => void
+  afterRepoAdded?: (repoId: number) => void
   beforeReset?: () => void
 }
 
@@ -96,7 +97,11 @@ export function onboardingHandlers(
     'agents:getConfig': () => getAgentConfig(ctx),
     'agents:setConfig': (value) => setAgentConfig(ctx, value),
     'repos:list': () => listRepos(ctx),
-    'repos:add': (slug) => addRepo(ctx, slug),
+    'repos:add': async (slug) => {
+      const repo = await addRepo(ctx, slug)
+      hooks.afterRepoAdded?.(repo.id)
+      return repo
+    },
     'repos:remove': (id) => {
       hooks.beforeRepoRemoved?.(id)
       return removeRepo(ctx, id)

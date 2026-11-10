@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -40,6 +40,7 @@ import {
   useSetRepoPostMode,
   useSkillsChanged,
 } from '@/lib/api'
+import { useRepoFocus } from '@/lib/repo-focus'
 import { cn } from '@/lib/utils'
 
 function greeting() {
@@ -170,15 +171,10 @@ function PostModePicker({
       value={value ?? 'default'}
       onValueChange={(next) => next && onChange(next === 'default' ? null : (next as PostMode))}
       aria-label={label}
-      className="bg-secondary/50"
     >
-      {inherit && (
-        <ToggleGroupItem value="default" className="h-7 px-2.5 text-xs">
-          Default ({inherit})
-        </ToggleGroupItem>
-      )}
+      {inherit && <ToggleGroupItem value="default">Default ({inherit})</ToggleGroupItem>}
       {(['draft', 'submit'] as const).map((mode) => (
-        <ToggleGroupItem key={mode} value={mode} className="h-7 px-2.5 text-xs">
+        <ToggleGroupItem key={mode} value={mode}>
           {postModeLabels[mode]}
         </ToggleGroupItem>
       ))}
@@ -190,12 +186,10 @@ function PostingOptions() {
   const { data: mode } = usePostMode()
   const save = useSetPostMode()
   return (
-    <div className="flex max-w-2xl flex-wrap items-center justify-between gap-4 rounded-2xl bg-surface p-5">
+    <div className="flex max-w-2xl items-center justify-between gap-4 rounded-2xl bg-surface p-5">
       <div>
         <p className="text-base font-medium">Post reviews</p>
-        <p className="text-sm text-muted-foreground">
-          How PRism posts a review after you confirm it. Each repository can override this.
-        </p>
+        <p className="text-sm text-muted-foreground">Each repository can override it.</p>
       </div>
       {mode && (
         <PostModePicker
@@ -253,9 +247,24 @@ export function SettingsPage() {
   })
 
   useSkillsChanged()
-  const { data: repos = [] } = useRepos()
+  const { data: repos = [], isSuccess: reposLoaded } = useRepos()
   const { data: status } = useConfigStatus()
-  const [open, setOpen] = useState<number | null>(null)
+  const open = useRepoFocus((state) => state.openRepoId)
+  const setOpen = useRepoFocus((state) => state.setOpen)
+  const reveal = useRepoFocus((state) => state.reveal)
+  const scrollTo = useRepoFocus((state) => state.scrollTo)
+  const scrolled = useRepoFocus((state) => state.scrolled)
+
+  useEffect(() => {
+    if (scrollTo === null || !reposLoaded) return
+    const frame = requestAnimationFrame(() => {
+      document
+        .getElementById(`repo-${scrollTo}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      scrolled()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [scrollTo, reposLoaded, scrolled])
 
   return (
     <Page eyebrow="Preferences" title="Settings">
@@ -271,12 +280,12 @@ export function SettingsPage() {
       </Section>
       <Section title="Repositories">
         <div className="max-w-3xl space-y-3">
-          <StepRepos />
+          <StepRepos onAdded={reveal} />
           {repos.map((repo) => {
             const issues = status?.issues.filter((issue) => issue.repoId === repo.id) ?? []
             const expanded = open === repo.id
             return (
-              <div key={repo.id} className="rounded-2xl border">
+              <div key={repo.id} id={`repo-${repo.id}`} className="scroll-mt-6 rounded-2xl border">
                 <button
                   type="button"
                   aria-expanded={expanded}

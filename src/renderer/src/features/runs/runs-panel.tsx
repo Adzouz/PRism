@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import {
   Bot,
   CircleCheck,
@@ -8,6 +9,7 @@ import {
   Loader2,
   Play,
   Send,
+  Settings,
   Square,
   SquareTerminal,
   X,
@@ -32,6 +34,7 @@ import {
   runStageFor,
   useApps,
   useCancelRun,
+  useConfigStatus,
   useDismissRun,
   useFollowUp,
   usePrRuns,
@@ -40,6 +43,7 @@ import {
   useRunFindings,
   useStartRun,
 } from '@/lib/api'
+import { useRepoFocus } from '@/lib/repo-focus'
 import { cn } from '@/lib/utils'
 import { age, useBoardStore, useNow } from '../board/model'
 import {
@@ -425,6 +429,37 @@ function RunPicker({
   )
 }
 
+function SetupNeeded({ pr }: { pr: BoardPr }) {
+  const { data: status } = useConfigStatus()
+  const reveal = useRepoFocus((state) => state.reveal)
+  const openPr = useBoardStore((state) => state.openPr)
+  const navigate = useNavigate()
+  const issues = status?.issues.filter((issue) => issue.repoId === pr.repoId) ?? []
+  if (issues.length === 0) return null
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-warning/40 bg-warning/5 p-3">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium">{pr.repo} is not fully set up</p>
+        <p className="text-xs text-muted-foreground">
+          {issues[0]!.message}
+          {issues.length > 1 && ` and ${issues.length - 1} more`}
+        </p>
+      </div>
+      <Button
+        size="sm"
+        onClick={() => {
+          reveal(pr.repoId)
+          openPr(null)
+          void navigate({ to: '/settings' })
+        }}
+      >
+        <Settings />
+        Set up
+      </Button>
+    </div>
+  )
+}
+
 export function RunsPanel({ pr }: { pr: BoardPr }) {
   const { data: runs, isLoading, error } = usePrRuns(pr.id)
   const start = useStartRun()
@@ -454,6 +489,7 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
 
   return (
     <div className="space-y-5">
+      <SetupNeeded pr={pr} />
       {isOpen && (
         <div className="space-y-3">
           <ToggleGroup

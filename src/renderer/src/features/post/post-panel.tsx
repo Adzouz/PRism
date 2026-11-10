@@ -280,10 +280,9 @@ function ReviewSection({ gate, run }: { gate: PostGate; run: Run }) {
             value && update.mutate({ runId: gate.runId, mode: value as PostMode })
           }
           aria-label="Post mode"
-          className="bg-secondary/50"
         >
           {modes.map((mode) => (
-            <ToggleGroupItem key={mode} value={mode} className="h-7 px-2.5 text-xs">
+            <ToggleGroupItem key={mode} value={mode}>
               {postModeLabels[mode]}
             </ToggleGroupItem>
           ))}
@@ -302,14 +301,12 @@ function ReviewSection({ gate, run }: { gate: PostGate; run: Run }) {
               value && update.mutate({ runId: gate.runId, event: value as Verdict })
             }
             aria-label="Review status"
-            className="bg-secondary/50"
           >
             {events.map((event) => (
               <ToggleGroupItem
                 key={event}
                 value={event}
                 disabled={!gate.allowedEvents.includes(event)}
-                className="h-7 px-2.5 text-xs"
               >
                 {verdictLabel[event]}
               </ToggleGroupItem>
