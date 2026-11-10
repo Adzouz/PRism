@@ -307,6 +307,8 @@ export function createRunner(deps: RunnerDeps) {
       worktreePath: worktree.path,
       reviewedHeadOid: worktree.headOid,
       reviewedBaseOid: row.baseOid,
+      pushRemote: worktree.remote,
+      pushRef: pr.headRef,
     })
     return {
       cwd: worktree.path,

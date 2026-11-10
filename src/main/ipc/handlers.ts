@@ -47,6 +47,7 @@ import {
   syncSource,
 } from '../services/sources'
 import type { BoardChannel } from './board-handlers'
+import type { GateChannel } from './gate-handlers'
 import type { RunChannel } from './run-handlers'
 import type { registerIpc } from './register'
 
@@ -76,6 +77,7 @@ export function onboardingHandlers(
   | 'theme:isDark'
   | BoardChannel
   | RunChannel
+  | GateChannel
 > {
   return {
     'dialog:pickFolder': ({ title, defaultPath }) =>

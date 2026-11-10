@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull, lte, ne, or } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lte, ne, or } from 'drizzle-orm'
 import { z } from 'zod'
 import {
   activeRunStatuses,
@@ -14,6 +14,7 @@ import {
   type ChangesReport,
   type DraftReply,
   type Finding,
+  type FindingPatch,
   type ReviewReport,
   type Run,
   type RunEvent,
@@ -23,7 +24,7 @@ import {
 } from '@shared/domain'
 import { redact, redactText } from '../agents/redact'
 import type { SessionTotals } from '../agents/types'
-import { asks, findings, runEvents, runs } from '../db/schema'
+import { asks, findings, postGates, runEvents, runs } from '../db/schema'
 import type { Ctx } from './context'
 
 type RunRow = typeof runs.$inferSelect
@@ -291,7 +292,30 @@ const toFinding = (row: FindingRow): Finding => ({
   body: row.body,
   suggestion: row.suggestion,
   status: row.status,
+  included: row.included,
+  editedBody: row.editedBody,
+  posted: row.ghCommentId !== null,
 })
+
+export function updateFinding(ctx: Ctx, patch: FindingPatch): Finding {
+  const row = ctx.db.select().from(findings).where(eq(findings.id, patch.id)).get()
+  if (!row) throw new Error(`Finding ${patch.id} not found`)
+  if (row.ghCommentId) throw new Error('This finding is already posted on GitHub')
+  const set: Partial<FindingRow> = {}
+  if (patch.included !== undefined) set.included = patch.included
+  if (patch.editedBody !== undefined) {
+    const text = patch.editedBody?.trim() ?? ''
+    set.editedBody = text ? patch.editedBody : null
+  }
+  if (Object.keys(set).length > 0) {
+    ctx.db.update(findings).set(set).where(eq(findings.id, patch.id)).run()
+  }
+  return toFinding({ ...row, ...set })
+}
+
+export function linkFinding(ctx: Ctx, id: number, ghCommentId: string) {
+  ctx.db.update(findings).set({ ghCommentId }).where(eq(findings.id, id)).run()
+}
 
 export function listFindings(ctx: Ctx, runId: number): Finding[] {
   return ctx.db
@@ -381,12 +405,12 @@ export function answerAsk(ctx: Ctx, askId: number, answer: string) {
 
 export function runStage(
   tab: BoardTab,
-  run: Pick<BoardRun, 'stage' | 'status'> & { endedAt: number | null },
+  run: Pick<BoardRun, 'stage' | 'status'> & { endedAt: number | null; gateClosed?: boolean },
   pr: { state: string; myReviewAt: number | null },
 ): BoardStage | null {
   if (run.status === 'needs_you') return 'needs-you'
   const active = run.status === 'queued' || run.status === 'preparing' || run.status === 'running'
-  if (!active && pr.state !== 'OPEN') return null
+  if (!active && (pr.state !== 'OPEN' || run.gateClosed)) return null
   if (tab === 'reviews' && reviewStages.has(run.stage)) {
     if (active) return 'reviewing'
     if (run.status === 'done' && (pr.myReviewAt ?? 0) < (run.endedAt ?? 0)) return 'verdict-ready'
@@ -401,6 +425,7 @@ export function runStage(
 export type BoardRunInfo = Omit<BoardRun, 'stale'> & {
   endedAt: number | null
   reviewedHeadOid: string | null
+  gateClosed: boolean
 }
 
 export type PrRuns = {
@@ -463,7 +488,20 @@ export function latestBoardRuns(ctx: Ctx, onlyPrId?: number) {
   }
   const counts = new Map<number, number>()
   const verdicts = new Map<number, ReviewReport['verdict']>()
+  const closed = new Set<number>()
   if (used.size > 0) {
+    for (const item of ctx.db
+      .select({ runId: postGates.runId })
+      .from(postGates)
+      .where(
+        and(
+          inArray(postGates.runId, [...used]),
+          or(isNotNull(postGates.postedAt), isNotNull(postGates.skippedAt)),
+        ),
+      )
+      .all()) {
+      closed.add(item.runId)
+    }
     for (const item of ctx.db
       .select({ runId: findings.runId })
       .from(findings)
@@ -493,6 +531,7 @@ export function latestBoardRuns(ctx: Ctx, onlyPrId?: number) {
           ask: row.status === 'needs_you' ? pendingAsk(ctx, row.id) : null,
           endedAt: row.endedAt,
           reviewedHeadOid: row.reviewedHeadOid,
+          gateClosed: closed.has(row.id),
         }
       : null
   const result = new Map<number, PrRuns>()

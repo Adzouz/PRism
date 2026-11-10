@@ -65,6 +65,16 @@ export const ipcChannels = [
   'prs:threads',
   'apps:list',
   'apps:setPreferred',
+  'gates:get',
+  'gates:update',
+  'gates:commit',
+  'gates:push',
+  'gates:post',
+  'gates:skip',
+  'findings:update',
+  'settings:getPostMode',
+  'settings:setPostMode',
+  'repos:setPostMode',
 ] as const
 
 export type IpcChannel = (typeof ipcChannels)[number]

@@ -130,6 +130,9 @@ function fakeApi(fixture: () => Fixture) {
       return { data, errors }
     },
     probe: async () => ({ unchanged: false, commit: () => {} }),
+    get: async () => {
+      throw new Error('unexpected REST call')
+    },
     rate: () => null,
   }
   return { api, calls }

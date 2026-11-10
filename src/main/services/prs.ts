@@ -56,6 +56,7 @@ const boardRunOf = (run: BoardRunInfo, headOid: string | null): BoardPr['run'] =
   findings: run.findings,
   ask: run.ask,
   stale: isStaleVerdict(run, headOid),
+  gateClosed: run.gateClosed,
 })
 
 function toBoardPr({ pr, flags, owner, name }: BoardRow, set?: PrRuns): BoardPr {

@@ -11,6 +11,7 @@ export type GithubApi = {
     variables?: Record<string, unknown>,
   ) => Promise<{ data: T; errors: GraphqlError[] }>
   probe: (path: string) => Promise<{ unchanged: boolean; commit: () => void }>
+  get: <T>(path: string) => Promise<T>
   rate: () => RateInfo | null
 }
 
@@ -94,6 +95,12 @@ export function createGithubApi(): GithubApi {
           if (response.ok && next) etags.set(path, next)
         },
       }
+    },
+    async get<T>(path: string) {
+      const response = await request(path, {})
+      const payload = (await response.json().catch(() => null)) as T & { message?: string }
+      if (!response.ok) throw new Error(payload?.message ?? `GitHub returned ${response.status}`)
+      return payload
     },
     rate: () => rate,
   }

@@ -12,7 +12,11 @@ import {
   appPreferences,
   effectiveBinding,
   finding,
+  findingPatch,
+  gatePatch,
   installedApps,
+  postGate,
+  postMode,
   reviewThread,
   githubRepoSummary,
   githubStatus,
@@ -328,6 +332,46 @@ export const ipcContract = {
   'apps:setPreferred': {
     input: appPreferences.partial(),
     output: appPreferences,
+  },
+  'gates:get': {
+    input: id,
+    output: postGate,
+  },
+  'gates:update': {
+    input: gatePatch,
+    output: postGate,
+  },
+  'gates:commit': {
+    input: z.object({ runId: id, message: z.string().trim().min(1).optional() }),
+    output: postGate,
+  },
+  'gates:push': {
+    input: id,
+    output: postGate,
+  },
+  'gates:post': {
+    input: id,
+    output: postGate,
+  },
+  'gates:skip': {
+    input: z.object({ runId: id, skipped: z.boolean() }),
+    output: postGate,
+  },
+  'findings:update': {
+    input: findingPatch,
+    output: finding,
+  },
+  'settings:getPostMode': {
+    input: z.void(),
+    output: postMode,
+  },
+  'settings:setPostMode': {
+    input: postMode,
+    output: postMode,
+  },
+  'repos:setPostMode': {
+    input: z.object({ id, postMode: postMode.nullable() }),
+    output: repo,
   },
 } satisfies Record<IpcChannel, { input: z.ZodType; output: z.ZodType }>
 

@@ -809,6 +809,7 @@ describe('run stage overlay', () => {
       ask: null,
       endedAt,
       reviewedHeadOid: null,
+      gateClosed: false,
     })
     const review = info(1, 'review', 'done')
     const plan = info(2, 'test-plan', 'running', null)

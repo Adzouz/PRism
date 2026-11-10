@@ -6,12 +6,14 @@ import { openDb } from './db/client'
 import { getSetting, setSetting } from './db/settings'
 import { emit } from './ipc/emit'
 import { boardHandlers } from './ipc/board-handlers'
+import { gateHandlers } from './ipc/gate-handlers'
 import { onboardingHandlers } from './ipc/handlers'
 import { registerIpc } from './ipc/register'
 import { runHandlers } from './ipc/run-handlers'
 import { claudeAdapter } from './agents/claude'
 import { cachedGithubStatus, isOnboarded } from './services/config'
 import type { Ctx } from './services/context'
+import { createActions } from './services/actions'
 import { createGithubApi } from './services/gh-api'
 import { stopWatching, watchLinkedSkills } from './services/library'
 import { createRunner, type AgentRunner } from './services/runner'
@@ -97,6 +99,17 @@ void app.whenReady().then(() => {
     },
   })
 
+  const actions = createActions({
+    ctx,
+    api,
+    emit: {
+      prsChanged: () => {
+        prsChanged()
+        sync.tick()
+      },
+    },
+  })
+
   registerIpc({
     'app:info': () => ({ version: app.getVersion(), platform: process.platform }),
     'settings:getTheme': () => getSetting(db, 'theme', themePreference, 'system'),
@@ -112,6 +125,7 @@ void app.whenReady().then(() => {
     }),
     ...boardHandlers(ctx, api, sync, prsChanged),
     ...runHandlers(ctx, api, runner),
+    ...gateHandlers(ctx, actions),
   })
 
   createWindow()

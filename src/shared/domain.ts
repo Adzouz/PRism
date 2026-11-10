@@ -84,6 +84,14 @@ export const agentModels: Partial<Record<AgentId, { id: string; label: string }[
   ],
 }
 
+export const postMode = z.enum(['submit', 'draft'])
+export type PostMode = z.infer<typeof postMode>
+
+export const postModeLabels: Record<PostMode, string> = {
+  submit: 'Submit now',
+  draft: 'Stage as pending draft',
+}
+
 export const repo = z.object({
   id: z.number(),
   owner: z.string(),
@@ -94,6 +102,7 @@ export const repo = z.object({
   autoRun: z.boolean(),
   ignoredChecks: z.array(z.string()),
   qaLabels: z.array(z.string()),
+  postMode: postMode.nullable(),
 })
 export type Repo = z.infer<typeof repo>
 
@@ -369,8 +378,18 @@ export const finding = z.object({
   body: z.string(),
   suggestion: z.string().nullable(),
   status: findingStatus,
+  included: z.boolean(),
+  editedBody: z.string().nullable(),
+  posted: z.boolean(),
 })
 export type Finding = z.infer<typeof finding>
+
+export const findingPatch = z.object({
+  id: z.number().int().positive(),
+  included: z.boolean().optional(),
+  editedBody: z.string().nullable().optional(),
+})
+export type FindingPatch = z.infer<typeof findingPatch>
 
 export const run = z.object({
   id: z.number(),
@@ -479,6 +498,7 @@ export const boardRun = z.object({
   findings: z.number(),
   ask: ask.nullable(),
   stale: z.boolean(),
+  gateClosed: z.boolean(),
 })
 export type BoardRun = z.infer<typeof boardRun>
 
@@ -582,3 +602,105 @@ export type SyncStatus = z.infer<typeof syncStatus>
 
 export const boardSettings = z.object({ autoArchiveDone: z.boolean() })
 export type BoardSettings = z.infer<typeof boardSettings>
+
+export const gateKind = z.enum(['review', 'address', 'replies'])
+export type GateKind = z.infer<typeof gateKind>
+
+export const gateKindOf: Partial<Record<Stage, GateKind>> = {
+  review: 'review',
+  're-review': 'review',
+  address: 'address',
+  'draft-replies': 'replies',
+}
+
+export const gateCheckKey = z.enum([
+  'findings',
+  'event',
+  'mode',
+  'threads',
+  'commit',
+  'push',
+  'replies',
+])
+export type GateCheckKey = z.infer<typeof gateCheckKey>
+
+export const gateCheck = z.object({
+  key: gateCheckKey,
+  label: z.string(),
+  ok: z.boolean(),
+  detail: z.string().nullable(),
+})
+export type GateCheck = z.infer<typeof gateCheck>
+
+export const gateReply = z.object({
+  threadId: z.string(),
+  body: z.string(),
+  selected: z.boolean(),
+  postedUrl: z.string().nullable(),
+})
+export type GateReply = z.infer<typeof gateReply>
+
+export const gateWorktree = z.object({
+  path: z.string(),
+  dirty: z.array(z.string()),
+  localHead: z.string().nullable(),
+  checkoutHead: z.string().nullable(),
+  remoteHead: z.string().nullable(),
+  branch: z.string().nullable(),
+})
+export type GateWorktree = z.infer<typeof gateWorktree>
+
+export const postGate = z.object({
+  runId: z.number(),
+  prId: z.number(),
+  kind: gateKind,
+  mode: postMode,
+  modeFromRepo: z.boolean(),
+  event: verdict,
+  allowedEvents: z.array(verdict),
+  body: z.string(),
+  findings: z.object({
+    included: z.number(),
+    total: z.number(),
+    outsideDiff: z.number(),
+  }),
+  pendingReview: z.boolean(),
+  commitMessage: z.string(),
+  worktree: gateWorktree.nullable(),
+  replies: z.array(gateReply),
+  checks: z.array(gateCheck),
+  ready: z.boolean(),
+  live: z.boolean(),
+  confirmedAt: z.number().nullable(),
+  postedAt: z.number().nullable(),
+  skippedAt: z.number().nullable(),
+  reviewUrl: z.string().nullable(),
+  warning: z.string().nullable(),
+})
+export type PostGate = z.infer<typeof postGate>
+
+export const gatePatch = z.object({
+  runId: z.number().int().positive(),
+  mode: postMode.optional(),
+  event: verdict.optional(),
+  body: z.string().optional(),
+  commitMessage: z.string().optional(),
+  confirmed: z.boolean().optional(),
+  replies: z.array(gateReply.pick({ threadId: true, body: true, selected: true })).optional(),
+})
+export type GatePatch = z.infer<typeof gatePatch>
+
+export const aiTag = '_Drafted with AI in PRism, reviewed and posted by the author._'
+
+export function findingComment(
+  item: Pick<Finding, 'severity' | 'title' | 'body' | 'suggestion'>,
+): string {
+  const title = `${item.severity === 'nit' ? 'Nit: ' : ''}**${item.title.trim()}**`
+  const parts = [title, item.body.trim()]
+  const suggestion = item.suggestion?.trimEnd()
+  if (suggestion?.trim()) {
+    const fence = suggestion.includes('```') ? '````' : '```'
+    parts.push(`${fence}\n${suggestion}\n${fence}`)
+  }
+  return parts.filter(Boolean).join('\n\n')
+}

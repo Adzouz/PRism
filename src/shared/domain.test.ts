@@ -11,6 +11,7 @@ const run = (overrides: Partial<BoardRun>): BoardRun => ({
   findings: 0,
   ask: null,
   stale: false,
+  gateClosed: false,
   ...overrides,
 })
 
