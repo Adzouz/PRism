@@ -125,12 +125,16 @@ Agents run by PRism, and agents working on this repo, never commit, push, or pos
 | 0 Scaffold                   | Done                  |
 | 1 Onboarding + skill sources | Done                  |
 | 2 Sync + board               | Done                  |
-| 3 Agent runner (Claude)      | In review             |
-| 4–8                          | Planned (PLAN.md §15) |
+| 3 Agent runner (Claude)      | Done                  |
+| 4 Post gate + actions        | In progress           |
+| 5–8                          | Planned (PLAN.md §15) |
 
 Known follow-ups:
 
 - Address runs do not rebase onto the PR base yet (PLAN.md §11).
 - Guard layers are not a sandbox; run agents under an OS-level sandbox (SDK `sandbox`) for real containment.
 - Codex / Gemini / Cursor adapters (Phase 7) plug into `AgentAdapter`.
-- Post gate, findings editing and ActionService (Phase 4); the pre-push nonce writer lands with ActionService.
+- Phase 4 in progress: post gate, findings editing and ActionService (commit, push + verify, post review, replies); the pre-push nonce writer lands with ActionService.
+- Shell probe: the retry path is untested in a packaged build, and a failing probe is retried for each command segment.
+- `remoteUrls` reads raw remote URLs only, so the push block has no exact entry for a URL rewritten by `insteadOf`.
+- Guard hints: an unquoted `?` is reported as "built at run time", and the `git commit`/`git push` backstop can flag a later pipe stage.

@@ -246,7 +246,7 @@ When a run ends, the card moves to **Verdict ready** / **Ready to post** and a *
 **After a review**
 - [ ] Findings validated (include/exclude/edit each)
 - [ ] Review status chosen (Approve / Comment / Request changes, pre-filled from the verdict)
-- [ ] Mode: **Submit now** or **Stage as pending draft** (default in Settings)
+- [ ] Mode: **Submit now** or **Stage as pending draft**. The default is **Stage as pending draft**, set in Settings, and each repository can override it.
 
 **After addressing comments**
 - [ ] Named threads have a verdict (fix / push back / defer)
@@ -369,5 +369,5 @@ Plus:
 
 ## 16. Open questions
 
-1. Default review post mode: **Submit now** or **Stage as pending draft**?
+1. ~~Default review post mode~~: answered in §8 (pending draft by default, per-repo override).
 2. `mattpocock/skills` default: confirm its layout fits stage hints (checked at phase 1), else ship a tiny built-in starter set as the zero-config fallback.
