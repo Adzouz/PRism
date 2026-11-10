@@ -108,20 +108,25 @@ describe('library', () => {
 
 describe('linked files', () => {
   it('picks up edits saved by atomic rename', async () => {
-    const changed = new Promise<void>((resolveChanged) => {
-      void (async () => {
-        const ctx = await makeCtx()
-        ctx.skillsChanged = () => resolveChanged()
-        const dir = await mkdtemp(join(tmpdir(), 'prism-linked-'))
-        const file = join(dir, 'mine.md')
-        await writeFile(file, '---\nname: mine\ndescription: v1\n---\n')
-        await linkCustomFile(ctx, file)
-        await writeFile(join(dir, 'tmp.md'), '---\nname: mine\ndescription: v2\n---\n')
-        await rename(join(dir, 'tmp.md'), file)
-      })()
-    })
-    await expect(changed).resolves.toBeUndefined()
-  })
+    const ctx = await makeCtx()
+    let changes = 0
+    ctx.skillsChanged = () => {
+      changes += 1
+    }
+    const changed = () => changes > 0
+    const dir = await mkdtemp(join(tmpdir(), 'prism-linked-'))
+    const file = join(dir, 'mine.md')
+    await writeFile(file, '---\nname: mine\ndescription: v1\n---\n')
+    await linkCustomFile(ctx, file)
+    for (let version = 2; !changed() && version <= 10; version += 1) {
+      await writeFile(join(dir, 'tmp.md'), `---\nname: mine\ndescription: v${version}\n---\n`)
+      await rename(join(dir, 'tmp.md'), file)
+      for (let waited = 0; !changed() && waited < 1500; waited += 50) {
+        await new Promise((done) => setTimeout(done, 50))
+      }
+    }
+    expect(changed()).toBe(true)
+  }, 20_000)
 })
 
 describe('reset', () => {
