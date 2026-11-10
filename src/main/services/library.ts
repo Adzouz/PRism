@@ -33,6 +33,14 @@ function getSkill(ctx: Ctx, id: number) {
   return row
 }
 
+export function findSkill(ctx: Ctx, id: number): Skill | null {
+  const row = ctx.db.select().from(skills).where(eq(skills.id, id)).get()
+  return row ? toSkill(row) : null
+}
+
+export const skillDirOf = (skill: Pick<Skill, 'mode' | 'path'>) =>
+  skill.mode === 'linked_file' ? dirname(skill.path) : skill.path
+
 function slug(value: string) {
   return (
     value

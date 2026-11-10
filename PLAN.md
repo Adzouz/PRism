@@ -2,7 +2,7 @@
 
 PRism is a macOS app for reviewing GitHub pull requests with AI agents. You watch repositories and get a kanban board of the PRs that involve you. You run review / address-comments skills in parallel and watch each one live. Every action that touches git history or GitHub waits for your go.
 
-Status: **planning** (2026-11-05). Nothing built yet. The repo will be public (MIT), so this document, the code and the defaults stay generic: no private repo names, no internal tooling, no personal data.
+Status: phases 0–2 done, phase 3 in review (see [AGENTS.md](AGENTS.md#status)). The repo is public (MIT), so this document, the code and the defaults stay generic: no private repo names, no internal tooling, no personal data.
 
 ---
 
@@ -89,11 +89,13 @@ Dark uses the given palette. Light is derived from it, and the app follows macOS
 
 ### Guardrails (layered, so they hold for every agent)
 
-1. **Claude:** `canUseTool` + PreToolUse hook deny `git commit|push|reset --hard`, `gh pr review|comment|merge`, and `gh api` with a write method.
+1. **Claude:** `canUseTool` + PreToolUse hook check every command: git by a subcommand allowlist, `gh` read-only (`gh api` parsed flag by flag, no writes or mutations), dynamic commands (`$(…)`, `eval`, piping into a shell) refused, edits only inside the worktree.
 2. **All agents:** a `gh` shim first on the agent's `PATH`, read subcommands only.
-3. **All agents:** a `pre-push` hook in every PRism worktree that refuses unless `PRISM_PUSH_NONCE` is set. Only ActionService sets it.
+3. **All agents:** a `pre-push` hook in every PRism worktree that refuses unless `PRISM_PUSH_NONCE` is set (only ActionService sets it), plus a push block in the agent env (`pushInsteadOf`) that `--no-verify` cannot skip.
 4. **Codex:** `--sandbox workspace-write` (no network) for read-only stages.
 5. **PRism contract:** a prompt appended to every run. It overrides any skill step that would post, commit or push, and turns it into `prism_draft_replies` / `prism_ask_user`.
+
+Project settings, hooks and MCP config always come from the user's clone, never from the pull request checkout. These layers stop accidents and naive prompt injection; an OS-level sandbox for Claude runs is a follow-up.
 
 ---
 
@@ -356,7 +358,7 @@ Plus:
 | 0 | Scaffold: electron-vite, shadcn, tokens dark/light, Geist, typed IPC, SQLite, lint/test, signed dev build, secret-denylist CI | Empty signed app opens, theme switches |
 | 1 | Onboarding + skill sources: gh/agent detection, repos, worktree folder, source locate/install/bootstrap/manifest, import copy/link/custom, stage validation | Fresh machine reaches a validated config |
 | 2 | Sync + Board: stage derivation, kanban dnd, star/hide/archive, overrides, filters, Archive section, PR drawer Overview | Board mirrors GitHub within 60s |
-| 3 | Agent runner (Claude): worktrees, MCP tools, guardrails, live transcript, Needs-you, resume | Review runs in parallel on 3 PRs |
+| 3 | Agent runner (Claude): worktrees, MCP tools, guardrails, live transcript, Needs-you, resume, any stage from the drawer (incl. test plan, draft replies), review-thread picker, follow-up messages, dismiss, open worktree in editor/terminal, resume in terminal | Review runs in parallel on 3 PRs |
 | 4 | Post gate + actions: findings editing, submit/draft review, commit, push + verify, replies, ledger linking | Full review→post and address→push→reply loops on real PRs |
 | 5 | Re-review ledger: prior-findings pass, delta + range-diff, escalation | Re-review posts only new findings |
 | 6 | Dashboard | Δ% correct on day 2 |

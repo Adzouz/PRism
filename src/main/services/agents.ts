@@ -58,7 +58,7 @@ export function detectAgents() {
   return Promise.all(agentIds.map(detect))
 }
 
-function appleScriptString(value: string) {
+export function appleScriptString(value: string) {
   return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
 }
 

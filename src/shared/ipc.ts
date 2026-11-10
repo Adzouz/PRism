@@ -9,13 +9,21 @@ import {
   boardStage,
   commandResult,
   configStatus,
+  appPreferences,
   effectiveBinding,
+  finding,
+  installedApps,
+  reviewThread,
   githubRepoSummary,
   githubStatus,
   prDetail,
   proposal,
   repo,
   repoOptions,
+  run,
+  runEvent,
+  type Run,
+  type RunEvent,
   scannedSkill,
   skill,
   skillSource,
@@ -265,6 +273,62 @@ export const ipcContract = {
     input: boardSettings,
     output: boardSettings,
   },
+  'runs:start': {
+    input: z.object({ prId: id, stage, threadIds: z.array(z.string()).optional() }),
+    output: run,
+  },
+  'runs:cancel': {
+    input: id,
+    output: run,
+  },
+  'runs:answer': {
+    input: z.object({ askId: id, answer: z.string().trim().min(1) }),
+    output: run,
+  },
+  'runs:dismiss': {
+    input: id,
+    output: run,
+  },
+  'runs:list': {
+    input: z.void(),
+    output: z.array(run),
+  },
+  'runs:forPr': {
+    input: id,
+    output: z.array(run),
+  },
+  'runs:events': {
+    input: z.object({ runId: id, afterId: z.number().int().nonnegative().optional() }),
+    output: z.array(runEvent),
+  },
+  'runs:findings': {
+    input: id,
+    output: z.array(finding),
+  },
+  'runs:followUp': {
+    input: z.object({ runId: id, message: z.string().trim().min(1) }),
+    output: run,
+  },
+  'runs:openWorktree': {
+    input: z.object({ runId: id, target: z.enum(['editor', 'terminal']) }),
+    output: z.void(),
+  },
+  'runs:resumeInTerminal': {
+    input: id,
+    output: z.void(),
+  },
+  'prs:threads': {
+    input: id,
+    output: z.array(reviewThread),
+  },
+  'apps:list': {
+    input: z.void(),
+    output: installedApps,
+  },
+  'apps:setPreferred': {
+    input: appPreferences.partial(),
+    output: appPreferences,
+  },
 } satisfies Record<IpcChannel, { input: z.ZodType; output: z.ZodType }>
 
 export type IpcContract = typeof ipcContract
@@ -277,6 +341,8 @@ export interface IpcEventPayloads {
   'skills:changed': null
   'prs:changed': null
   'sync:status': SyncStatus
+  'runs:changed': Run
+  'runs:event': RunEvent
 }
 
 export type IpcEventPayload<E extends IpcEvent> = IpcEventPayloads[E]

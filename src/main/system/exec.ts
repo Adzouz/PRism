@@ -41,7 +41,7 @@ export async function run(
 ): Promise<RunResult> {
   const env = await userEnv(options.env)
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       file,
       args,
       { cwd: options.cwd, env, timeout: options.timeout ?? 30_000, maxBuffer: 16 * 1024 * 1024 },
@@ -59,6 +59,7 @@ export async function run(
         })
       },
     )
+    child.stdin?.end()
   })
 }
 
