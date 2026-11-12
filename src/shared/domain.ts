@@ -251,7 +251,7 @@ const loopColumns = (author: boolean): BoardColumn[] => [
   { stage: 'reviewing', label: 'Reviewing', agent: true },
   { stage: 'changes-requested', label: 'Changes requested', needsMe: author },
   ...(author ? [{ stage: 'addressing', label: 'Addressing', agent: true } as const] : []),
-  { stage: 're-review', label: 'Re-review', needsMe: true },
+  { stage: 're-review', label: 'To re-review', needsMe: true },
   { stage: 'to-approve', label: 'To approve', needsMe: true },
   { stage: 'approved', label: 'Approved', approve: true },
   { stage: 'done', label: 'Done' },
