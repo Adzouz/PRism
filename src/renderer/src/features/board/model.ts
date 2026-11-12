@@ -131,8 +131,13 @@ export function boardView(prs: BoardPr[], tab: BoardTab, filters: Filters) {
     .sort(
       (a, b) => Number(b.starred) - Number(a.starred) || b.updatedAt - a.updatedAt || b.id - a.id,
     )
+  const columns = new Set(boardColumns[tab].map((column) => column.stage))
+  const fallback = boardColumns[tab].find((column) => !column.agent)!.stage
   const byStage = new Map<BoardStage, BoardPr[]>()
-  for (const pr of visible) byStage.set(pr.stage, [...(byStage.get(pr.stage) ?? []), pr])
+  for (const pr of visible) {
+    const stage = columns.has(pr.stage) ? pr.stage : fallback
+    byStage.set(stage, [...(byStage.get(stage) ?? []), pr])
+  }
   return { byStage, hiddenCount, total: visible.length }
 }
 
