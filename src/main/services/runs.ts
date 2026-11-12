@@ -695,6 +695,7 @@ export function latestLoops(ctx: Ctx, onlyPrId?: number) {
       skippedAt: postGates.skippedAt,
       reportJson: runs.reportJson,
       reviewedHeadOid: runs.reviewedHeadOid,
+      postedHeadOid: postGates.postedHeadOid,
     })
     .from(postGates)
     .innerJoin(runs, eq(runs.id, postGates.runId))
@@ -715,6 +716,7 @@ export function latestLoops(ctx: Ctx, onlyPrId?: number) {
       goes: direction.goes,
       approvedOnGithub: direction.approvedOnGithub && row.postedAt !== null,
       reviewedHeadOid: row.reviewedHeadOid,
+      postedHeadOid: row.postedHeadOid,
     })
   }
   return result

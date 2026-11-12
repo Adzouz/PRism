@@ -54,6 +54,7 @@ export type LoopFacts = {
   goes: 'approve' | 'changes'
   approvedOnGithub: boolean
   reviewedHeadOid: string | null
+  postedHeadOid?: string | null
 }
 
 export function loopStage(
@@ -66,8 +67,12 @@ export function loopStage(
   if (approvedOid && approvedOid === headOid) return 'approved'
   if (!loop) return derived
   if (loop.kind === 'address') return 're-review'
+  if (loop.goes === 'changes') {
+    const since = loop.postedHeadOid ?? loop.reviewedHeadOid
+    if (since && since !== headOid) return 're-review'
+    return derived === 're-review' ? 're-review' : 'changes-requested'
+  }
   if (loop.reviewedHeadOid && loop.reviewedHeadOid !== headOid) return 're-review'
-  if (loop.goes === 'changes') return derived === 're-review' ? 're-review' : 'changes-requested'
   return loop.approvedOnGithub ? 'approved' : 'to-approve'
 }
 

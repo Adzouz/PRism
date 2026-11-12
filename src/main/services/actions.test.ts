@@ -705,6 +705,23 @@ describe('review loop', () => {
     expect(listPrs(ctx)[0]!.stage).toBe('re-review')
   })
 
+  it('keeps Changes requested when commits landed between the review and the post', async () => {
+    const { ctx, addRun } = await setup()
+    const runId = addRun('review')
+    saveReview(ctx, runId, report, [])
+    const actions = createActions({
+      ctx,
+      api: fakeApi(live('head2')).api,
+      emit: { prsChanged: () => {} },
+    })
+    await actions.update({ runId, confirmed: true })
+    await actions.post(runId)
+    ctx.db.update(prs).set({ headOid: 'head2' }).run()
+    expect(listPrs(ctx)[0]!.stage).toBe('changes-requested')
+    ctx.db.update(prs).set({ headOid: 'head3' }).run()
+    expect(listPrs(ctx)[0]!.stage).toBe('re-review')
+  })
+
   it('clears a manual stage when posting', async () => {
     const { ctx, pr, addRun } = await setup()
     const runId = addRun('review')

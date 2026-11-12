@@ -189,7 +189,7 @@ Action columns run something when a card is dropped on them; state columns show 
 | Reviewing | **action**: review / re-review | Review run active, or finished with its post gate open |
 | Changes requested | state | Last posted review is NO GO or GO WITH NITS; on Reviews also my review with no new commits since |
 | Addressing | **action**: address (My PRs only) | Address run active, or finished with its post gate open |
-| To re-review | state | Address posted, or new commits since the last review; drop on Reviewing to re-review |
+| To re-review | state | Address posted, or new commits pushed after a NO GO / GO WITH NITS was posted (after a GO: any commit the review did not cover); drop on Reviewing to re-review |
 | To approve | state | Last posted review is GO |
 | Approved | **action**: approve | Approved on GitHub, or approved from PRism at the current head. Own PR: GitHub refuses Approve, so PRism posts a Comment saying GO |
 | Done | state | Merged / closed |

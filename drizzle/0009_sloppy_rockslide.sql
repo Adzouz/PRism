@@ -1,0 +1,1 @@
+ALTER TABLE `post_gates` ADD `posted_head_oid` text;

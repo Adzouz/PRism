@@ -64,6 +64,13 @@
       "when": 1794496243160,
       "tag": "0008_keen_shiva",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794496619781,
+      "tag": "0009_sloppy_rockslide",
+      "breakpoints": true
     }
   ]
 }

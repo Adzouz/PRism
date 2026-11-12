@@ -358,6 +358,14 @@ export function createActions(deps: ActionDeps) {
     return node
   }
 
+  async function currentHead({ pr }: Loaded) {
+    try {
+      return (await liveNode(pr.nodeId)).headRefOid
+    } catch {
+      return pr.headOid
+    }
+  }
+
   function reviewDiff({ repo, row }: Loaded) {
     if (!row.reviewedBaseOid || !row.reviewedHeadOid) return Promise.resolve<DiffMap>(new Map())
     const path = `/repos/${repo.owner}/${repo.name}/compare/${row.reviewedBaseOid}...${row.reviewedHeadOid}`
@@ -751,7 +759,12 @@ export function createActions(deps: ActionDeps) {
       }
       if (loaded.kind === 'review') await postReview(loaded, gate)
       else await postReplies(loaded)
-      setGate(runId, { postedAt: Date.now(), mode: gate.mode, event: gate.event })
+      setGate(runId, {
+        postedAt: Date.now(),
+        mode: gate.mode,
+        event: gate.event,
+        postedHeadOid: await currentHead(loaded),
+      })
       clearManualStage(ctx, loaded.run.prId)
       emit.prsChanged()
       return build(runId)
@@ -764,7 +777,12 @@ export function createActions(deps: ActionDeps) {
       const loaded = load(runId)
       if (loaded.gate.postedAt !== null) throw new Error('Already posted')
       if (current) {
-        setGate(runId, { skippedAt: Date.now(), mode: current.mode, event: current.event })
+        setGate(runId, {
+          skippedAt: Date.now(),
+          mode: current.mode,
+          event: current.event,
+          postedHeadOid: await currentHead(loaded),
+        })
         clearManualStage(ctx, loaded.run.prId)
       } else {
         setGate(runId, { skippedAt: null })
