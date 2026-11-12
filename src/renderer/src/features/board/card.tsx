@@ -12,6 +12,7 @@ import {
   MoveRight,
   Play,
   RotateCcw,
+  Send,
   Square,
   Star,
   Users,
@@ -70,6 +71,7 @@ function runSummary(pr: BoardPr) {
       .filter(Boolean)
       .join(', ')
   }
+  if (readyToPost(pr)) return `${stageLabels[run.stage]} done, ready to post`
   if (run.status === 'done' || run.status === 'cancelled') return null
   return `${stageLabels[run.stage]} run ${statusLabel[run.status].toLowerCase()}`
 }
@@ -122,6 +124,14 @@ function RunStrip({ pr, interactive }: { pr: BoardPr; interactive: boolean }) {
           </p>
         )}
       </div>
+    )
+  }
+  if (readyToPost(pr)) {
+    return (
+      <p className="flex items-center gap-1.5 text-xs font-medium text-primary">
+        <Send className="size-3 shrink-0" />
+        <span className="truncate">{stageLabels[run.stage]} done · ready to post</span>
+      </p>
     )
   }
   if (run.status === 'failed') {
