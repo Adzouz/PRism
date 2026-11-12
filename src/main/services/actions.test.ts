@@ -30,58 +30,67 @@ function fakeApi(live: Live) {
   const calls: { name: string; input: Record<string, unknown> }[] = []
   let replyCount = 0
   let failReplyAt = -1
-  const api = {
-    async graphql<T>(query: string, variables: Record<string, unknown> = {}) {
-      const name = /(?:query|mutation) (\w+)/.exec(query)?.[1] ?? ''
-      calls.push({ name, input: (variables.input ?? variables) as Record<string, unknown> })
-      if (name === 'Gate') {
-        const head = typeof live.headRefOid === 'function' ? live.headRefOid() : live.headRefOid
-        return {
-          node: {
-            headRefOid: head,
-            viewerDidAuthor: live.viewerDidAuthor,
-            reviews: { nodes: live.pending ? [live.pending] : [] },
-          },
-        } as T
-      }
-      if (name === 'AddReview') {
-        const threads = (variables.input as { threads: { path: string }[] }).threads
-        return {
-          addPullRequestReview: {
-            pullRequestReview: {
-              id: 'PRR_1',
-              url: 'https://github.com/acme/app/pull/1#pullrequestreview-1',
-              comments: {
-                nodes: threads.map((thread, index) => ({ id: `C_${index}`, path: thread.path })),
-              },
+  let nullThread = false
+  const failures = new Map<string, { data: Record<string, unknown>; message: string }>()
+  const respond = (query: string, variables: Record<string, unknown>) => {
+    const name = /(?:query|mutation) (\w+)/.exec(query)?.[1] ?? ''
+    calls.push({ name, input: (variables.input ?? variables) as Record<string, unknown> })
+    const failure = failures.get(name)
+    if (failure) return { data: failure.data, errors: [{ message: failure.message }] }
+    const ok = (data: Record<string, unknown>) => ({ data, errors: [] })
+    if (name === 'Gate') {
+      const head = typeof live.headRefOid === 'function' ? live.headRefOid() : live.headRefOid
+      return ok({
+        node: {
+          headRefOid: head,
+          viewerDidAuthor: live.viewerDidAuthor,
+          reviews: { nodes: live.pending ? [live.pending] : [] },
+        },
+      })
+    }
+    if (name === 'AddReview') {
+      const threads = (variables.input as { threads: { path: string }[] }).threads
+      return ok({
+        addPullRequestReview: {
+          pullRequestReview: {
+            id: 'PRR_1',
+            url: 'https://github.com/acme/app/pull/1#pullrequestreview-1',
+            comments: {
+              nodes: threads.map((thread, index) => ({ id: `C_${index}`, path: thread.path })),
             },
           },
-        } as T
-      }
-      if (name === 'AddThread') {
-        return {
-          addPullRequestReviewThread: {
-            thread: { comments: { nodes: [{ id: `T_${calls.length}` }] } },
-          },
-        } as T
-      }
-      if (name === 'UpdateReview' || name === 'SubmitReview') {
-        const key = name === 'UpdateReview' ? 'updatePullRequestReview' : 'submitPullRequestReview'
-        return { [key]: { pullRequestReview: { id: 'PRR_0', url: 'https://x/pending' } } } as T
-      }
-      if (name === 'Reply') {
-        if (replyCount === failReplyAt) throw new Error('GitHub is down')
-        replyCount += 1
-        return {
-          addPullRequestReviewThreadReply: {
-            comment: { id: `R_${replyCount}`, url: `https://x/reply-${replyCount}` },
-          },
-        } as T
-      }
-      throw new Error(`unexpected ${name}`)
+        },
+      })
+    }
+    if (name === 'AddThread') {
+      return ok({
+        addPullRequestReviewThread: {
+          thread: nullThread ? null : { comments: { nodes: [{ id: `T_${calls.length}` }] } },
+        },
+      })
+    }
+    if (name === 'UpdateReview' || name === 'SubmitReview') {
+      const key = name === 'UpdateReview' ? 'updatePullRequestReview' : 'submitPullRequestReview'
+      return ok({ [key]: { pullRequestReview: { id: 'PRR_0', url: 'https://x/pending' } } })
+    }
+    if (name === 'Reply') {
+      if (replyCount === failReplyAt) throw new Error('GitHub is down')
+      replyCount += 1
+      return ok({
+        addPullRequestReviewThreadReply: {
+          comment: { id: `R_${replyCount}`, url: `https://x/reply-${replyCount}` },
+        },
+      })
+    }
+    throw new Error(`unexpected ${name}`)
+  }
+  const api = {
+    async graphql<T>(query: string, variables: Record<string, unknown> = {}) {
+      return respond(query, variables).data as T
     },
-    async graphqlPartial() {
-      throw new Error('unexpected')
+    async graphqlPartial<T>(query: string, variables: Record<string, unknown> = {}) {
+      const result = respond(query, variables)
+      return { data: result.data as T, errors: result.errors }
     },
     async get<T>(path: string) {
       calls.push({ name: 'GET', input: { path } })
@@ -95,6 +104,9 @@ function fakeApi(live: Live) {
     calls,
     named: (name: string) => calls.filter((call) => call.name === name),
     failReplyAt: (index: number) => (failReplyAt = index),
+    fail: (name: string, data: Record<string, unknown>, message: string) =>
+      failures.set(name, { data, message }),
+    nullThread: () => (nullThread = true),
   }
 }
 
@@ -341,6 +353,36 @@ describe('review gate', () => {
     expect(listFindings(ctx, runId)[0]!.posted).toBe(true)
   })
 
+  it('reports GitHub mutation errors and keeps the gate open', async () => {
+    const { ctx, addRun } = await setup()
+    const runId = addRun('review')
+    saveReview(ctx, runId, report, [finding()])
+    const fake = fakeApi({ headRefOid: 'head1', viewerDidAuthor: false, pending: null })
+    fake.fail('AddReview', { addPullRequestReview: null }, 'Line could not be resolved')
+    const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => {} } })
+    await actions.update({ runId, confirmed: true })
+    await expect(actions.post(runId)).rejects.toThrow('Line could not be resolved')
+    expect((await actions.get(runId)).postedAt).toBeNull()
+    expect(listFindings(ctx, runId)[0]!.posted).toBe(false)
+  })
+
+  it('fails instead of dropping a finding GitHub did not add to the pending review', async () => {
+    const { ctx, addRun } = await setup()
+    const runId = addRun('review')
+    saveReview(ctx, runId, report, [finding()])
+    const fake = fakeApi({
+      headRefOid: 'head1',
+      viewerDidAuthor: false,
+      pending: { id: 'PRR_0', body: '', url: 'https://x/pending' },
+    })
+    fake.nullThread()
+    const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => {} } })
+    await actions.update({ runId, confirmed: true })
+    await expect(actions.post(runId)).rejects.toThrow(/did not add the comment on src\/a\.ts:2/)
+    expect(fake.named('UpdateReview')).toHaveLength(0)
+    expect((await actions.get(runId)).postedAt).toBeNull()
+  })
+
   it('skips and un-skips posting', async () => {
     const { ctx, addRun } = await setup()
     const runId = addRun('review')
@@ -393,6 +435,23 @@ describe('replies gate', () => {
     const bodies = fake.named('Reply').map((call) => call.input)
     expect(bodies.map((input) => input.pullRequestReviewThreadId)).toEqual(['T1', 'T2', 'T2', 'T3'])
     expect(bodies[0]!.body).toBe(`Fixed.\n\n${aiTag}`)
+  })
+  it('merges reply edits per field, so a tick right after typing keeps the text', async () => {
+    const { ctx, addRun } = await setup('author')
+    const runId = addRun('draft-replies', { threadsJson: JSON.stringify(['T1']) })
+    saveReplies(ctx, runId, [])
+    const actions = createActions({
+      ctx,
+      api: fakeApi({ headRefOid: 'head1', viewerDidAuthor: true, pending: null }).api,
+      emit: { prsChanged: () => {} },
+    })
+    await Promise.all([
+      actions.update({ runId, replies: [{ threadId: 'T1', body: 'Typed.' }] }),
+      actions.update({ runId, replies: [{ threadId: 'T1', selected: true }] }),
+    ])
+    const gate = await actions.get(runId)
+    expect(gate.replies).toMatchObject([{ threadId: 'T1', body: 'Typed.', selected: true }])
+    expect(gate.checks[0]!.ok).toBe(true)
   })
 })
 
@@ -477,6 +536,12 @@ describe('address gate', () => {
     expect(existsSync(join(ctx.userData, 'hooks/.push-nonce'))).toBe(false)
     expect(pushed.ready).toBe(true)
 
+    await writeFile(join(work, 'a.ts'), 'one\ntwo\nthree\n')
+    await actions.commit(runId, 'fix: handle three')
+    const again = await actions.push(runId)
+    expect(git(bare, 'rev-parse', 'refs/heads/feature')).toBe(git(work, 'rev-parse', 'HEAD'))
+    expect(again.ready).toBe(true)
+
     const posted = await actions.post(runId)
     expect(posted.postedAt).not.toBeNull()
     expect(fake.named('Reply')[0]!.input.body).toBe(`Done.\n\n${aiTag}`)
@@ -515,7 +580,7 @@ describe('address gate', () => {
     )
     await writeFile(join(work, 'a.ts'), 'mine\n')
     await actions.commit(runId, 'fix: mine')
-    await expect(actions.push(runId)).rejects.toThrow(/git push failed/)
+    await expect(actions.push(runId)).rejects.toThrow(/stale info/)
     expect(git(bare, 'log', '-1', '--format=%s', 'refs/heads/feature')).toBe('theirs')
   })
 

@@ -686,7 +686,13 @@ export const gatePatch = z.object({
   body: z.string().optional(),
   commitMessage: z.string().optional(),
   confirmed: z.boolean().optional(),
-  replies: z.array(gateReply.pick({ threadId: true, body: true, selected: true })).optional(),
+  replies: z
+    .array(
+      gateReply
+        .pick({ threadId: true, body: true, selected: true })
+        .partial({ body: true, selected: true }),
+    )
+    .optional(),
 })
 export type GatePatch = z.infer<typeof gatePatch>
 

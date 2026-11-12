@@ -417,7 +417,7 @@ function ReplyRow({
   const save = (patch: Partial<Pick<GateReply, 'body' | 'selected'>>) =>
     update.mutate({
       runId: gate.runId,
-      replies: [{ threadId: reply.threadId, body: reply.body, selected: reply.selected, ...patch }],
+      replies: [{ threadId: reply.threadId, ...patch }],
     })
   return (
     <li className={cn('rounded-xl border p-3', !reply.selected && 'opacity-60')}>

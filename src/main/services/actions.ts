@@ -341,6 +341,14 @@ export function createActions(deps: ActionDeps) {
 
   type Loaded = ReturnType<typeof load>
 
+  async function mutate<T>(query: string, variables: Record<string, unknown>) {
+    const { data, errors } = await api.graphqlPartial<T>(query, variables)
+    if (errors.length > 0) {
+      throw new Error(redactText(errors.map((error) => error.message).join('; ')))
+    }
+    return data
+  }
+
   async function liveNode(nodeId: string) {
     const { node } = await api.graphql<{ node: GateNode | null }>(gateQuery, { id: nodeId })
     if (!node) throw new Error('Pull request not found on GitHub')
@@ -364,9 +372,8 @@ export function createActions(deps: ActionDeps) {
   async function gitOk(cwd: string, args: string[], env?: Record<string, string>) {
     const result = await git(cwd, args, env)
     if (result.code !== 0) {
-      throw new Error(
-        redactText(`git ${args[0]} failed: ${(result.stderr || result.stdout).trim()}`),
-      )
+      const output = [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join('\n')
+      throw new Error(redactText(`git ${args[0]} failed: ${output}`))
     }
     return result.stdout.trim()
   }
@@ -525,7 +532,11 @@ export function createActions(deps: ActionDeps) {
         const existing = byId.get(reply.threadId)
         if (!existing) throw new Error(`Thread ${reply.threadId} is not part of this run`)
         if (existing.postedUrl) continue
-        byId.set(reply.threadId, { ...existing, body: reply.body, selected: reply.selected })
+        byId.set(reply.threadId, {
+          ...existing,
+          body: reply.body ?? existing.body,
+          selected: reply.selected ?? existing.selected,
+        })
       }
       set.repliesJson = JSON.stringify([...byId.values()])
     }
@@ -583,7 +594,8 @@ export function createActions(deps: ActionDeps) {
       if (!state) throw new Error('The worktree of this run is gone')
       if (state.dirty.length > 0) throw new Error('Commit the changes first')
       const ref = `refs/heads/${row.pushRef}`
-      const lease = row.reviewedHeadOid ? `--force-with-lease=${ref}:${row.reviewedHeadOid}` : null
+      const expected = loaded.gate.pushedOid ?? row.reviewedHeadOid
+      const lease = expected ? `--force-with-lease=${ref}:${expected}` : null
       await withPushNonce((nonce) =>
         gitOk(
           state.path,
@@ -624,7 +636,7 @@ export function createActions(deps: ActionDeps) {
     })
     let review: { id: string; url: string }
     if (!pending) {
-      const result = await api.graphql<{
+      const result = await mutate<{
         addPullRequestReview: {
           pullRequestReview: {
             id: string
@@ -650,17 +662,22 @@ export function createActions(deps: ActionDeps) {
       }
     } else {
       for (const item of inline) {
-        const result = await api.graphql<{
+        const result = await mutate<{
           addPullRequestReviewThread: { thread: { comments: { nodes: { id: string }[] } } | null }
         }>(addThreadMutation, { input: { pullRequestReviewId: pending.id, ...thread(item) } })
         const comment = result.addPullRequestReviewThread.thread?.comments.nodes[0]
-        if (comment) linkFinding(ctx, item.id, comment.id)
+        if (!comment) {
+          throw new Error(
+            `GitHub did not add the comment on ${item.path}:${item.line}. Exclude it or edit it, then post again.`,
+          )
+        }
+        linkFinding(ctx, item.id, comment.id)
       }
       const merged = [pending.body.trim(), body].filter(Boolean).join('\n\n')
       review =
         gate.mode === 'submit'
           ? (
-              await api.graphql<{
+              await mutate<{
                 submitPullRequestReview: { pullRequestReview: { id: string; url: string } }
               }>(submitMutation, {
                 input: {
@@ -671,7 +688,7 @@ export function createActions(deps: ActionDeps) {
               })
             ).submitPullRequestReview.pullRequestReview
           : (
-              await api.graphql<{
+              await mutate<{
                 updatePullRequestReview: { pullRequestReview: { id: string; url: string } }
               }>(updateReviewMutation, {
                 input: { pullRequestReviewId: pending.id, body: merged },
@@ -686,7 +703,7 @@ export function createActions(deps: ActionDeps) {
     const replies = repliesOf(loaded)
     for (const reply of replies) {
       if (!reply.selected || reply.postedUrl || !reply.body.trim()) continue
-      const result = await api.graphql<{
+      const result = await mutate<{
         addPullRequestReviewThreadReply: { comment: { id: string; url: string } }
       }>(replyMutation, {
         input: { pullRequestReviewThreadId: reply.threadId, body: replyBody(reply.body) },
