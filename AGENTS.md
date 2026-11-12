@@ -118,6 +118,7 @@ Agents run by PRism, and agents working on this repo, never commit, push, or pos
 - A card's draggable body (`role="button"`, keyboard drag, accessible name) is separate from its run strip and answer form, which stop pointer and key events. Keep interactive controls out of the body. Column visibility is frozen while a drag is in progress.
 - Manual stage moves are refused while the card has a live run, in the UI and in `setPrStage`.
 - GitHub GraphQL returns `data` with `errors` on partial failures. Use `graphqlPartial` when null nodes matter (e.g. `nodes(ids:)`), and only drop a PR on `NOT_FOUND`.
+- In `pnpm dev` macOS names the app from the Electron bundle, so `postinstall` runs `scripts/dev-app-name.mjs`: it sets `CFBundleName` of `node_modules/electron/dist/Electron.app` to `productName` and re-signs it ad hoc. Run it again by hand if the menu bar says Electron (for example after reinstalling Electron).
 - Local builds must be ad-hoc signed (`pnpm install:app`). Signing with an Apple Development cert + hardened runtime makes the app die on launch.
 - better-sqlite3 ships N-API prebuilds, so the same binary works in Vitest and Electron.
 - TypeScript 7: no `baseUrl`; `paths` must start with `./`.

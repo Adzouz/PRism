@@ -19,7 +19,7 @@
     "test": "vitest run",
     "check:denylist": "node scripts/check-denylist.mjs",
     "db:generate": "drizzle-kit generate",
-    "postinstall": "install-electron && electron-builder install-app-deps",
+    "postinstall": "install-electron && node scripts/dev-app-name.mjs && electron-builder install-app-deps",
     "dist:mac": "pnpm build && electron-builder --mac",
     "dist:mac:dev": "pnpm build && electron-builder --mac dir --arm64 -c.mac.notarize=false -c.mac.identity=-",
     "install:app": "scripts/install-app.sh"
