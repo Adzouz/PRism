@@ -696,7 +696,7 @@ export const gatePatch = z.object({
 })
 export type GatePatch = z.infer<typeof gatePatch>
 
-export const aiTag = '_Drafted with AI in PRism, reviewed and posted by the author._'
+export const aiTag = '_Drafted with AI, reviewed and posted by the author._'
 
 export function findingComment(
   item: Pick<Finding, 'severity' | 'title' | 'body' | 'suggestion'>,
