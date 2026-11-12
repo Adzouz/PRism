@@ -222,6 +222,27 @@ describe('diff and text helpers', () => {
     expect([...map.get('old.ts')!.LEFT]).toEqual([1, 2])
   })
 
+  it('reads paths with spaces and quoted paths from a full diff', () => {
+    const map = parseUnifiedDiff(
+      [
+        'diff --git a/docs/my file.md b/docs/my file.md',
+        '--- a/docs/my file.md\t',
+        '+++ b/docs/my file.md\t',
+        patch,
+        'diff --git "a/say \\"hi\\".md" "b/say \\"hi\\".md"',
+        '--- "a/say \\"hi\\".md"',
+        '+++ "b/say \\"hi\\".md"',
+        patch,
+        'diff --git "a/caf\\303\\251\\ttab.md" "b/caf\\303\\251\\ttab.md"',
+        '--- /dev/null',
+        '+++ "b/caf\\303\\251\\ttab.md"',
+        patch,
+      ].join('\n'),
+    )
+    expect([...map.keys()]).toEqual(['docs/my file.md', 'say "hi".md', 'café\ttab.md'])
+    expect([...map.get('docs/my file.md')!.RIGHT]).toEqual([1, 2, 3, 4])
+  })
+
   it('parses porcelain output with renames', () => {
     expect(parsePorcelain(' M src/a.ts\0R  new.ts\0old.ts\0?? notes.md\0')).toEqual([
       'src/a.ts',
