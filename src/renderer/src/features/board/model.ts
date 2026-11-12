@@ -91,9 +91,15 @@ export const useBoardStore = create<BoardStore>()(
 const needsMeStages = (tab: BoardTab) =>
   new Set(boardColumns[tab].filter((column) => column.needsMe).map((column) => column.stage))
 
+export const readyToPost = (pr: BoardPr) =>
+  pr.run?.status === 'done' &&
+  !pr.run.gateClosed &&
+  (pr.stage === 'reviewing' || pr.stage === 'addressing')
+
 export function isNeedsMe(pr: BoardPr) {
   return (
-    pr.run?.status === 'needs_you' || (pr.state === 'OPEN' && needsMeStages(pr.tab).has(pr.stage))
+    pr.run?.status === 'needs_you' ||
+    (pr.state === 'OPEN' && (needsMeStages(pr.tab).has(pr.stage) || readyToPost(pr)))
   )
 }
 

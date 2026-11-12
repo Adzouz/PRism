@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { aiTag, type ReviewReport, type Stage } from '@shared/domain'
 import { prePushHookScript } from '../agents/guard'
 import { openDb } from '../db/client'
-import { prs, repos, runs } from '../db/schema'
+import { prFlags, prs, repos, runs } from '../db/schema'
 import { createActions, gateChecks, parsePorcelain, reviewBody } from './actions'
 import type { Ctx } from './context'
 import { commentableLines } from './diff'
@@ -49,7 +49,7 @@ function fakeApi(live: Live) {
       })
     }
     if (name === 'AddReview') {
-      const threads = (variables.input as { threads: { path: string }[] }).threads
+      const threads = (variables.input as { threads?: { path: string }[] }).threads ?? []
       return ok({
         addPullRequestReview: {
           pullRequestReview: {
@@ -276,7 +276,7 @@ describe('review gate', () => {
     await expect(actions.post(runId)).rejects.toThrow(/Findings validated/)
   })
 
-  it('posts a draft review with inline comments, links findings and leaves Verdict ready', async () => {
+  it('posts a draft review with inline comments, links findings and moves to Changes requested', async () => {
     const { ctx, addRun } = await setup()
     const runId = addRun('review')
     saveReview(ctx, runId, report, [
@@ -290,7 +290,7 @@ describe('review gate', () => {
     const fake = fakeApi({ headRefOid: 'head1', viewerDidAuthor: false, pending: null })
     let changed = 0
     const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => changed++ } })
-    expect(listPrs(ctx)[0]!.stage).toBe('verdict-ready')
+    expect(listPrs(ctx)[0]!.stage).toBe('reviewing')
 
     const before = await actions.update({ runId, confirmed: true })
     expect(before.findings).toEqual({ included: 2, total: 3, outsideDiff: 1 })
@@ -311,7 +311,8 @@ describe('review gate', () => {
     expect(after.reviewUrl).toContain('pullrequestreview-1')
     expect(listFindings(ctx, runId).map((item) => item.posted)).toEqual([true, true, false])
     expect(changed).toBe(1)
-    expect(listPrs(ctx)[0]!.stage).toBe('to-review')
+    expect(after.nextStage).toBe('changes-requested')
+    expect(listPrs(ctx)[0]!.stage).toBe('changes-requested')
     await expect(actions.post(runId)).rejects.toThrow(/Already posted/)
     expect(() =>
       updateFinding(ctx, { id: listFindings(ctx, runId)[0]!.id, included: false }),
@@ -393,10 +394,10 @@ describe('review gate', () => {
       emit: { prsChanged: () => {} },
     })
     expect((await actions.skip(runId, true)).skippedAt).not.toBeNull()
-    expect(listPrs(ctx)[0]!.stage).toBe('to-review')
+    expect(listPrs(ctx)[0]!.stage).toBe('changes-requested')
     await expect(actions.update({ runId, body: 'x' })).rejects.toThrow(/skipped/)
     expect((await actions.skip(runId, false)).skippedAt).toBeNull()
-    expect(listPrs(ctx)[0]!.stage).toBe('verdict-ready')
+    expect(listPrs(ctx)[0]!.stage).toBe('reviewing')
   })
 })
 
@@ -596,5 +597,98 @@ describe('address gate', () => {
     })
     expect((await actions.get(runId)).live).toBe(true)
     await expect(actions.commit(runId, 'x')).rejects.toThrow(/agent run is in progress/)
+  })
+})
+
+describe('review loop', () => {
+  const live = (head: string, own = false) => ({
+    headRefOid: head,
+    viewerDidAuthor: own,
+    pending: null,
+  })
+
+  it('moves a GO to To approve, then Approved after the approve action', async () => {
+    const { ctx, pr, addRun } = await setup()
+    const runId = addRun('review')
+    saveReview(ctx, runId, { ...report, verdict: 'approve' }, [])
+    const fake = fakeApi(live('head1'))
+    const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => {} } })
+    const gate = await actions.update({ runId, confirmed: true })
+    expect(gate.nextStage).toBe('to-approve')
+    await actions.post(runId)
+    expect(listPrs(ctx)[0]!.stage).toBe('to-approve')
+
+    const approved = await actions.approve(pr.id)
+    expect(approved.own).toBe(false)
+    expect(fake.named('AddReview').at(-1)!.input).toMatchObject({
+      pullRequestId: 'PR_1',
+      commitOID: 'head1',
+      event: 'APPROVE',
+      body: `✅ GO\n\n${aiTag}`,
+    })
+    expect(listPrs(ctx)[0]!.stage).toBe('approved')
+    ctx.db.update(prs).set({ headOid: 'head2' }).run()
+    expect(listPrs(ctx)[0]!.stage).toBe('re-review')
+  })
+
+  it('goes straight to Approved when the review is submitted as Approve', async () => {
+    const { ctx, addRun } = await setup()
+    const runId = addRun('review')
+    saveReview(ctx, runId, { ...report, verdict: 'approve' }, [])
+    const actions = createActions({
+      ctx,
+      api: fakeApi(live('head1')).api,
+      emit: { prsChanged: () => {} },
+    })
+    const gate = await actions.update({ runId, mode: 'submit', confirmed: true })
+    expect(gate.nextStage).toBe('approved')
+    await actions.post(runId)
+    expect(listPrs(ctx)[0]!.stage).toBe('approved')
+  })
+
+  it('posts GO as a Comment on my own pull request', async () => {
+    const { ctx, pr } = await setup('author')
+    const fake = fakeApi(live('head1', true))
+    const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => {} } })
+    expect((await actions.approve(pr.id)).own).toBe(true)
+    expect(fake.named('AddReview')[0]!.input).toMatchObject({ event: 'COMMENT' })
+    expect(listPrs(ctx)[0]!.stage).toBe('approved')
+  })
+
+  it('sends an addressed pull request to Re-review and keeps the posted mode', async () => {
+    const { ctx, repo, addRun } = await setup('author')
+    const reviewId = addRun('review')
+    saveReview(ctx, reviewId, report, [])
+    const actions = createActions({
+      ctx,
+      api: fakeApi(live('head1', true)).api,
+      emit: { prsChanged: () => {} },
+    })
+    await actions.update({ runId: reviewId, confirmed: true })
+    const posted = await actions.post(reviewId)
+    expect(listPrs(ctx)[0]!.stage).toBe('changes-requested')
+    setRepoPostMode(ctx, repo.id, 'submit')
+    expect((await actions.get(reviewId)).mode).toBe(posted.mode)
+
+    const addressId = addRun('address', {
+      threadsJson: JSON.stringify(['T1']),
+      changesJson: JSON.stringify({ threads: [{ threadId: 'T1', action: 'fix' }] }),
+    })
+    expect((await actions.skip(addressId, true)).nextStage).toBe('re-review')
+    expect(listPrs(ctx)[0]!.stage).toBe('re-review')
+  })
+
+  it('clears a manual stage when posting', async () => {
+    const { ctx, pr, addRun } = await setup()
+    const runId = addRun('review')
+    saveReview(ctx, runId, report, [])
+    ctx.db.insert(prFlags).values({ prId: pr.id, manualStage: 'to-approve' }).run()
+    const actions = createActions({
+      ctx,
+      api: fakeApi(live('head1')).api,
+      emit: { prsChanged: () => {} },
+    })
+    await actions.skip(runId, true)
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'changes-requested', manual: false })
   })
 })

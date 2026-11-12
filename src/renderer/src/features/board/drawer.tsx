@@ -28,7 +28,7 @@ import { PostPanel } from '../post/post-panel'
 import { RunsPanel } from '../runs/runs-panel'
 import { WorktreeFooter } from '../runs/worktree-footer'
 import { Avatar } from './card'
-import { age, hasLiveRun, prSize, stageLabel, useBoardStore, useNow } from './model'
+import { age, hasLiveRun, prSize, readyToPost, stageLabel, useBoardStore, useNow } from './model'
 
 const reviewTone: Record<string, 'success' | 'destructive' | 'default' | 'accent'> = {
   APPROVED: 'success',
@@ -390,7 +390,7 @@ export function PrDrawer() {
                   </TabsTrigger>
                   <TabsTrigger value="post">
                     Post
-                    {(pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post') && (
+                    {readyToPost(pr) && (
                       <>
                         <span aria-hidden className="size-1.5 rounded-full bg-primary" />
                         <span className="sr-only">(ready to post)</span>

@@ -357,6 +357,10 @@ export const ipcContract = {
     input: z.object({ runId: id, skipped: z.boolean() }),
     output: postGate,
   },
+  'gates:approve': {
+    input: id,
+    output: z.object({ url: z.string(), own: z.boolean() }),
+  },
   'findings:update': {
     input: findingPatch,
     output: finding,

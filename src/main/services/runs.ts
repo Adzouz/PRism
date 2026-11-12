@@ -26,6 +26,7 @@ import { redact, redactText } from '../agents/redact'
 import type { SessionTotals } from '../agents/types'
 import { asks, findings, postGates, runEvents, runs } from '../db/schema'
 import type { Ctx } from './context'
+import { reviewDirection, type LoopFacts } from './pr-stage'
 
 type RunRow = typeof runs.$inferSelect
 type AskRow = typeof asks.$inferSelect
@@ -411,13 +412,13 @@ export function runStage(
   if (run.status === 'needs_you') return 'needs-you'
   const active = run.status === 'queued' || run.status === 'preparing' || run.status === 'running'
   if (!active && (pr.state !== 'OPEN' || run.gateClosed)) return null
-  if (tab === 'reviews' && reviewStages.has(run.stage)) {
+  if (reviewStages.has(run.stage)) {
     if (active) return 'reviewing'
-    if (run.status === 'done' && (pr.myReviewAt ?? 0) < (run.endedAt ?? 0)) return 'verdict-ready'
+    if (run.status === 'done' && (pr.myReviewAt ?? 0) < (run.endedAt ?? 0)) return 'reviewing'
   }
   if (tab === 'mine' && run.stage === 'address') {
     if (active) return 'addressing'
-    if (run.status === 'done') return 'ready-to-post'
+    if (run.status === 'done') return 'addressing'
   }
   return null
 }
@@ -552,7 +553,10 @@ export function boardRunFor(
   pr: { state: string; myReviewAt: number | null },
 ): { run: BoardRunInfo; stage: BoardStage | null } {
   const activeStage = set.active ? runStage(tab, set.active, pr) : null
-  const done = tab === 'reviews' ? set.reviewed : set.addressed
+  const candidates = [set.reviewed, tab === 'mine' ? set.addressed : null]
+    .filter((item): item is BoardRunInfo => item !== null)
+    .sort((a, b) => b.id - a.id)
+  const done = candidates.find((item) => runStage(tab, item, pr) !== null) ?? null
   const doneStage = done ? runStage(tab, done, pr) : null
   return {
     stage: activeStage ?? doneStage,
@@ -624,4 +628,56 @@ export function saveReplies(ctx: Ctx, runId: number, replies: DraftReply[]) {
   const merged = new Map(existing.map((reply) => [reply.threadId, reply]))
   for (const reply of replies) merged.set(reply.threadId, reply)
   return updateRun(ctx, runId, { repliesJson: JSON.stringify(redact([...merged.values()])) })
+}
+
+export function reviewedPrIds(ctx: Ctx, onlyPrId?: number) {
+  const reviewed = and(eq(runs.status, 'done'), inArray(runs.stage, [...reviewStages]))
+  return new Set(
+    ctx.db
+      .selectDistinct({ prId: runs.prId })
+      .from(runs)
+      .where(onlyPrId === undefined ? reviewed : and(reviewed, eq(runs.prId, onlyPrId)))
+      .all()
+      .map((row) => row.prId),
+  )
+}
+
+export function latestLoops(ctx: Ctx, onlyPrId?: number) {
+  const closed = and(
+    inArray(postGates.kind, ['review', 'address']),
+    or(isNotNull(postGates.postedAt), isNotNull(postGates.skippedAt)),
+  )
+  const rows = ctx.db
+    .select({
+      prId: runs.prId,
+      kind: postGates.kind,
+      mode: postGates.mode,
+      event: postGates.event,
+      postedAt: postGates.postedAt,
+      skippedAt: postGates.skippedAt,
+      reportJson: runs.reportJson,
+      reviewedHeadOid: runs.reviewedHeadOid,
+    })
+    .from(postGates)
+    .innerJoin(runs, eq(runs.id, postGates.runId))
+    .where(onlyPrId === undefined ? closed : and(closed, eq(runs.prId, onlyPrId)))
+    .all()
+  const latest = new Map<number, (typeof rows)[number]>()
+  const closedAt = (row: (typeof rows)[number]) => Math.max(row.postedAt ?? 0, row.skippedAt ?? 0)
+  for (const row of rows) {
+    const current = latest.get(row.prId)
+    if (!current || closedAt(row) > closedAt(current)) latest.set(row.prId, row)
+  }
+  const result = new Map<number, LoopFacts>()
+  for (const [prId, row] of latest) {
+    const verdict = parse(reviewReport, row.reportJson, null as ReviewReport | null)?.verdict
+    const direction = reviewDirection(row.mode, row.event, verdict)
+    result.set(prId, {
+      kind: row.kind === 'address' ? 'address' : 'review',
+      goes: direction.goes,
+      approvedOnGithub: direction.approvedOnGithub && row.postedAt !== null,
+      reviewedHeadOid: row.reviewedHeadOid,
+    })
+  }
+  return result
 }

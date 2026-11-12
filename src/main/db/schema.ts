@@ -122,6 +122,8 @@ export const prFlags = sqliteTable('pr_flags', {
   restoredAt: integer('restored_at'),
   manualStage: text('manual_stage'),
   manualStageBasis: text('manual_stage_basis'),
+  approvedOid: text('approved_oid'),
+  approvedAt: integer('approved_at'),
 })
 
 export const snapshots = sqliteTable(

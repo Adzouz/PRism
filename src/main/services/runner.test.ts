@@ -242,11 +242,7 @@ describe('agent runner', () => {
       costUsd: 0.01,
     })
     expect(listFindings(ctx, first.id)).toHaveLength(1)
-    expect(listPrs(ctx).map((pr) => pr.stage)).toEqual([
-      'verdict-ready',
-      'verdict-ready',
-      'verdict-ready',
-    ])
+    expect(listPrs(ctx).map((pr) => pr.stage)).toEqual(['reviewing', 'reviewing', 'reviewing'])
     expect(listPrs(ctx)[0]!.run).toMatchObject({ verdict: 'request_changes', findings: 1 })
     const prompt = vi
       .mocked(adapter.run)
@@ -402,7 +398,7 @@ describe('agent runner', () => {
     })
     const run = runner.start({ prId: ids[0]!, stage: 'review' })
     await until(() => getRun(ctx, run.id).status === 'done')
-    expect(listPrs(ctx)[0]!.stage).toBe('verdict-ready')
+    expect(listPrs(ctx)[0]!.stage).toBe('reviewing')
     runner.dismiss(run.id)
     expect(listPrs(ctx)[0]!.stage).toBe('to-review')
 
@@ -412,7 +408,7 @@ describe('agent runner', () => {
     const call = vi.mocked(adapter.run).mock.calls[1]![0]
     expect(call).toMatchObject({ resume: 's5', prompt: 'Also check the docs' })
     expect(getRun(ctx, run.id).report?.verdict).toBe('approve')
-    expect(listPrs(ctx)[0]!.stage).toBe('verdict-ready')
+    expect(listPrs(ctx)[0]!.stage).toBe('reviewing')
     expect(events.find((event) => event.kind === 'message')?.payload).toEqual({
       text: 'Also check the docs',
     })
@@ -428,7 +424,7 @@ describe('agent runner', () => {
     await until(() => runner.isActive(run.id) && getRun(ctx, run.id).status === 'running')
     expect(() => runner.dismiss(run.id)).toThrow('Stop the run')
     expect(() => runner.followUp({ runId: run.id, message: 'x' })).toThrow('still in progress')
-    expect(() => setPrStage(ctx, { id: ids[0]!, stage: 'waiting-on-author' })).toThrow(
+    expect(() => setPrStage(ctx, { id: ids[0]!, stage: 'changes-requested' })).toThrow(
       'Stop the agent run',
     )
     runner.cancel(run.id)
@@ -490,7 +486,7 @@ describe('agent runner', () => {
     await until(() => getRun(ctx, first.id).status === 'done' && !runner.isActive(first.id))
     const second = runner.start({ prId: ids[0]!, stage: 'review' })
     await until(() => getRun(ctx, second.id).status === 'done' && !runner.isActive(second.id))
-    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'verdict-ready', run: { id: second.id } })
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'reviewing', run: { id: second.id } })
     runner.dismiss(second.id)
     expect(listPrs(ctx)[0]).toMatchObject({ stage: 'to-review', run: null })
     expect(getRun(ctx, first.id).dismissedAt).not.toBeNull()
@@ -510,7 +506,7 @@ describe('agent runner', () => {
     runner.dismiss(plan.id)
     expect(getRun(ctx, plan.id).dismissedAt).not.toBeNull()
     expect(getRun(ctx, review.id).dismissedAt).toBeNull()
-    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'verdict-ready', run: { id: review.id } })
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'reviewing', run: { id: review.id } })
   })
 
   it('keeps the verdict when a failed re-review is dismissed', async () => {
@@ -532,7 +528,7 @@ describe('agent runner', () => {
     runner.dismiss(again.id)
     expect(getRun(ctx, again.id).dismissedAt).not.toBeNull()
     expect(getRun(ctx, review.id).dismissedAt).toBeNull()
-    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'verdict-ready', run: { id: review.id } })
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'reviewing', run: { id: review.id } })
   })
 
   it('blocks pushes to the clone remotes and hands the shell context to the agent', async () => {
@@ -753,7 +749,7 @@ describe('agent runner', () => {
     await until(() => getRun(ctx, run.id).status === 'done')
     expect(listPrs(ctx)[0]!.run).toMatchObject({ stale: false })
     ctx.db.update(prs).set({ headOid: 'head2' }).run()
-    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'verdict-ready', run: { stale: true } })
+    expect(listPrs(ctx)[0]).toMatchObject({ stage: 'reviewing', run: { stale: true } })
   })
 })
 
@@ -764,7 +760,7 @@ describe('run stage overlay', () => {
       'reviewing',
     )
     expect(runStage('reviews', { stage: 're-review', status: 'done', endedAt: 10 }, open)).toBe(
-      'verdict-ready',
+      'reviewing',
     )
     expect(
       runStage(
@@ -784,7 +780,7 @@ describe('run stage overlay', () => {
       'addressing',
     )
     expect(runStage('mine', { stage: 'address', status: 'done', endedAt: 5 }, open)).toBe(
-      'ready-to-post',
+      'addressing',
     )
     expect(runStage('mine', { stage: 'review', status: 'needs_you', endedAt: null }, open)).toBe(
       'needs-you',
@@ -820,14 +816,14 @@ describe('run stage overlay', () => {
         { latest: plan, active: plan, reviewed: review, addressed: null },
         open,
       ),
-    ).toEqual({ stage: 'verdict-ready', run: plan })
+    ).toEqual({ stage: 'reviewing', run: plan })
     expect(
       boardRunFor(
         'reviews',
         { latest: failed, active: null, reviewed: review, addressed: null },
         open,
       ),
-    ).toEqual({ stage: 'verdict-ready', run: review })
+    ).toEqual({ stage: 'reviewing', run: review })
     expect(
       boardRunFor(
         'reviews',
@@ -841,6 +837,6 @@ describe('run stage overlay', () => {
         { latest: review, active: null, reviewed: review, addressed: null },
         open,
       ),
-    ).toEqual({ stage: null, run: review })
+    ).toEqual({ stage: 'reviewing', run: review })
   })
 })

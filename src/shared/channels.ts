@@ -71,6 +71,7 @@ export const ipcChannels = [
   'gates:push',
   'gates:post',
   'gates:skip',
+  'gates:approve',
   'findings:update',
   'settings:getPostMode',
   'settings:setPostMode',

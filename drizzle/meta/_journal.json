@@ -50,6 +50,13 @@
       "when": 1794323689295,
       "tag": "0006_wandering_mister_sinister",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1794478848515,
+      "tag": "0007_familiar_franklin_storm",
+      "breakpoints": true
     }
   ]
 }

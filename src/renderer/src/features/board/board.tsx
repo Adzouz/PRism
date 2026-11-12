@@ -15,21 +15,23 @@ import {
   type DragStartEvent,
   type KeyboardCoordinateGetter,
 } from '@dnd-kit/core'
-import { Bot, GitPullRequest, Loader2 } from 'lucide-react'
+import { BadgeCheck, Bot, GitPullRequest, Loader2 } from 'lucide-react'
 import {
   boardColumns,
+  columnStage,
   type BoardColumn,
   type BoardPr,
   type BoardStage,
   type BoardTab,
   type Stage,
 } from '@shared/domain'
-import { EmptyState } from '@/components/page'
+import { EmptyState, ErrorText } from '@/components/page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import {
   runStageFor,
+  useApprove,
   useCancelRun,
   useDismissRun,
   useSetFlags,
@@ -123,9 +125,15 @@ function Column({
   const { active } = useDndContext()
   const dragged = active?.data.current?.pr as BoardPr | undefined
   const fromHere = dragged?.stage === column.stage
-  const disabled = column.agent
-    ? !(runColumns.has(column.stage) && dragged && !hasLiveRun(dragged) && dragged.state === 'OPEN')
-    : Boolean(dragged && hasLiveRun(dragged) && !fromHere)
+  const disabled =
+    column.agent || column.approve
+      ? !(
+          (runColumns.has(column.stage) || column.approve) &&
+          dragged &&
+          !hasLiveRun(dragged) &&
+          dragged.state === 'OPEN'
+        )
+      : Boolean(dragged && hasLiveRun(dragged) && !fromHere)
   const { setNodeRef, isOver } = useDroppable({ id: column.stage, disabled })
   return (
     <section
@@ -144,6 +152,7 @@ function Column({
         {column.agent && column.stage !== 'needs-you' && (
           <Bot className="ml-auto size-3.5 text-muted-foreground" />
         )}
+        {column.approve && <BadgeCheck className="ml-auto size-3.5 text-muted-foreground" />}
         {column.needsMe && (!column.agent || column.stage === 'needs-you') && prs.length > 0 && (
           <Badge variant="accent" className="ml-auto">
             Needs you
@@ -165,11 +174,13 @@ function Column({
           <p className="px-2 py-6 text-center text-xs text-muted-foreground">
             {runColumns.has(column.stage)
               ? 'Drop a card here to start a run'
-              : column.agent
-                ? 'Agent runs land here'
-                : tab === 'reviews'
-                  ? 'Nothing here'
-                  : 'Empty'}
+              : column.approve
+                ? 'Drop a card here to approve it'
+                : column.agent
+                  ? 'Agent runs land here'
+                  : tab === 'reviews'
+                    ? 'Nothing here'
+                    : 'Empty'}
           </p>
         )}
       </div>
@@ -191,7 +202,13 @@ export function Board({ tab }: { tab: BoardTab }) {
   const { mutateAsync: cancel } = useCancelRun()
   const { mutateAsync: dismiss } = useDismissRun()
   const [failure, setFailure] = useState<Failure | null>(null)
-  const [pendingDrop, setPendingDrop] = useState<{ pr: BoardPr; column: BoardStage } | null>(null)
+  const [pendingDrop, setPendingDrop] = useState<{
+    pr: BoardPr
+    column: BoardStage
+    stage: Stage
+  } | null>(null)
+  const [pendingApprove, setPendingApprove] = useState<BoardPr | null>(null)
+  const approve = useApprove()
   const [drag, setDrag] = useState<{ pr: BoardPr; columns: BoardColumn[] } | null>(null)
   const justDropped = useRef(false)
 
@@ -239,7 +256,8 @@ export function Board({ tab }: { tab: BoardTab }) {
       open: (pr) => {
         if (justDropped.current) return
         track(pr)
-        const toPost = pr.run && (pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post')
+        const toPost =
+          pr.run?.status === 'done' && (pr.stage === 'reviewing' || pr.stage === 'addressing')
         if (toPost) openPr(pr.id, 'post', pr.run?.id)
         else if (pr.run && hasLiveRun(pr)) openPr(pr.id, 'runs', pr.run.id)
         else openPr(pr.id)
@@ -276,9 +294,14 @@ export function Board({ tab }: { tab: BoardTab }) {
       const column = boardColumns[tab].find((item) => item.stage === target)
       if (!column || hasLiveRun(pr)) return
       if (runColumns.has(column.stage)) {
-        if (pr.state !== 'OPEN') return
-        if (dropConfirmed[column.stage]) launch(pr)
-        else setPendingDrop({ pr, column: column.stage })
+        const runAs = columnStage(column.stage, pr)
+        if (pr.state !== 'OPEN' || !runAs) return
+        if (dropConfirmed[column.stage]) launch(pr, runAs)
+        else setPendingDrop({ pr, column: column.stage, stage: runAs })
+        return
+      }
+      if (column.approve) {
+        if (pr.state === 'OPEN') setPendingApprove(pr)
         return
       }
       if (column.agent) return
@@ -305,7 +328,8 @@ export function Board({ tab }: { tab: BoardTab }) {
   )
 
   const tabTotal = (prs ?? []).filter((pr) => pr.tab === tab && pr.archivedAt === null).length
-  const copy = pendingDrop && dropCopy[runStageFor(pendingDrop.pr)]
+  const copy = pendingDrop && dropCopy[pendingDrop.stage]
+  const ownApproval = pendingApprove?.role === 'author'
 
   return (
     <div className="space-y-5">
@@ -375,11 +399,55 @@ export function Board({ tab }: { tab: BoardTab }) {
                   autoFocus
                   onClick={() => {
                     confirmDrop(pendingDrop.column)
-                    launch(pendingDrop.pr)
+                    launch(pendingDrop.pr, pendingDrop.stage)
                     setPendingDrop(null)
                   }}
                 >
                   Start run
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        )}
+      </Dialog>
+      <Dialog
+        open={pendingApprove !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingApprove(null)
+            approve.reset()
+          }
+        }}
+      >
+        {pendingApprove && (
+          <DialogContent
+            title={ownApproval ? 'Post GO on your pull request?' : 'Approve this pull request?'}
+            description={`${pendingApprove.repo} #${pendingApprove.number}`}
+            className="w-[min(480px,calc(100vw-48px))]"
+          >
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                {ownApproval
+                  ? 'GitHub does not let you approve your own pull request, so PRism posts a Comment review saying “GO”, with the AI tag line.'
+                  : 'PRism submits an Approve review on GitHub saying “GO”, with the AI tag line.'}{' '}
+                A pending review of yours on this pull request is submitted with it.
+              </p>
+              <ErrorText error={approve.error} />
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setPendingApprove(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  autoFocus
+                  disabled={approve.isPending}
+                  onClick={() =>
+                    approve.mutate(pendingApprove.id, {
+                      onSuccess: () => setPendingApprove(null),
+                    })
+                  }
+                >
+                  {approve.isPending ? <Loader2 className="animate-spin" /> : <BadgeCheck />}
+                  {ownApproval ? 'Post GO' : 'Approve'}
                 </Button>
               </div>
             </div>

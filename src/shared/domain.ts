@@ -218,14 +218,10 @@ export const boardStages = [
   'needs-you',
   'to-review',
   'reviewing',
-  'verdict-ready',
-  'waiting-on-author',
-  're-review',
-  'draft',
-  'waiting-for-review',
   'changes-requested',
   'addressing',
-  'ready-to-post',
+  're-review',
+  'to-approve',
   'approved',
   'done',
 ] as const
@@ -237,6 +233,7 @@ export type BoardColumn = {
   label: string
   needsMe?: boolean
   agent?: boolean
+  approve?: boolean
   hideEmpty?: boolean
 }
 
@@ -248,27 +245,21 @@ const needsYouColumn: BoardColumn = {
   hideEmpty: true,
 }
 
+const loopColumns = (author: boolean): BoardColumn[] => [
+  needsYouColumn,
+  { stage: 'to-review', label: 'To review', needsMe: true },
+  { stage: 'reviewing', label: 'Reviewing', agent: true },
+  { stage: 'changes-requested', label: 'Changes requested', needsMe: author },
+  ...(author ? [{ stage: 'addressing', label: 'Addressing', agent: true } as const] : []),
+  { stage: 're-review', label: 'Re-review', needsMe: true },
+  { stage: 'to-approve', label: 'To approve', needsMe: true },
+  { stage: 'approved', label: 'Approved', approve: true },
+  { stage: 'done', label: 'Done' },
+]
+
 export const boardColumns: Record<BoardTab, BoardColumn[]> = {
-  reviews: [
-    needsYouColumn,
-    { stage: 'to-review', label: 'To review', needsMe: true },
-    { stage: 'reviewing', label: 'Reviewing', agent: true },
-    { stage: 'verdict-ready', label: 'Verdict ready', needsMe: true, agent: true },
-    { stage: 'waiting-on-author', label: 'Waiting on author' },
-    { stage: 're-review', label: 'Re-review', needsMe: true },
-    { stage: 'approved', label: 'Approved' },
-    { stage: 'done', label: 'Done' },
-  ],
-  mine: [
-    needsYouColumn,
-    { stage: 'draft', label: 'Draft' },
-    { stage: 'waiting-for-review', label: 'Waiting for review' },
-    { stage: 'changes-requested', label: 'Changes requested', needsMe: true },
-    { stage: 'addressing', label: 'Addressing', agent: true },
-    { stage: 'ready-to-post', label: 'Ready to post', needsMe: true, agent: true },
-    { stage: 'approved', label: 'Approved' },
-    { stage: 'done', label: 'Done' },
-  ],
+  reviews: loopColumns(false),
+  mine: loopColumns(true),
 }
 
 export const prRole = z.enum(['reviewer', 'author', 'takeover'])
@@ -533,17 +524,31 @@ export const boardPr = z.object({
   starred: z.boolean(),
   hidden: z.boolean(),
   archivedAt: z.number().nullable(),
+  reviewed: z.boolean(),
   run: boardRun.nullable(),
 })
 export type BoardPr = z.infer<typeof boardPr>
 
+export function reviewStageFor(pr: Pick<BoardPr, 'reviewed' | 'myReviewState'>): Stage {
+  return pr.reviewed || pr.myReviewState ? 're-review' : 'review'
+}
+
+export function columnStage(
+  column: BoardStage,
+  pr: Pick<BoardPr, 'tab' | 'reviewed' | 'myReviewState'>,
+): Stage | null {
+  if (column === 'reviewing') return reviewStageFor(pr)
+  if (column === 'addressing' && pr.tab === 'mine') return 'address'
+  return null
+}
+
 export function runStageFor(
-  pr: Pick<BoardPr, 'tab' | 'derivedStage' | 'myReviewState' | 'run'>,
+  pr: Pick<BoardPr, 'tab' | 'stage' | 'reviewed' | 'myReviewState'>,
 ): Stage {
-  if (pr.tab === 'mine') return 'address'
-  const reviewed =
-    pr.run?.status === 'done' && (pr.run.stage === 'review' || pr.run.stage === 're-review')
-  return pr.derivedStage === 're-review' || pr.myReviewState || reviewed ? 're-review' : 'review'
+  if (pr.tab === 'mine' && (pr.stage === 'changes-requested' || pr.stage === 'addressing')) {
+    return 'address'
+  }
+  return reviewStageFor(pr)
 }
 
 export const checkState = z.enum(['success', 'failure', 'pending', 'neutral', 'skipped'])
@@ -675,6 +680,7 @@ export const postGate = z.object({
   postedAt: z.number().nullable(),
   skippedAt: z.number().nullable(),
   reviewUrl: z.string().nullable(),
+  nextStage: boardStage.nullable(),
   warning: z.string().nullable(),
 })
 export type PostGate = z.infer<typeof postGate>

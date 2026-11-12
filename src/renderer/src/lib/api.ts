@@ -335,6 +335,14 @@ export const usePost = () => useGateMutation((runId: number) => invoke('gates:po
 export const useSkipPost = () =>
   useGateMutation((input: { runId: number; skipped: boolean }) => invoke('gates:skip', input))
 
+export function useApprove() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (prId: number) => invoke('gates:approve', prId),
+    onSuccess: () => client.invalidateQueries({ queryKey: keys.prs, exact: true }),
+  })
+}
+
 export function useUpdateFinding(runId: number) {
   const client = useQueryClient()
   return useMutation({

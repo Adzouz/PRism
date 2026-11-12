@@ -15,13 +15,15 @@ import type { Ctx } from './context'
 import type { GithubApi } from './gh-api'
 import { getRepo } from './repos'
 import { ciOfChecks, fetchChecks } from './checks'
-import { stageAllowedIn, stageBasis, tabOf } from './pr-stage'
+import { loopStage, stageAllowedIn, stageBasis, tabOf, type LoopFacts } from './pr-stage'
 import {
   activeRunFor,
   boardRunFor,
   dismissRunsForPr,
   isStaleVerdict,
   latestBoardRuns,
+  latestLoops,
+  reviewedPrIds,
   type BoardRunInfo,
   type PrRuns,
 } from './runs'
@@ -59,8 +61,20 @@ const boardRunOf = (run: BoardRunInfo, headOid: string | null): BoardPr['run'] =
   gateClosed: run.gateClosed,
 })
 
-function toBoardPr({ pr, flags, owner, name }: BoardRow, set?: PrRuns): BoardPr {
-  const derived = pr.derivedStage as BoardStage
+type Loop = { loop: LoopFacts | null; reviewed: boolean }
+
+const autoStage = (
+  pr: { derivedStage: string; headOid: string },
+  flags: { approvedOid: string | null } | null | undefined,
+  loop: LoopFacts | null,
+) => loopStage(pr.derivedStage as BoardStage, pr.headOid, loop, flags?.approvedOid ?? null)
+
+function toBoardPr(
+  { pr, flags, owner, name }: BoardRow,
+  set: PrRuns | undefined,
+  extra: Loop,
+): BoardPr {
+  const derived = autoStage(pr, flags, extra.loop)
   const manual = (flags?.manualStage as BoardStage | null | undefined) ?? null
   const tab = tabOf(pr.myRole)
   const picked = set ? boardRunFor(tab, set, { state: pr.state, myReviewAt: pr.myReviewAt }) : null
@@ -96,21 +110,50 @@ function toBoardPr({ pr, flags, owner, name }: BoardRow, set?: PrRuns): BoardPr 
     starred: flags?.starred ?? false,
     hidden: flags?.hidden ?? false,
     archivedAt: flags?.archivedAt ?? null,
+    reviewed: extra.reviewed,
     run: picked ? boardRunOf(picked.run, pr.headOid) : null,
   }
 }
 
 export function listPrs(ctx: Ctx) {
   const latest = latestBoardRuns(ctx)
+  const loops = latestLoops(ctx)
+  const reviewed = reviewedPrIds(ctx)
   return selectBoard(ctx)
     .all()
-    .map((row) => toBoardPr(row, latest.get(row.pr.id)))
+    .map((row) =>
+      toBoardPr(row, latest.get(row.pr.id), {
+        loop: loops.get(row.pr.id) ?? null,
+        reviewed: reviewed.has(row.pr.id),
+      }),
+    )
 }
 
 export function getPr(ctx: Ctx, id: number) {
   const row = selectBoard(ctx).where(eq(prs.id, id)).get()
   if (!row) throw new Error(`Pull request ${id} not found`)
-  return toBoardPr(row, latestBoardRuns(ctx, id).get(id))
+  return toBoardPr(row, latestBoardRuns(ctx, id).get(id), {
+    loop: latestLoops(ctx, id).get(id) ?? null,
+    reviewed: reviewedPrIds(ctx, id).has(id),
+  })
+}
+
+export function clearManualStage(ctx: Ctx, prId: number) {
+  ctx.db
+    .update(prFlags)
+    .set({ manualStage: null, manualStageBasis: null })
+    .where(eq(prFlags.prId, prId))
+    .run()
+}
+
+export function markApproved(ctx: Ctx, prId: number, oid: string) {
+  upsertFlags(ctx, prId, {
+    approvedOid: oid,
+    approvedAt: Date.now(),
+    manualStage: null,
+    manualStageBasis: null,
+  })
+  ctx.db.update(prs).set({ stageSince: Date.now() }).where(eq(prs.id, prId)).run()
 }
 
 function upsertFlags(ctx: Ctx, prId: number, set: Partial<typeof prFlags.$inferInsert>) {
@@ -141,7 +184,9 @@ export function setPrStage(ctx: Ctx, input: { id: number; stage: BoardStage | nu
   if (!row) throw new Error(`Pull request ${input.id} not found`)
   if (activeRunFor(ctx, row.id)) throw new Error('Stop the agent run before moving this card')
   const tab = tabOf(row.myRole)
-  const stage = input.stage === row.derivedStage ? null : input.stage
+  const flags = ctx.db.select().from(prFlags).where(eq(prFlags.prId, row.id)).get()
+  const automatic = autoStage(row, flags, latestLoops(ctx, row.id).get(row.id) ?? null)
+  const stage = input.stage === automatic ? null : input.stage
   if (stage && !stageAllowedIn(tab, stage)) throw new Error('That column is not on this board')
   const basis = stageBasis({
     state: row.state,

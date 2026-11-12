@@ -14,6 +14,7 @@ import {
   Upload,
 } from 'lucide-react'
 import {
+  boardColumns,
   findingComment,
   gateKindOf,
   postModeLabels,
@@ -601,6 +602,11 @@ function Gate({ run }: { run: Run }) {
               <Button disabled={!gate.ready || post.isPending} onClick={() => post.mutate(run.id)}>
                 {post.isPending ? <Loader2 className="animate-spin" /> : <Send />}
                 {postLabel(gate)}
+                {gate.nextStage && (
+                  <span className="font-normal opacity-80">
+                    → {boardColumns.mine.find((column) => column.stage === gate.nextStage)?.label}
+                  </span>
+                )}
               </Button>
               <Button
                 variant="ghost"

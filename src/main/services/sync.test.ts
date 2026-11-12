@@ -6,7 +6,7 @@ import { openDb } from '../db/client'
 import { repos, snapshots } from '../db/schema'
 import type { Ctx } from './context'
 import type { GithubApi } from './gh-api'
-import { deriveStage, type PrFacts } from './pr-stage'
+import { deriveStage, loopStage, type PrFacts } from './pr-stage'
 import { listPrs, setPrFlags, setPrStage } from './prs'
 import { getRepo } from './repos'
 import { checkState } from './checks'
@@ -154,7 +154,7 @@ describe('deriveStage', () => {
     expect(deriveStage({ ...base, reviewRequested: true })).toBe('to-review')
     const review = { state: 'COMMENTED', oid: 'h1', at: 1 }
     expect(deriveStage({ ...base, reviewRequested: true, myReview: review })).toBe('re-review')
-    expect(deriveStage({ ...base, myReview: review })).toBe('waiting-on-author')
+    expect(deriveStage({ ...base, myReview: review })).toBe('changes-requested')
     expect(deriveStage({ ...base, myReview: { ...review, oid: 'h0' } })).toBe('re-review')
     expect(deriveStage({ ...base, myReview: { ...review, state: 'APPROVED' } })).toBe('approved')
     expect(deriveStage({ ...base, state: 'MERGED' })).toBe('done')
@@ -162,12 +162,41 @@ describe('deriveStage', () => {
 
   it('derives my PR columns', () => {
     const mine = { ...base, role: 'author' as const }
-    expect(deriveStage({ ...mine, isDraft: true })).toBe('draft')
-    expect(deriveStage(mine)).toBe('waiting-for-review')
+    expect(deriveStage({ ...mine, isDraft: true })).toBe('to-review')
+    expect(deriveStage(mine)).toBe('to-review')
     expect(deriveStage({ ...mine, unresolvedThreads: 2 })).toBe('changes-requested')
     expect(deriveStage({ ...mine, reviewDecision: 'CHANGES_REQUESTED' })).toBe('changes-requested')
     expect(deriveStage({ ...mine, reviewDecision: 'APPROVED' })).toBe('approved')
     expect(deriveStage({ ...mine, role: 'takeover', state: 'CLOSED' })).toBe('done')
+  })
+})
+
+describe('loopStage', () => {
+  const review = {
+    kind: 'review' as const,
+    goes: 'changes' as const,
+    approvedOnGithub: false,
+    reviewedHeadOid: 'h1',
+  }
+
+  it('follows the last posted review or address run', () => {
+    expect(loopStage('to-review', 'h1', null, null)).toBe('to-review')
+    expect(loopStage('to-review', 'h1', review, null)).toBe('changes-requested')
+    expect(loopStage('to-review', 'h1', { ...review, goes: 'approve' }, null)).toBe('to-approve')
+    expect(
+      loopStage('to-review', 'h1', { ...review, goes: 'approve', approvedOnGithub: true }, null),
+    ).toBe('approved')
+    expect(loopStage('to-review', 'h2', review, null)).toBe('re-review')
+    expect(loopStage('changes-requested', 'h1', { ...review, kind: 'address' }, null)).toBe(
+      're-review',
+    )
+  })
+
+  it('lets approvals and closed pull requests win', () => {
+    expect(loopStage('to-review', 'h1', review, 'h1')).toBe('approved')
+    expect(loopStage('to-review', 'h2', review, 'h1')).toBe('re-review')
+    expect(loopStage('approved', 'h1', review, null)).toBe('approved')
+    expect(loopStage('done', 'h1', review, null)).toBe('done')
   })
 })
 
@@ -200,7 +229,7 @@ describe('syncRepo', () => {
       stage: 'to-review',
       requestedTeam: 'core',
     })
-    expect(byNumber.get(authored.number)).toMatchObject({ tab: 'mine', stage: 'draft' })
+    expect(byNumber.get(authored.number)).toMatchObject({ tab: 'mine', stage: 'to-review' })
     expect(byNumber.get(takeover.number)).toMatchObject({ role: 'takeover', tab: 'mine' })
     expect(byNumber.has(mentioned.number)).toBe(false)
     expect(byNumber.has(suggested.number)).toBe(false)

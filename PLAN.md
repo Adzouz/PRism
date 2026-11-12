@@ -178,29 +178,23 @@ Every stage has a global default. Each repo can override per stage. Every bindin
 
 Jira-style cards in stage columns. Drag & drop changes the stage.
 
-### Reviews tab (others' PRs I review)
+### One review loop, both tabs
 
-| Column | Derived when | Agent |
+Action columns run something when a card is dropped on them; state columns show where the pull request stands after it. The loop circles until the pull request reaches To approve.
+
+| Column | Kind | Shown when |
 | --- | --- | --- |
-| To review | Review requested, no review from me since | auto-run opt-in |
-| Reviewing | Review / re-review run active | ● live |
-| Verdict ready | Run done, post gate open | **Needs you** |
-| Waiting on author | My review submitted, no new commits | |
-| Re-review | New commits or re-request after my last review | auto-run opt-in |
-| Approved | My latest review = Approve | |
-| Done | Merged / closed | |
+| Needs you | agent | A run asks a question (hidden when empty) |
+| To review | state | Nothing reviewed yet (Reviews: review requested; My PRs: no change request) |
+| Reviewing | **action**: review / re-review | Review run active, or finished with its post gate open |
+| Changes requested | state | Last posted review is NO GO or GO WITH NITS; on Reviews also my review with no new commits since |
+| Addressing | **action**: address (My PRs only) | Address run active, or finished with its post gate open |
+| Re-review | state | Address posted, or new commits since the last review; drop on Reviewing to re-review |
+| To approve | state | Last posted review is GO |
+| Approved | **action**: approve | Approved on GitHub, or approved from PRism at the current head. Own PR: GitHub refuses Approve, so PRism posts a Comment saying GO |
+| Done | state | Merged / closed |
 
-### My PRs tab (authored + taken over)
-
-| Column | Derived when | Agent |
-| --- | --- | --- |
-| Draft | GitHub draft | |
-| Waiting for review | Open, nothing unresolved | |
-| Changes requested | Unresolved threads / CHANGES_REQUESTED | |
-| Addressing | Address run active | ● live |
-| Ready to post | Post gate open (commit/push/replies pending) | **Needs you** |
-| Approved | Approved | |
-| Done | Merged / closed | |
+Posting a gate moves the card: review → To approve (GO) or Changes requested (GO WITH NITS, NO GO), or straight to Approved when submitted as Approve; address → Re-review. Skipping a gate moves it the same way.
 
 **Card:** repo chip, `#num`, title, author avatar, stage age, CI dot, labels, size, verdict badge, unresolved threads, star, live spinner, Needs-you glow.
 
@@ -211,6 +205,7 @@ Jira-style cards in stage columns. Drag & drop changes the stage.
 
 **Drag rules**
 - Dropping into Reviewing or Addressing starts that stage's skill (confirm the first time).
+- Dropping into Approved approves the pull request on GitHub (confirmed every time).
 - Any other drop is a manual override, marked "manual", and cleared when GitHub's derived state changes.
 
 **Toolbar:** repo filter, Starred, Needs me, Show hidden, search (`#num`, `@user`, words), density.

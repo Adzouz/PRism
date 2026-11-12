@@ -19,6 +19,7 @@ import {
   type GateWorktree,
   type PostGate,
   type PostMode,
+  type BoardStage,
   type Run,
 } from '@shared/domain'
 import { redactText } from '../agents/redact'
@@ -28,6 +29,8 @@ import { run as exec } from '../system/exec'
 import type { Ctx } from './context'
 import { diffMap, isCommentable, type DiffMap } from './diff'
 import type { GithubApi } from './gh-api'
+import { reviewDirection } from './pr-stage'
+import { clearManualStage, markApproved } from './prs'
 import { getRepo } from './repos'
 import { activeRunFor, getRun, getRunRow, linkFinding, listFindings } from './runs'
 
@@ -466,6 +469,17 @@ export function createActions(deps: ActionDeps) {
       replies,
     })
     const live = activeRunFor(ctx, run.prId) !== null || run.status !== 'done'
+    const direction = reviewDirection(mode, event, run.report?.verdict)
+    const nextStage: BoardStage | null =
+      kind === 'address'
+        ? 're-review'
+        : kind === 'replies'
+          ? null
+          : direction.goes === 'changes'
+            ? 'changes-requested'
+            : direction.approvedOnGithub
+              ? 'approved'
+              : 'to-approve'
     return {
       runId,
       prId: run.prId,
@@ -487,6 +501,7 @@ export function createActions(deps: ActionDeps) {
       postedAt: gate.postedAt,
       skippedAt: gate.skippedAt,
       reviewUrl: gate.ghReviewUrl,
+      nextStage,
       warning: warnings.length > 0 ? warnings.join(' ') : null,
     }
   }
@@ -729,7 +744,8 @@ export function createActions(deps: ActionDeps) {
       }
       if (loaded.kind === 'review') await postReview(loaded, gate)
       else await postReplies(loaded)
-      setGate(runId, { postedAt: Date.now() })
+      setGate(runId, { postedAt: Date.now(), mode: gate.mode, event: gate.event })
+      clearManualStage(ctx, loaded.run.prId)
       emit.prsChanged()
       return build(runId)
     })
@@ -738,12 +754,54 @@ export function createActions(deps: ActionDeps) {
   async function skip(runId: number, skipped: boolean) {
     const loaded = load(runId)
     if (loaded.gate.postedAt !== null) throw new Error('Already posted')
-    setGate(runId, { skippedAt: skipped ? Date.now() : null })
+    if (skipped) {
+      const current = await build(runId)
+      setGate(runId, { skippedAt: Date.now(), mode: current.mode, event: current.event })
+      clearManualStage(ctx, loaded.run.prId)
+    } else {
+      setGate(runId, { skippedAt: null })
+    }
     emit.prsChanged()
     return build(runId)
   }
 
-  return { get: build, update, commit, push, post, skip }
+  async function approve(prId: number) {
+    const pr = ctx.db.select().from(prs).where(eq(prs.id, prId)).get()
+    if (!pr) throw new Error(`Pull request ${prId} not found`)
+    if (activeRunFor(ctx, prId)) {
+      throw new Error('An agent run is in progress on this pull request. Wait for it or stop it.')
+    }
+    return exclusive(-prId, async () => {
+      const node = await liveNode(pr.nodeId)
+      const event = node.viewerDidAuthor ? 'COMMENT' : 'APPROVE'
+      const body = `✅ GO\n\n${aiTag}`
+      const pending = node.reviews.nodes[0] ?? null
+      const review = pending
+        ? (
+            await mutate<{
+              submitPullRequestReview: { pullRequestReview: { id: string; url: string } }
+            }>(submitMutation, {
+              input: {
+                pullRequestReviewId: pending.id,
+                event,
+                body: [pending.body.trim(), body].filter(Boolean).join('\n\n'),
+              },
+            })
+          ).submitPullRequestReview.pullRequestReview
+        : (
+            await mutate<{
+              addPullRequestReview: { pullRequestReview: { id: string; url: string } }
+            }>(addReviewMutation, {
+              input: { pullRequestId: pr.nodeId, commitOID: node.headRefOid, body, event },
+            })
+          ).addPullRequestReview.pullRequestReview
+      markApproved(ctx, prId, node.headRefOid)
+      emit.prsChanged()
+      return { url: review.url, own: node.viewerDidAuthor }
+    })
+  }
+
+  return { get: build, update, commit, push, post, skip, approve }
 }
 
 export type Actions = ReturnType<typeof createActions>

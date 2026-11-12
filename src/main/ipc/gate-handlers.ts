@@ -13,6 +13,7 @@ export type GateChannel =
   | 'gates:push'
   | 'gates:post'
   | 'gates:skip'
+  | 'gates:approve'
   | 'findings:update'
   | 'settings:getPostMode'
   | 'settings:setPostMode'
@@ -26,6 +27,7 @@ export function gateHandlers(ctx: Ctx, actions: Actions): Pick<Handlers, GateCha
     'gates:push': (runId) => actions.push(runId),
     'gates:post': (runId) => actions.post(runId),
     'gates:skip': ({ runId, skipped }) => actions.skip(runId, skipped),
+    'gates:approve': (prId) => actions.approve(prId),
     'findings:update': (patch) => updateFinding(ctx, patch),
     'settings:getPostMode': () => getPostMode(ctx),
     'settings:setPostMode': (mode) => setPostMode(ctx, mode),
