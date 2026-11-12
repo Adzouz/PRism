@@ -3,7 +3,7 @@ import type { NewFinding } from '../services/runs'
 import type { ShellContext } from './guard'
 
 export type PrismTools = {
-  reportFindings: (report: ReviewReport, findings: NewFinding[]) => string
+  reportFindings: (report: ReviewReport, findings: NewFinding[]) => string | Promise<string>
   reportPriorStatus: (items: { findingId: number; status: Finding['status'] }[]) => string
   reportChanges: (changes: ChangesReport) => string
   draftReplies: (replies: DraftReply[]) => string

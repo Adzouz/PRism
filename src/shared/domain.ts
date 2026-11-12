@@ -398,6 +398,9 @@ export const run = z.object({
   changes: changesReport.nullable(),
   replies: z.array(draftReply),
   threadIds: z.array(z.string()),
+  bodyFindings: z.array(
+    z.object({ id: z.number(), path: z.string(), line: z.number().nullable(), title: z.string() }),
+  ),
   createdAt: z.number(),
   startedAt: z.number().nullable(),
   endedAt: z.number().nullable(),
@@ -461,6 +464,10 @@ export const needsAnswer = (thread: Pick<ReviewThread, 'isResolved' | 'answered'
   !thread.isResolved && !thread.answered
 
 export const threadStages: readonly Stage[] = ['address', 'draft-replies']
+
+export const findingItem = (id: number) => `finding:${id}`
+export const findingItemId = (item: string) =>
+  item.startsWith('finding:') ? Number(item.slice('finding:'.length)) : null
 
 export const runStagesByTab: Record<BoardTab, Stage[]> = {
   reviews: ['review', 're-review', 'draft-replies', 'test-plan'],

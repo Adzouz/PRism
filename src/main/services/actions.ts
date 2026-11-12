@@ -6,6 +6,8 @@ import { z } from 'zod'
 import {
   aiTag,
   findingComment,
+  findingItem,
+  findingItemId,
   gateKindOf,
   gateReply,
   postMode,
@@ -145,7 +147,9 @@ function parseReplies(json: string | null): GateReply[] | null {
 }
 
 export function defaultReplies(run: Run): GateReply[] {
-  const ids = [...new Set([...run.threadIds, ...run.replies.map((reply) => reply.threadId)])]
+  const ids = [
+    ...new Set([...run.threadIds, ...run.replies.map((reply) => reply.threadId)]),
+  ].filter((id) => findingItemId(id) === null)
   return ids.map((threadId) => {
     const body =
       run.replies.find((reply) => reply.threadId === threadId)?.body ??
@@ -308,15 +312,22 @@ export function gateChecks(input: CheckInput): GateCheck[] {
   return [
     {
       key: 'threads',
-      label: 'Threads have a verdict',
+      label: 'Threads and findings have a verdict',
       ok: input.reportedThreads !== null && missing === 0,
       detail:
         missing > 0
-          ? `${missing} thread${missing === 1 ? '' : 's'} without fix, push back or defer`
+          ? `${missing} item${missing === 1 ? '' : 's'} without fix, push back or defer`
           : null,
     },
     ...worktreeChecks(input.worktree),
-    replyCheck(input.replies),
+    input.replies.length === 0
+      ? {
+          key: 'replies',
+          label: 'Replies chosen',
+          ok: true,
+          detail: 'No review thread to reply to',
+        }
+      : replyCheck(input.replies),
   ]
 }
 
@@ -471,7 +482,7 @@ export function createActions(deps: ActionDeps) {
       total: findings.length,
       outsideDiff,
       pendingReview,
-      threadIds: run.threadIds,
+      threadIds: [...run.threadIds, ...run.bodyFindings.map((item) => findingItem(item.id))],
       reportedThreads: run.changes ? run.changes.threads.map((item) => item.threadId) : null,
       worktree,
       replies,

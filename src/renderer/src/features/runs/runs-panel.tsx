@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import {
+  findingItem,
   gateKindOf,
   needsAnswer,
   runStagesByTab,
@@ -127,7 +128,27 @@ function Findings({ runId }: { runId: number }) {
   )
 }
 
-export function ThreadContext({ thread, id }: { thread: ReviewThread | undefined; id: string }) {
+type BodyFinding = Run['bodyFindings'][number]
+
+export function ThreadContext({
+  thread,
+  id,
+  finding,
+}: {
+  thread: ReviewThread | undefined
+  id: string
+  finding?: BodyFinding
+}) {
+  if (finding) {
+    return (
+      <div className="mb-1.5 space-y-0.5">
+        <p className="truncate font-mono text-xs text-muted-foreground">
+          {threadWhere(finding)} · review finding
+        </p>
+        <p className="line-clamp-2 text-xs text-muted-foreground">{finding.title}</p>
+      </div>
+    )
+  }
   return (
     <div className="mb-1.5 space-y-0.5">
       <p className="truncate font-mono text-xs text-muted-foreground">
@@ -143,9 +164,11 @@ export function ThreadContext({ thread, id }: { thread: ReviewThread | undefined
 function Changes({
   changes,
   threads,
+  findings,
 }: {
   changes: ChangesReport
   threads: Map<string, ReviewThread>
+  findings: BodyFinding[]
 }) {
   return (
     <section className="space-y-2">
@@ -155,7 +178,11 @@ function Changes({
         <div key={item.threadId} className="rounded-xl border p-3">
           <div className="flex items-start gap-2">
             <div className="min-w-0 flex-1">
-              <ThreadContext thread={threads.get(item.threadId)} id={item.threadId} />
+              <ThreadContext
+                thread={threads.get(item.threadId)}
+                id={item.threadId}
+                finding={findings.find((entry) => findingItem(entry.id) === item.threadId)}
+              />
             </div>
             <Badge variant={actionTone[item.action]}>{actionLabel[item.action]}</Badge>
           </div>
@@ -401,7 +428,9 @@ function RunDetail({
         </section>
       )}
 
-      {run.changes && <Changes changes={run.changes} threads={threads} />}
+      {run.changes && (
+        <Changes changes={run.changes} threads={threads} findings={run.bodyFindings} />
+      )}
 
       {run.replies.length > 0 && (
         <section className="space-y-2">

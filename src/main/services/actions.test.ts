@@ -10,11 +10,18 @@ import { openDb } from '../db/client'
 import { prFlags, prs, repos, runs } from '../db/schema'
 import { createActions, gateChecks, parsePorcelain, reviewBody } from './actions'
 import type { Ctx } from './context'
-import { commentableLines } from './diff'
+import { commentableLines, parseUnifiedDiff } from './diff'
 import type { GithubApi } from './gh-api'
 import { listPrs } from './prs'
 import { setRepoPostMode } from './repos'
-import { listFindings, saveReplies, saveReview, updateFinding, type NewFinding } from './runs'
+import {
+  bodyFindings,
+  listFindings,
+  saveReplies,
+  saveReview,
+  updateFinding,
+  type NewFinding,
+} from './runs'
 
 const migrations = resolve(__dirname, '../../../drizzle')
 
@@ -192,6 +199,27 @@ describe('diff and text helpers', () => {
     const lines = commentableLines(patch)
     expect([...lines.RIGHT]).toEqual([1, 2, 3, 4])
     expect([...lines.LEFT]).toEqual([1, 2, 3])
+  })
+
+  it('reads commentable lines per file from a full diff', () => {
+    const map = parseUnifiedDiff(
+      [
+        'diff --git a/src/a.ts b/src/a.ts',
+        'index 1..2 100644',
+        '--- a/src/a.ts',
+        '+++ b/src/a.ts',
+        patch,
+        'diff --git a/old.ts b/old.ts',
+        'deleted file mode 100644',
+        '--- a/old.ts',
+        '+++ /dev/null',
+        '@@ -1,2 +0,0 @@',
+        '-one',
+        '-two',
+      ].join('\n'),
+    )
+    expect([...map.get('src/a.ts')!.RIGHT]).toEqual([1, 2, 3, 4])
+    expect([...map.get('old.ts')!.LEFT]).toEqual([1, 2])
   })
 
   it('parses porcelain output with renames', () => {
@@ -720,6 +748,43 @@ describe('review loop', () => {
     expect(listPrs(ctx)[0]!.stage).toBe('changes-requested')
     ctx.db.update(prs).set({ headOid: 'head3' }).run()
     expect(listPrs(ctx)[0]!.stage).toBe('re-review')
+  })
+
+  it('lets an address run settle review findings posted in the body', async () => {
+    const { ctx, pr, addRun } = await setup('author')
+    const reviewId = addRun('review')
+    saveReview(ctx, reviewId, report, [finding(), finding({ line: 40, title: 'Outside' })])
+    const actions = createActions({
+      ctx,
+      api: fakeApi(live('head1', true)).api,
+      emit: { prsChanged: () => {} },
+    })
+    await actions.update({ runId: reviewId, confirmed: true })
+    await actions.post(reviewId)
+    const outside = listFindings(ctx, reviewId).find((item) => item.title === 'Outside')!
+    expect(bodyFindings(ctx, pr.id).map((item) => item.id)).toEqual([outside.id])
+
+    const addressId = addRun('address', {
+      threadsJson: '[]',
+      findingsJson: JSON.stringify([outside.id]),
+      changesJson: JSON.stringify({ threads: [] }),
+    })
+    const pending = await actions.get(addressId)
+    expect(pending.checks.find((check) => check.key === 'threads')).toMatchObject({
+      ok: false,
+      detail: '1 item without fix, push back or defer',
+    })
+    ctx.db
+      .update(runs)
+      .set({
+        changesJson: JSON.stringify({
+          threads: [{ threadId: `finding:${outside.id}`, action: 'fix' }],
+        }),
+      })
+      .run()
+    const ready = await actions.get(addressId)
+    expect(ready.replies).toEqual([])
+    expect(ready.checks.find((check) => check.key === 'replies')).toMatchObject({ ok: true })
   })
 
   it('clears a manual stage when posting', async () => {

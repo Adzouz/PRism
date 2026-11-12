@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Run, RunEvent, Stage } from '@shared/domain'
 import type { AgentAdapter, SegmentInput, SegmentResult } from '../agents/types'
 import { openDb } from '../db/client'
-import { prs, repos, skills, stageBindings } from '../db/schema'
+import { findings, postGates, prs, repos, skills, stageBindings } from '../db/schema'
 import { setSetting } from '../db/settings'
 import type { Ctx } from './context'
 import type { GithubApi } from './gh-api'
@@ -178,6 +178,7 @@ function makeRunner(
   ctx: Ctx,
   run: (input: SegmentInput) => Promise<SegmentResult>,
   agentEnv: RunnerDeps['agentEnv'] = async () => ({ env: {}, executable: null }),
+  prepareWith: typeof prepareWorktree = prepare,
 ) {
   const adapter: AgentAdapter = { run: vi.fn<AgentAdapter['run']>(run) }
   const runs: Run[] = []
@@ -192,7 +193,7 @@ function makeRunner(
       prsChanged: () => {},
     },
     agentEnv,
-    prepare,
+    prepare: prepareWith,
   })
   return { runner, adapter, runs, events }
 }
@@ -227,7 +228,7 @@ describe('agent runner', () => {
       input.onSession(`session-${input.cwd}`)
       input.tools.progress('Reading the diff')
       await gate
-      input.tools.reportFindings(
+      await input.tools.reportFindings(
         { verdict: 'request_changes', summary: 'One bug.', dimensions: [] },
         [finding],
       )
@@ -277,7 +278,7 @@ describe('agent runner', () => {
         waiting.push(input.tools.isWaiting())
         return ok('s1')
       }
-      input.tools.reportFindings({ verdict: 'approve', summary: 'Fine.', dimensions: [] }, [])
+      await input.tools.reportFindings({ verdict: 'approve', summary: 'Fine.', dimensions: [] }, [])
       return ok('s1', 2)
     })
     const run = runner.start({ prId: ids[0]!, stage: 'review' })
@@ -351,7 +352,7 @@ describe('agent runner', () => {
     await until(() => getRun(ctx, run.id).sessionId === 's9')
 
     const second = makeRunner(ctx, async (input) => {
-      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      await input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
       return ok(input.resume ?? 'new')
     })
     second.runner.resumeAll()
@@ -399,6 +400,46 @@ describe('agent runner', () => {
     })
   })
 
+  it('hands review findings posted in the body to address runs', async () => {
+    const { ctx, ids } = await setup()
+    threadNodes = [threadNode('T9', true)]
+    const prompts: string[] = []
+    const { runner } = makeRunner(ctx, async (input) => {
+      prompts.push(input.prompt)
+      if (input.stage === 'review') {
+        await input.tools.reportFindings({ verdict: 'comment', summary: 'One.', dimensions: [] }, [
+          finding,
+        ])
+      } else {
+        input.tools.reportChanges({ threads: [], filesTouched: [], checks: [] })
+      }
+      return ok('s')
+    })
+    const review = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, review.id).status === 'done' && !runner.isActive(review.id))
+    const posted = listFindings(ctx, review.id)[0]!
+    ctx.db
+      .insert(postGates)
+      .values({ runId: review.id, kind: 'review', ghReviewId: 'PRR_1', postedAt: 1 })
+      .run()
+    ctx.db.update(findings).set({ ghCommentId: 'PRR_1' }).run()
+
+    const address = runner.start({ prId: ids[0]!, stage: 'address' })
+    await until(() => getRun(ctx, address.id).status === 'done' && !runner.isActive(address.id))
+    expect(getRun(ctx, address.id).bodyFindings).toEqual([
+      { id: posted.id, path: 'src/a.ts', line: 3, title: 'Null check' },
+    ])
+    expect(prompts.at(-1)).toContain(`### Finding \`finding:${posted.id}\` · src/a.ts:3 [blocking]`)
+    expect(prompts.at(-1)).not.toContain('No review threads were selected')
+
+    ctx.db.update(findings).set({ status: 'resolved' }).run()
+    const empty = runner.start({ prId: ids[0]!, stage: 'address' })
+    await until(() => getRun(ctx, empty.id).status === 'failed')
+    expect(getRun(ctx, empty.id).error).toBe(
+      'There are no review threads or review findings waiting for an answer',
+    )
+  })
+
   it('fails draft replies when every thread is resolved or already answered', async () => {
     const { ctx, ids } = await setup()
     threadNodes = [threadNode('T9', true), answeredNode('T8')]
@@ -413,7 +454,7 @@ describe('agent runner', () => {
     const { ctx, ids } = await setup()
     const { runner, adapter, events } = makeRunner(ctx, async (input) => {
       const verdict = input.resume ? 'approve' : 'comment'
-      input.tools.reportFindings({ verdict, summary: 'Checked.', dimensions: [] }, [])
+      await input.tools.reportFindings({ verdict, summary: 'Checked.', dimensions: [] }, [])
       return ok('s5')
     })
     const run = runner.start({ prId: ids[0]!, stage: 'review' })
@@ -468,7 +509,7 @@ describe('agent runner', () => {
         return ok('s1')
       }
       waiting.push(input.tools.isWaiting())
-      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      await input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
       return ok('s1', 2)
     })
     const run = runner.start({ prId: ids[0]!, stage: 'review' })
@@ -499,7 +540,7 @@ describe('agent runner', () => {
   it('dismisses earlier finished runs along with the verdict', async () => {
     const { ctx, ids } = await setup()
     const { runner } = makeRunner(ctx, async (input) => {
-      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      await input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
       return ok('s')
     })
     const first = runner.start({ prId: ids[0]!, stage: 'review' })
@@ -516,7 +557,7 @@ describe('agent runner', () => {
     const { ctx, ids } = await setup()
     const { runner } = makeRunner(ctx, async (input) => {
       if (input.stage === 'test-plan') return { ...ok('s'), error: 'rate limited' }
-      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      await input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
       return ok('s')
     })
     const review = runner.start({ prId: ids[0]!, stage: 'review' })
@@ -538,7 +579,7 @@ describe('agent runner', () => {
       .run()
     const { runner } = makeRunner(ctx, async (input) => {
       if (input.stage === 're-review') return { ...ok('s'), error: 'rate limited' }
-      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      await input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
       return ok('s')
     })
     const review = runner.start({ prId: ids[0]!, stage: 'review' })
@@ -564,7 +605,7 @@ describe('agent runner', () => {
     const { runner, adapter, events } = makeRunner(
       ctx,
       async (input) => {
-        input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+        await input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
         return ok('s')
       },
       async () => ({ env: {}, executable: null, shell }),
@@ -590,7 +631,7 @@ describe('agent runner', () => {
     const { runner, events } = makeRunner(
       ctx,
       async (input) => {
-        input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+        await input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
         return ok('s')
       },
       async () => ({ env: {}, executable: null, shell: null, shellError: 'timed out' }),
@@ -615,15 +656,19 @@ describe('agent runner', () => {
         reReviews += 1
         if (reReviews === 1) {
           input.tools.reportPriorStatus([{ findingId: firstId, status: 'resolved' }])
-          input.tools.reportFindings({ verdict: 'comment', summary: 'One more.', dimensions: [] }, [
-            { ...finding, title: 'Missing test' },
-          ])
+          await input.tools.reportFindings(
+            { verdict: 'comment', summary: 'One more.', dimensions: [] },
+            [{ ...finding, title: 'Missing test' }],
+          )
         } else {
-          input.tools.reportFindings({ verdict: 'approve', summary: 'Fine.', dimensions: [] }, [])
+          await input.tools.reportFindings(
+            { verdict: 'approve', summary: 'Fine.', dimensions: [] },
+            [],
+          )
         }
       } else {
         const review = input.stage === 'review'
-        input.tools.reportFindings(
+        await input.tools.reportFindings(
           { verdict: review ? 'request_changes' : 'comment', summary: 'Done.', dimensions: [] },
           review ? [finding] : [],
         )
@@ -651,6 +696,66 @@ describe('agent runner', () => {
     expect(prompts[1]).not.toContain('Null check')
   })
 
+  it('refuses findings on lines outside the pull request diff', async () => {
+    const { ctx, ids } = await setup()
+    const dir = await mkdtemp(join(tmpdir(), 'prism-diff-'))
+    const sh = (...args: string[]) =>
+      execFileSync('git', ['-C', dir, ...args], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'Octo',
+          GIT_AUTHOR_EMAIL: 'octo@example.com',
+          GIT_COMMITTER_NAME: 'Octo',
+          GIT_COMMITTER_EMAIL: 'octo@example.com',
+          GIT_CONFIG_GLOBAL: '/dev/null',
+        },
+      }).trim()
+    execFileSync('git', ['init', '-q', '-b', 'main', dir])
+    await mkdir(join(dir, 'src'))
+    const rows = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`)
+    await writeFile(join(dir, 'src/a.ts'), `${rows.join('\n')}\n`)
+    sh('add', '-A')
+    sh('commit', '-qm', 'base')
+    const base = sh('rev-parse', 'HEAD')
+    rows[2] = 'changed 3'
+    await writeFile(join(dir, 'src/a.ts'), `${rows.join('\n')}\n`)
+    sh('commit', '-qam', 'change')
+    const head = sh('rev-parse', 'HEAD')
+    ctx.db.update(prs).set({ baseOid: base }).run()
+    const replies: string[] = []
+    const { runner } = makeRunner(
+      ctx,
+      async (input) => {
+        const report = { verdict: 'comment' as const, summary: 'Done.', dimensions: [] }
+        for (const line of [25, 3]) {
+          try {
+            replies.push(await input.tools.reportFindings(report, [{ ...finding, line }]))
+          } catch (error) {
+            replies.push(`error: ${(error as Error).message}`)
+          }
+        }
+        return ok('s')
+      },
+      undefined,
+      async () => ({
+        path: dir,
+        branch: 'feature',
+        remote: 'origin',
+        baseRemote: 'origin',
+        created: true,
+        headOid: head,
+        warning: null,
+      }),
+    )
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
+    expect(replies[0]).toContain('Nothing was recorded')
+    expect(replies[0]).toContain('- src/a.ts:25 (RIGHT) Null check')
+    expect(replies[1]).toContain('Recorded the comment verdict with 1 finding(s).')
+    expect(listFindings(ctx, run.id).map((item) => item.line)).toEqual([3])
+  })
+
   it('drops findings that repeat an open earlier finding', async () => {
     const { ctx, ids } = await setup()
     const skill = ctx.db.select().from(skills).get()!
@@ -668,7 +773,10 @@ describe('agent runner', () => {
               { ...finding, title: 'Missing test' },
             ]
       replies.push(
-        input.tools.reportFindings({ verdict: 'comment', summary: 'Done.', dimensions: [] }, items),
+        await input.tools.reportFindings(
+          { verdict: 'comment', summary: 'Done.', dimensions: [] },
+          items,
+        ),
       )
       return ok('s')
     })
@@ -698,7 +806,7 @@ describe('agent runner', () => {
   it('counts session cost once across resumed segments', async () => {
     const { ctx, ids } = await setup()
     const { runner } = makeRunner(ctx, async (input) => {
-      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      await input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
       return input.resume ? ok('s7', 3) : ok('s7', 2)
     })
     const run = runner.start({ prId: ids[0]!, stage: 'review' })
@@ -749,7 +857,7 @@ describe('agent runner', () => {
       .returning()
       .get()
     const { runner, adapter } = makeRunner(ctx, async (input) => {
-      input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
+      await input.tools.reportFindings({ verdict: 'comment', summary: 'Ok.', dimensions: [] }, [])
       return ok('s')
     })
     const run = runner.start({ prId: ids[0]!, stage: 'review' })
@@ -806,7 +914,7 @@ describe('agent runner', () => {
   it('flags a verdict made on an older head', async () => {
     const { ctx, ids } = await setup()
     const { runner } = makeRunner(ctx, async (input) => {
-      input.tools.reportFindings({ verdict: 'approve', summary: 'Ok.', dimensions: [] }, [])
+      await input.tools.reportFindings({ verdict: 'approve', summary: 'Ok.', dimensions: [] }, [])
       return ok('s')
     })
     const run = runner.start({ prId: ids[0]!, stage: 'review' })

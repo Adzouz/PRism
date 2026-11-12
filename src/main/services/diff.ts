@@ -44,3 +44,20 @@ export function isCommentable(
   if (finding.line === null) return false
   return map.get(finding.path)?.[finding.side].has(finding.line) ?? false
 }
+
+export function parseUnifiedDiff(text: string): DiffMap {
+  const map: DiffMap = new Map()
+  for (const section of text.split(/^diff --git /m).slice(1)) {
+    const lines = section.split('\n')
+    const target = lines.find((line) => line.startsWith('+++ '))
+    const source = lines.find((line) => line.startsWith('--- '))
+    const path =
+      target && target !== '+++ /dev/null'
+        ? target.slice(4).replace(/^b\//, '')
+        : source?.slice(4).replace(/^a\//, '')
+    if (!path) continue
+    const start = lines.findIndex((line) => line.startsWith('@@ '))
+    map.set(path, commentableLines(start === -1 ? '' : lines.slice(start).join('\n')))
+  }
+  return map
+}

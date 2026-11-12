@@ -72,6 +72,41 @@ export function latestAsk(ctx: Ctx, runId: number) {
   return row ? toAsk(row) : null
 }
 
+function findingsById(ctx: Ctx, ids: number[]) {
+  if (ids.length === 0) return []
+  return ctx.db
+    .select({
+      id: findings.id,
+      path: findings.anchorPath,
+      line: findings.anchorLine,
+      title: findings.title,
+    })
+    .from(findings)
+    .where(inArray(findings.id, ids))
+    .orderBy(findings.id)
+    .all()
+}
+
+export function bodyFindings(ctx: Ctx, prId: number): Finding[] {
+  return ctx.db
+    .select({ finding: findings })
+    .from(findings)
+    .innerJoin(runs, eq(runs.id, findings.runId))
+    .innerJoin(postGates, eq(postGates.runId, runs.id))
+    .where(
+      and(
+        eq(findings.prId, prId),
+        inArray(runs.stage, [...reviewStages]),
+        inArray(findings.status, openFindingStatuses),
+        isNotNull(postGates.ghReviewId),
+        eq(findings.ghCommentId, postGates.ghReviewId),
+      ),
+    )
+    .orderBy(findings.id)
+    .all()
+    .map(({ finding }) => toFinding(finding))
+}
+
 function toRun(ctx: Ctx, row: RunRow): Run {
   return {
     id: row.id,
@@ -89,6 +124,7 @@ function toRun(ctx: Ctx, row: RunRow): Run {
     changes: parse(changesReport, row.changesJson, null as ChangesReport | null),
     replies: parse(z.array(draftReply), row.repliesJson, [] as DraftReply[]),
     threadIds: parse(z.array(z.string()), row.threadsJson, [] as string[]),
+    bodyFindings: findingsById(ctx, parse(z.array(z.number()), row.findingsJson, [] as number[])),
     createdAt: row.createdAt,
     startedAt: row.startedAt,
     endedAt: row.endedAt,

@@ -7,6 +7,7 @@ import {
   needsAnswer,
   threadStages,
   type AgentId,
+  type Finding,
   type Run,
   type RunEvent,
   type Stage,
@@ -21,13 +22,14 @@ import {
 } from '../agents/prompt'
 import type { AgentAdapter, AgentEvent, PrismTools } from '../agents/types'
 import { prs } from '../db/schema'
-import { userEnv, userPath, which } from '../system/exec'
+import { run as runCommand, userEnv, userPath, which } from '../system/exec'
 import { agentShell, probeShell } from '../system/shell'
 import { openInEditor, openInTerminal, resumeCommand, runInTerminal } from './apps'
 import { anchorOf } from './anchors'
 import { getAgentConfig } from './config'
 import type { Ctx } from './context'
 import { computeDelta, describeDelta, type Delta } from './delta'
+import { isCommentable, parseUnifiedDiff, type DiffMap } from './diff'
 import type { GithubApi } from './gh-api'
 import { effectiveBindings, findSkill, readSkillContent, skillDirOf } from './library'
 import { prThreads } from './prs'
@@ -35,6 +37,7 @@ import { getRepo } from './repos'
 import {
   activeRunFor,
   addEvent,
+  bodyFindings,
   answerAsk,
   closePendingAsks,
   createAsk,
@@ -181,10 +184,52 @@ export function createRunner(deps: RunnerDeps) {
     return update(runId, { status, ...extra })
   }
 
+  const diffs = new Map<string, Promise<DiffMap | null>>()
+
+  function prDiff(runId: number) {
+    const row = getRunRow(ctx, runId)
+    if (!row.worktreePath || !row.reviewedBaseOid || !row.reviewedHeadOid) {
+      return Promise.resolve(null)
+    }
+    const key = `${row.worktreePath}@${row.reviewedBaseOid}...${row.reviewedHeadOid}`
+    let cached = diffs.get(key)
+    if (!cached) {
+      cached = runCommand(
+        'git',
+        [
+          '-C',
+          row.worktreePath,
+          '-c',
+          'core.quotePath=false',
+          'diff',
+          '--no-color',
+          '--no-ext-diff',
+          `${row.reviewedBaseOid}...${row.reviewedHeadOid}`,
+        ],
+        { timeout: 60_000 },
+      ).then((result) => (result.code === 0 ? parseUnifiedDiff(result.stdout) : null))
+      diffs.set(key, cached)
+    }
+    return cached
+  }
+
   function prismTools(runId: number): PrismTools {
     const prId = getRunRow(ctx, runId).prId
     return {
-      reportFindings: (report, items) => {
+      reportFindings: async (report, items) => {
+        const map = await prDiff(runId)
+        const off = map
+          ? items.filter((item) => item.line !== null && !isCommentable(map, item))
+          : []
+        if (off.length > 0) {
+          throw new Error(
+            [
+              'Nothing was recorded: these findings point at lines that are not in the pull request diff, so GitHub cannot anchor them:',
+              ...off.map((item) => `- ${item.path}:${item.line} (${item.side}) ${item.title}`),
+              'Use the new-file line number of an added or context line (side RIGHT), the old-file line of a removed line (side LEFT), or line null for a finding about the whole file. Then call prism_report_findings again with every finding.',
+            ].join('\n'),
+          )
+        }
         const worktree = getRunRow(ctx, runId).worktreePath
         const anchored = items.map((item) => ({ ...item, hunkHash: anchorOf(worktree, item) }))
         const { kept, repeats } = splitRepeats(ctx, prId, runId, anchored)
@@ -307,8 +352,23 @@ export function createRunner(deps: RunnerDeps) {
     const threads = threadStages.includes(run.stage as Stage)
       ? await selectThreads(runId, run.prId, run.threadsJson ? getRun(ctx, runId).threadIds : null)
       : []
-    if (threadStages.includes(run.stage as Stage) && threads.length === 0) {
-      throw new Error('There are no review threads waiting for an answer')
+    let addressed: Finding[] = []
+    if (run.stage === 'address') {
+      const stored = run.findingsJson
+        ? getRun(ctx, runId).bodyFindings.map((item) => item.id)
+        : null
+      const open = bodyFindings(ctx, run.prId)
+      addressed = stored ? open.filter((item) => stored.includes(item.id)) : open
+      if (!stored) {
+        update(runId, { findingsJson: JSON.stringify(addressed.map((item) => item.id)) }, false)
+      }
+    }
+    if (threadStages.includes(run.stage as Stage) && threads.length + addressed.length === 0) {
+      throw new Error(
+        run.stage === 'address'
+          ? 'There are no review threads or review findings waiting for an answer'
+          : 'There are no review threads waiting for an answer',
+      )
     }
     const skill = skillOf(run)
     const content = skill ? await readSkillContent(ctx, skill.id) : null
@@ -364,6 +424,7 @@ export function createRunner(deps: RunnerDeps) {
         priorFindings: reviewing ? priorFindings(run.prId) : [],
         delta,
         threads,
+        findings: addressed,
       }),
     }
   }

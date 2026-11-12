@@ -1,4 +1,4 @@
-import type { ReviewThread, Stage } from '@shared/domain'
+import { findingItem, type Finding, type ReviewThread, type Stage } from '@shared/domain'
 import type { Delta } from '../services/delta'
 
 export const readOnlyStages = new Set<Stage>(['review', 're-review', 'test-plan', 'draft-replies'])
@@ -34,6 +34,7 @@ export type PromptContext = {
   priorFindings: string[]
   delta: Delta | null
   threads: ReviewThread[]
+  findings?: Finding[]
 }
 
 const reportSteps: Record<Stage, string> = {
@@ -44,7 +45,7 @@ const reportSteps: Record<Stage, string> = {
   'test-plan':
     'Write the "How to test" plan and return it as the `summary` of `prism_report_findings` (verdict `comment`, no findings).',
   address:
-    'Fix the review threads listed below in the worktree and run the relevant checks. Then call `prism_report_changes` with one entry per thread (fix, push_back or defer), and `prism_draft_replies` with one reply per thread. Use each thread id as `threadId`. Leave the changes uncommitted.',
+    'Fix the review threads and review findings listed below in the worktree and run the relevant checks. Then call `prism_report_changes` with one entry per thread and per finding (fix, push_back or defer), using the thread id or the `finding:<id>` key as `threadId`, and `prism_draft_replies` with one reply per thread (findings have no thread to reply to). Leave the changes uncommitted.',
   'draft-replies':
     'Read each thread listed below and the code it points at, then call `prism_draft_replies` with one reply per thread, using its id as `threadId`.',
 }
@@ -70,12 +71,33 @@ export function buildPrompt(context: PromptContext) {
   lines.push('', '## Reporting', '', reportSteps[context.stage])
   if (context.stage === 'address' || context.stage === 'draft-replies') {
     lines.push('', '## Review threads to handle', '')
-    if (context.threads.length === 0) {
+    if (context.threads.length === 0 && !context.findings?.length) {
       lines.push(
         'No review threads were selected. Read the latest reviews with `gh pr view --comments` and handle what they ask.',
       )
     }
     for (const thread of context.threads) lines.push(...threadLines(thread))
+  }
+  if (context.stage === 'address' && context.findings?.length) {
+    lines.push(
+      '',
+      '## Review findings to handle',
+      '',
+      'These findings were posted in the review body, without a thread. Report each with its key as `threadId`.',
+      '',
+    )
+    for (const finding of context.findings) {
+      const where = `${finding.path}${finding.line ? `:${finding.line}` : ''}`
+      lines.push(
+        `### Finding \`${findingItem(finding.id)}\` · ${where} [${finding.severity}]`,
+        '',
+        `**${finding.title}**`,
+        '',
+        excerpt(finding.body, 1200),
+        ...(finding.suggestion ? ['', `Suggested: ${excerpt(finding.suggestion, 600)}`] : []),
+        '',
+      )
+    }
   }
   if (context.priorFindings.length > 0) {
     lines.push(

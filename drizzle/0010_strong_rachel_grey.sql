@@ -1,0 +1,1 @@
+ALTER TABLE `runs` ADD `findings_json` text;

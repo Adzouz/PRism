@@ -484,6 +484,7 @@ function postLabel(gate: PostGate) {
   if (gate.kind === 'review')
     return gate.mode === 'submit' ? 'Submit review' : 'Stage pending review'
   const count = gate.replies.filter((reply) => reply.selected && !reply.postedUrl).length
+  if (count === 0 && gate.kind === 'address') return 'Mark as addressed'
   return `Post ${count} repl${count === 1 ? 'y' : 'ies'}`
 }
 
