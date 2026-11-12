@@ -44,3 +44,44 @@ export function isCommentable(
   if (finding.line === null) return false
   return map.get(finding.path)?.[finding.side].has(finding.line) ?? false
 }
+
+export function parseUnifiedDiff(text: string): DiffMap {
+  const map: DiffMap = new Map()
+  for (const section of text.split(/^diff --git /m).slice(1)) {
+    const lines = section.split('\n')
+    const target = lines.find((line) => line.startsWith('+++ '))
+    const source = lines.find((line) => line.startsWith('--- '))
+    const path =
+      target && target !== '+++ /dev/null'
+        ? headerPath(target).replace(/^b\//, '')
+        : source && headerPath(source).replace(/^a\//, '')
+    if (!path) continue
+    const start = lines.findIndex((line) => line.startsWith('@@ '))
+    map.set(path, commentableLines(start === -1 ? '' : lines.slice(start).join('\n')))
+  }
+  return map
+}
+
+const escapes: Record<string, number> = {
+  a: 7,
+  b: 8,
+  t: 9,
+  n: 10,
+  v: 11,
+  f: 12,
+  r: 13,
+  '"': 34,
+  '\\': 92,
+}
+
+function headerPath(line: string) {
+  const raw = line.slice(4).replace(/\t$/, '')
+  if (!raw.startsWith('"') || !raw.endsWith('"')) return raw
+  const bytes: number[] = []
+  for (const [token, escaped] of raw.slice(1, -1).matchAll(/\\([0-7]{3}|.)|[^\\]+/gs)) {
+    if (escaped === undefined) bytes.push(...Buffer.from(token))
+    else if (escaped.length === 3) bytes.push(parseInt(escaped, 8))
+    else bytes.push(escapes[escaped] ?? escaped.charCodeAt(0))
+  }
+  return Buffer.from(bytes).toString('utf8')
+}

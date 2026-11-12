@@ -25,6 +25,7 @@ import {
 import { redact, redactText } from '../agents/redact'
 import type { SessionTotals } from '../agents/types'
 import { asks, findings, postGates, runEvents, runs } from '../db/schema'
+import { titleKey } from './anchors'
 import type { Ctx } from './context'
 import { reviewDirection, type LoopFacts } from './pr-stage'
 
@@ -71,6 +72,41 @@ export function latestAsk(ctx: Ctx, runId: number) {
   return row ? toAsk(row) : null
 }
 
+function findingsById(ctx: Ctx, ids: number[]) {
+  if (ids.length === 0) return []
+  return ctx.db
+    .select({
+      id: findings.id,
+      path: findings.anchorPath,
+      line: findings.anchorLine,
+      title: findings.title,
+    })
+    .from(findings)
+    .where(inArray(findings.id, ids))
+    .orderBy(findings.id)
+    .all()
+}
+
+export function bodyFindings(ctx: Ctx, prId: number): Finding[] {
+  return ctx.db
+    .select({ finding: findings })
+    .from(findings)
+    .innerJoin(runs, eq(runs.id, findings.runId))
+    .innerJoin(postGates, eq(postGates.runId, runs.id))
+    .where(
+      and(
+        eq(findings.prId, prId),
+        inArray(runs.stage, [...reviewStages]),
+        inArray(findings.status, openFindingStatuses),
+        isNotNull(postGates.ghReviewId),
+        eq(findings.ghCommentId, postGates.ghReviewId),
+      ),
+    )
+    .orderBy(findings.id)
+    .all()
+    .map(({ finding }) => toFinding(finding))
+}
+
 function toRun(ctx: Ctx, row: RunRow): Run {
   return {
     id: row.id,
@@ -88,6 +124,7 @@ function toRun(ctx: Ctx, row: RunRow): Run {
     changes: parse(changesReport, row.changesJson, null as ChangesReport | null),
     replies: parse(z.array(draftReply), row.repliesJson, [] as DraftReply[]),
     threadIds: parse(z.array(z.string()), row.threadsJson, [] as string[]),
+    bodyFindings: findingsById(ctx, parse(z.array(z.number()), row.findingsJson, [] as number[])),
     createdAt: row.createdAt,
     startedAt: row.startedAt,
     endedAt: row.endedAt,
@@ -227,6 +264,7 @@ export type NewFinding = {
   body: string
   suggestion?: string
   priorFindingId?: number
+  hunkHash?: string
 }
 
 export function saveReview(
@@ -252,6 +290,7 @@ export function saveReview(
           body: redactText(item.body),
           suggestion: item.suggestion === undefined ? null : redactText(item.suggestion),
           priorFindingId: item.priorFindingId ?? null,
+          hunkHash: item.hunkHash ?? null,
         })
         .run()
     }
@@ -347,9 +386,9 @@ export function openReviewFindings(ctx: Ctx, prId: number): Finding[] {
     .map(({ finding }) => toFinding(finding))
 }
 
-export function lastReviewedHead(ctx: Ctx, prId: number, exceptRunId: number) {
+export function lastReviewed(ctx: Ctx, prId: number, exceptRunId: number) {
   const row = ctx.db
-    .select({ oid: runs.reviewedHeadOid })
+    .select({ head: runs.reviewedHeadOid, base: runs.reviewedBaseOid })
     .from(runs)
     .where(
       and(
@@ -361,7 +400,46 @@ export function lastReviewedHead(ctx: Ctx, prId: number, exceptRunId: number) {
     )
     .orderBy(desc(runs.id))
     .get()
-  return row?.oid ?? null
+  return { head: row?.head ?? null, base: row?.base ?? null }
+}
+
+export type RepeatCheck = NewFinding & { hunkHash: string }
+
+const nearbyLines = 3
+
+export function splitRepeats(ctx: Ctx, prId: number, runId: number, items: RepeatCheck[]) {
+  const open = ctx.db
+    .select({ finding: findings })
+    .from(findings)
+    .innerJoin(runs, eq(runs.id, findings.runId))
+    .where(
+      and(
+        eq(findings.prId, prId),
+        ne(findings.runId, runId),
+        inArray(runs.stage, [...reviewStages]),
+        inArray(findings.status, openFindingStatuses),
+      ),
+    )
+    .all()
+    .map(({ finding }) => finding)
+  const ids = new Set(open.map((item) => item.id))
+  const byTitle = Map.groupBy(open, (item) => titleKey(item.anchorPath, item.title))
+  const sameSpot = (item: RepeatCheck, prior: (typeof open)[number]) =>
+    prior.hunkHash === item.hunkHash ||
+    item.line === null ||
+    prior.anchorLine === null ||
+    Math.abs(prior.anchorLine - item.line) <= nearbyLines
+  const kept: RepeatCheck[] = []
+  const repeats: { title: string; findingId: number }[] = []
+  for (const item of items) {
+    const match =
+      item.priorFindingId !== undefined && ids.has(item.priorFindingId)
+        ? item.priorFindingId
+        : byTitle.get(titleKey(item.path, item.title))?.find((prior) => sameSpot(item, prior))?.id
+    if (match === undefined) kept.push(item)
+    else repeats.push({ title: item.title, findingId: match })
+  }
+  return { kept, repeats }
 }
 
 export function createAsk(
@@ -657,6 +735,7 @@ export function latestLoops(ctx: Ctx, onlyPrId?: number) {
       skippedAt: postGates.skippedAt,
       reportJson: runs.reportJson,
       reviewedHeadOid: runs.reviewedHeadOid,
+      postedHeadOid: postGates.postedHeadOid,
     })
     .from(postGates)
     .innerJoin(runs, eq(runs.id, postGates.runId))
@@ -677,6 +756,7 @@ export function latestLoops(ctx: Ctx, onlyPrId?: number) {
       goes: direction.goes,
       approvedOnGithub: direction.approvedOnGithub && row.postedAt !== null,
       reviewedHeadOid: row.reviewedHeadOid,
+      postedHeadOid: row.postedHeadOid,
     })
   }
   return result

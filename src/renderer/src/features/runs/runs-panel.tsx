@@ -1,12 +1,14 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import {
+  ArrowRight,
   Bot,
   CircleCheck,
   CircleX,
   FolderGit2,
   GitCommitHorizontal,
   Loader2,
+  MessageSquare,
   Play,
   Send,
   Settings,
@@ -15,9 +17,11 @@ import {
   X,
 } from 'lucide-react'
 import {
+  findingItem,
   gateKindOf,
   needsAnswer,
   runStagesByTab,
+  runStageLabel,
   stageLabels,
   threadStages,
   type BoardPr,
@@ -124,7 +128,27 @@ function Findings({ runId }: { runId: number }) {
   )
 }
 
-export function ThreadContext({ thread, id }: { thread: ReviewThread | undefined; id: string }) {
+type BodyFinding = Run['bodyFindings'][number]
+
+export function ThreadContext({
+  thread,
+  id,
+  finding,
+}: {
+  thread: ReviewThread | undefined
+  id: string
+  finding?: BodyFinding
+}) {
+  if (finding) {
+    return (
+      <div className="mb-1.5 space-y-0.5">
+        <p className="truncate font-mono text-xs text-muted-foreground">
+          {threadWhere(finding)} · review finding
+        </p>
+        <p className="line-clamp-2 text-xs text-muted-foreground">{finding.title}</p>
+      </div>
+    )
+  }
   return (
     <div className="mb-1.5 space-y-0.5">
       <p className="truncate font-mono text-xs text-muted-foreground">
@@ -140,9 +164,11 @@ export function ThreadContext({ thread, id }: { thread: ReviewThread | undefined
 function Changes({
   changes,
   threads,
+  findings,
 }: {
   changes: ChangesReport
   threads: Map<string, ReviewThread>
+  findings: BodyFinding[]
 }) {
   return (
     <section className="space-y-2">
@@ -152,7 +178,11 @@ function Changes({
         <div key={item.threadId} className="rounded-xl border p-3">
           <div className="flex items-start gap-2">
             <div className="min-w-0 flex-1">
-              <ThreadContext thread={threads.get(item.threadId)} id={item.threadId} />
+              <ThreadContext
+                thread={threads.get(item.threadId)}
+                id={item.threadId}
+                finding={findings.find((entry) => findingItem(entry.id) === item.threadId)}
+              />
             </div>
             <Badge variant={actionTone[item.action]}>{actionLabel[item.action]}</Badge>
           </div>
@@ -184,24 +214,30 @@ function Changes({
   )
 }
 
-function FollowUp({ run }: { run: Run }) {
+function FollowUp({ run, onClose }: { run: Run; onClose: () => void }) {
   const [text, setText] = useState('')
   const followUp = useFollowUp()
+  const form = useRef<HTMLFormElement>(null)
+  useEffect(() => {
+    void form.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [])
   const send = (event?: FormEvent) => {
     event?.preventDefault()
     if (!text.trim() || followUp.isPending) return
     followUp.mutate({ runId: run.id, message: text.trim() }, { onSuccess: () => setText('') })
   }
   return (
-    <form onSubmit={send} className="space-y-1.5">
+    <form ref={form} onSubmit={send} className="space-y-1.5">
       <div className="flex items-end gap-1.5">
         <textarea
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) send()
+            if (event.key === 'Escape' && !text.trim()) onClose()
           }}
           rows={2}
+          autoFocus
           aria-label="Follow-up message"
           placeholder="Ask the agent to check or change something in this run…"
           className="min-h-9 flex-1 resize-none rounded-lg border bg-background px-2.5 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
@@ -218,6 +254,31 @@ function FollowUp({ run }: { run: Run }) {
       </div>
       <ErrorText error={followUp.error} />
     </form>
+  )
+}
+
+function NextActions({ run, canAsk, onPost }: { run: Run; canAsk: boolean; onPost: () => void }) {
+  const [asking, setAsking] = useState(false)
+  const toPost = run.status === 'done' && gateKindOf[run.stage] !== undefined
+  if (!toPost && !canAsk) return null
+  return (
+    <section className="space-y-3 border-t pt-4">
+      <div className="flex flex-wrap gap-2">
+        {toPost && (
+          <Button onClick={onPost}>
+            <ArrowRight />
+            Continue to Post
+          </Button>
+        )}
+        {canAsk && !asking && (
+          <Button variant="outline" onClick={() => setAsking(true)}>
+            <MessageSquare />
+            Ask agent anything
+          </Button>
+        )}
+      </div>
+      {canAsk && asking && <FollowUp run={run} onClose={() => setAsking(false)} />}
+    </section>
   )
 }
 
@@ -367,7 +428,9 @@ function RunDetail({
         </section>
       )}
 
-      {run.changes && <Changes changes={run.changes} threads={threads} />}
+      {run.changes && (
+        <Changes changes={run.changes} threads={threads} findings={run.bodyFindings} />
+      )}
 
       {run.replies.length > 0 && (
         <section className="space-y-2">
@@ -386,7 +449,14 @@ function RunDetail({
         <Transcript runId={run.id} live={live} />
       </section>
 
-      {done && run.sessionId && run.worktreePath && canFollowUp && <FollowUp run={run} />}
+      <NextActions
+        run={run}
+        canAsk={done && Boolean(run.sessionId && run.worktreePath) && canFollowUp}
+        onPost={() => {
+          selectRun(run.id)
+          setDrawerTab('post')
+        }}
+      />
     </div>
   )
 }
@@ -503,7 +573,7 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
             >
               {runStagesByTab[pr.tab].map((item) => (
                 <ToggleGroupItem key={item} value={item}>
-                  {stageLabels[item]}
+                  {runStageLabel(item, pr)}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
@@ -513,7 +583,7 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
               onClick={run}
             >
               {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
-              Run {stageLabels[stage].toLowerCase()}
+              Run {runStageLabel(stage, pr).toLowerCase()}
               {needsThreads && threads && ` · ${threadCount} thread${threadCount === 1 ? '' : 's'}`}
             </Button>
           </div>

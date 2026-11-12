@@ -196,6 +196,13 @@ describe('loopStage', () => {
     )
   })
 
+  it('waits for commits pushed after the post before asking for a re-review', () => {
+    const posted = { ...review, postedHeadOid: 'h2' }
+    expect(loopStage('to-review', 'h2', posted, null)).toBe('changes-requested')
+    expect(loopStage('to-review', 'h3', posted, null)).toBe('re-review')
+    expect(loopStage('to-review', 'h2', { ...posted, goes: 'approve' }, null)).toBe('re-review')
+  })
+
   it('lets approvals and closed pull requests win', () => {
     expect(loopStage('to-review', 'h1', review, 'h1')).toBe('approved')
     expect(loopStage('to-review', 'h2', review, 'h1')).toBe('re-review')

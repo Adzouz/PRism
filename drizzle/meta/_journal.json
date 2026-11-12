@@ -57,6 +57,27 @@
       "when": 1794478848515,
       "tag": "0007_familiar_franklin_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794496243160,
+      "tag": "0008_keen_shiva",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794496619781,
+      "tag": "0009_sloppy_rockslide",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1794497927163,
+      "tag": "0010_strong_rachel_grey",
+      "breakpoints": true
     }
   ]
 }

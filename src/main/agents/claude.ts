@@ -28,11 +28,11 @@ const text = (value: string, isError = false) => ({
   isError,
 })
 
-function guarded(fn: () => string) {
+async function guarded(fn: () => string | Promise<string>) {
   try {
-    return Promise.resolve(text(fn()))
+    return text(await fn())
   } catch (error) {
-    return Promise.resolve(text(error instanceof Error ? error.message : String(error), true))
+    return text(error instanceof Error ? error.message : String(error), true)
   }
 }
 

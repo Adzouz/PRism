@@ -189,7 +189,7 @@ Action columns run something when a card is dropped on them; state columns show 
 | Reviewing | **action**: review / re-review | Review run active, or finished with its post gate open |
 | Changes requested | state | Last posted review is NO GO or GO WITH NITS; on Reviews also my review with no new commits since |
 | Addressing | **action**: address (My PRs only) | Address run active, or finished with its post gate open |
-| To re-review | state | Address posted, or new commits since the last review; drop on Reviewing to re-review |
+| To re-review | state | Address posted, or new commits pushed after a NO GO / GO WITH NITS was posted (after a GO: any commit the review did not cover); drop on Reviewing to re-review |
 | To approve | state | Last posted review is GO |
 | Approved | **action**: approve | Approved on GitHub, or approved from PRism at the current head. Own PR: GitHub refuses Approve, so PRism posts a Comment saying GO |
 | Done | state | Merged / closed |
@@ -228,7 +228,9 @@ A re-review runs two cheap passes instead of one full one:
 
 The agent gets the ledger as context with the rule "don't raise anything already in the ledger".
 
-**Escalation to a full review:** a **Full review** button, plus automatic escalation when the delta touches more than ~40% of the PR's changed lines or the PR's scope changed (new packages touched).
+**Escalation to a full review:** a **Full review** button (the Review stage on an already reviewed pull request). Automatic escalation when the delta touches more than ~40% of the PR's changed lines or the PR's scope changed (new packages touched) is a follow-up.
+
+**Phase 5 scope (trimmed, 2026-11-12):** PRism-computed delta (new commits, base-merge skip, range-diff after a force-push), repeat guard on stable anchors, Full review. Follow-ups: automatic escalation, the disputed-finding view with the author's reply, and a per-PR ledger history in the drawer.
 
 Cost/time win: a typical re-review reads a few hundred lines instead of the whole PR, and only new findings are posted.
 

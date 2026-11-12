@@ -6,6 +6,8 @@ import { z } from 'zod'
 import {
   aiTag,
   findingComment,
+  findingItem,
+  findingItemId,
   gateKindOf,
   gateReply,
   postMode,
@@ -145,7 +147,9 @@ function parseReplies(json: string | null): GateReply[] | null {
 }
 
 export function defaultReplies(run: Run): GateReply[] {
-  const ids = [...new Set([...run.threadIds, ...run.replies.map((reply) => reply.threadId)])]
+  const ids = [
+    ...new Set([...run.threadIds, ...run.replies.map((reply) => reply.threadId)]),
+  ].filter((id) => findingItemId(id) === null)
   return ids.map((threadId) => {
     const body =
       run.replies.find((reply) => reply.threadId === threadId)?.body ??
@@ -308,15 +312,22 @@ export function gateChecks(input: CheckInput): GateCheck[] {
   return [
     {
       key: 'threads',
-      label: 'Threads have a verdict',
+      label: 'Threads and findings have a verdict',
       ok: input.reportedThreads !== null && missing === 0,
       detail:
         missing > 0
-          ? `${missing} thread${missing === 1 ? '' : 's'} without fix, push back or defer`
+          ? `${missing} item${missing === 1 ? '' : 's'} without fix, push back or defer`
           : null,
     },
     ...worktreeChecks(input.worktree),
-    replyCheck(input.replies),
+    input.replies.length === 0
+      ? {
+          key: 'replies',
+          label: 'Replies chosen',
+          ok: true,
+          detail: 'No review thread to reply to',
+        }
+      : replyCheck(input.replies),
   ]
 }
 
@@ -356,6 +367,14 @@ export function createActions(deps: ActionDeps) {
     const { node } = await api.graphql<{ node: GateNode | null }>(gateQuery, { id: nodeId })
     if (!node) throw new Error('Pull request not found on GitHub')
     return node
+  }
+
+  async function currentHead({ pr }: Loaded) {
+    try {
+      return (await liveNode(pr.nodeId)).headRefOid
+    } catch {
+      return pr.headOid
+    }
   }
 
   function reviewDiff({ repo, row }: Loaded) {
@@ -463,7 +482,7 @@ export function createActions(deps: ActionDeps) {
       total: findings.length,
       outsideDiff,
       pendingReview,
-      threadIds: run.threadIds,
+      threadIds: [...run.threadIds, ...run.bodyFindings.map((item) => findingItem(item.id))],
       reportedThreads: run.changes ? run.changes.threads.map((item) => item.threadId) : null,
       worktree,
       replies,
@@ -501,6 +520,7 @@ export function createActions(deps: ActionDeps) {
       postedAt: gate.postedAt,
       skippedAt: gate.skippedAt,
       reviewUrl: gate.ghReviewUrl,
+      postedBody: gate.postedBody,
       nextStage,
       warning: warnings.length > 0 ? warnings.join(' ') : null,
     }
@@ -654,6 +674,7 @@ export function createActions(deps: ActionDeps) {
       body: findingText(item),
     })
     let review: { id: string; url: string }
+    let postedBody = body
     if (!pending) {
       const result = await mutate<{
         addPullRequestReview: {
@@ -693,6 +714,7 @@ export function createActions(deps: ActionDeps) {
         linkFinding(ctx, item.id, comment.id)
       }
       const merged = [pending.body.trim(), body].filter(Boolean).join('\n\n')
+      postedBody = merged
       review =
         gate.mode === 'submit'
           ? (
@@ -715,7 +737,7 @@ export function createActions(deps: ActionDeps) {
             ).updatePullRequestReview.pullRequestReview
     }
     for (const item of outside) linkFinding(ctx, item.id, review.id)
-    setGate(run.id, { ghReviewId: review.id, ghReviewUrl: review.url })
+    setGate(run.id, { ghReviewId: review.id, ghReviewUrl: review.url, postedBody })
   }
 
   async function postReplies(loaded: Loaded) {
@@ -748,7 +770,12 @@ export function createActions(deps: ActionDeps) {
       }
       if (loaded.kind === 'review') await postReview(loaded, gate)
       else await postReplies(loaded)
-      setGate(runId, { postedAt: Date.now(), mode: gate.mode, event: gate.event })
+      setGate(runId, {
+        postedAt: Date.now(),
+        mode: gate.mode,
+        event: gate.event,
+        postedHeadOid: await currentHead(loaded),
+      })
       clearManualStage(ctx, loaded.run.prId)
       emit.prsChanged()
       return build(runId)
@@ -761,7 +788,12 @@ export function createActions(deps: ActionDeps) {
       const loaded = load(runId)
       if (loaded.gate.postedAt !== null) throw new Error('Already posted')
       if (current) {
-        setGate(runId, { skippedAt: Date.now(), mode: current.mode, event: current.event })
+        setGate(runId, {
+          skippedAt: Date.now(),
+          mode: current.mode,
+          event: current.event,
+          postedHeadOid: await currentHead(loaded),
+        })
         clearManualStage(ctx, loaded.run.prId)
       } else {
         setGate(runId, { skippedAt: null })
