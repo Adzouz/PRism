@@ -1,12 +1,14 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import {
+  ArrowRight,
   Bot,
   CircleCheck,
   CircleX,
   FolderGit2,
   GitCommitHorizontal,
   Loader2,
+  MessageSquare,
   Play,
   Send,
   Settings,
@@ -185,24 +187,30 @@ function Changes({
   )
 }
 
-function FollowUp({ run }: { run: Run }) {
+function FollowUp({ run, onClose }: { run: Run; onClose: () => void }) {
   const [text, setText] = useState('')
   const followUp = useFollowUp()
+  const form = useRef<HTMLFormElement>(null)
+  useEffect(() => {
+    void form.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [])
   const send = (event?: FormEvent) => {
     event?.preventDefault()
     if (!text.trim() || followUp.isPending) return
     followUp.mutate({ runId: run.id, message: text.trim() }, { onSuccess: () => setText('') })
   }
   return (
-    <form onSubmit={send} className="space-y-1.5">
+    <form ref={form} onSubmit={send} className="space-y-1.5">
       <div className="flex items-end gap-1.5">
         <textarea
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) send()
+            if (event.key === 'Escape' && !text.trim()) onClose()
           }}
           rows={2}
+          autoFocus
           aria-label="Follow-up message"
           placeholder="Ask the agent to check or change something in this run…"
           className="min-h-9 flex-1 resize-none rounded-lg border bg-background px-2.5 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
@@ -219,6 +227,31 @@ function FollowUp({ run }: { run: Run }) {
       </div>
       <ErrorText error={followUp.error} />
     </form>
+  )
+}
+
+function NextActions({ run, canAsk, onPost }: { run: Run; canAsk: boolean; onPost: () => void }) {
+  const [asking, setAsking] = useState(false)
+  const toPost = run.status === 'done' && gateKindOf[run.stage] !== undefined
+  if (!toPost && !canAsk) return null
+  return (
+    <section className="space-y-3 border-t pt-4">
+      <div className="flex flex-wrap gap-2">
+        {toPost && (
+          <Button onClick={onPost}>
+            <ArrowRight />
+            Continue to Post
+          </Button>
+        )}
+        {canAsk && !asking && (
+          <Button variant="outline" onClick={() => setAsking(true)}>
+            <MessageSquare />
+            Ask agent anything
+          </Button>
+        )}
+      </div>
+      {canAsk && asking && <FollowUp run={run} onClose={() => setAsking(false)} />}
+    </section>
   )
 }
 
@@ -387,7 +420,14 @@ function RunDetail({
         <Transcript runId={run.id} live={live} />
       </section>
 
-      {done && run.sessionId && run.worktreePath && canFollowUp && <FollowUp run={run} />}
+      <NextActions
+        run={run}
+        canAsk={done && Boolean(run.sessionId && run.worktreePath) && canFollowUp}
+        onPost={() => {
+          selectRun(run.id)
+          setDrawerTab('post')
+        }}
+      />
     </div>
   )
 }
