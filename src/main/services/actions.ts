@@ -501,6 +501,7 @@ export function createActions(deps: ActionDeps) {
       postedAt: gate.postedAt,
       skippedAt: gate.skippedAt,
       reviewUrl: gate.ghReviewUrl,
+      postedBody: gate.postedBody,
       nextStage,
       warning: warnings.length > 0 ? warnings.join(' ') : null,
     }
@@ -654,6 +655,7 @@ export function createActions(deps: ActionDeps) {
       body: findingText(item),
     })
     let review: { id: string; url: string }
+    let postedBody = body
     if (!pending) {
       const result = await mutate<{
         addPullRequestReview: {
@@ -693,6 +695,7 @@ export function createActions(deps: ActionDeps) {
         linkFinding(ctx, item.id, comment.id)
       }
       const merged = [pending.body.trim(), body].filter(Boolean).join('\n\n')
+      postedBody = merged
       review =
         gate.mode === 'submit'
           ? (
@@ -715,7 +718,7 @@ export function createActions(deps: ActionDeps) {
             ).updatePullRequestReview.pullRequestReview
     }
     for (const item of outside) linkFinding(ctx, item.id, review.id)
-    setGate(run.id, { ghReviewId: review.id, ghReviewUrl: review.url })
+    setGate(run.id, { ghReviewId: review.id, ghReviewUrl: review.url, postedBody })
   }
 
   async function postReplies(loaded: Loaded) {

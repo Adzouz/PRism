@@ -687,6 +687,7 @@ export const postGate = z.object({
   postedAt: z.number().nullable(),
   skippedAt: z.number().nullable(),
   reviewUrl: z.string().nullable(),
+  postedBody: z.string().nullable(),
   nextStage: boardStage.nullable(),
   warning: z.string().nullable(),
 })

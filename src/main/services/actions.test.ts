@@ -312,6 +312,7 @@ describe('review gate', () => {
     expect(listFindings(ctx, runId).map((item) => item.posted)).toEqual([true, true, false])
     expect(changed).toBe(1)
     expect(after.nextStage).toBe('changes-requested')
+    expect(after.postedBody).toBe(call!.input.body)
     expect(listPrs(ctx)[0]!.stage).toBe('changes-requested')
     await expect(actions.post(runId)).rejects.toThrow(/Already posted/)
     expect(() =>
@@ -351,6 +352,7 @@ describe('review gate', () => {
       line: 2,
     })
     expect(fake.named('UpdateReview')[0]!.input.body).toMatch(/^My notes\.\n\nTwo issues\./)
+    expect((await actions.get(runId)).postedBody).toBe(fake.named('UpdateReview')[0]!.input.body)
     expect(listFindings(ctx, runId)[0]!.posted).toBe(true)
   })
 

@@ -260,6 +260,7 @@ export const postGates = sqliteTable('post_gates', {
   repliesJson: text('replies_json'),
   ghReviewId: text('gh_review_id'),
   ghReviewUrl: text('gh_review_url'),
+  postedBody: text('posted_body'),
   confirmedAt: integer('confirmed_at'),
   postedAt: integer('posted_at'),
   skippedAt: integer('skipped_at'),

@@ -4,6 +4,7 @@ import {
   Check,
   CircleCheck,
   CircleX,
+  Copy,
   GitCommitHorizontal,
   Inbox,
   Loader2,
@@ -486,6 +487,34 @@ function postLabel(gate: PostGate) {
   return `Post ${count} repl${count === 1 ? 'y' : 'ies'}`
 }
 
+function DraftSummary({ body }: { body: string }) {
+  const [copied, setCopied] = useState(false)
+  const [failed, setFailed] = useState<unknown>(null)
+  const copy = () => {
+    setFailed(null)
+    navigator.clipboard.writeText(body).then(
+      () => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      },
+      (error: unknown) => setFailed(error),
+    )
+  }
+  return (
+    <section className="space-y-2 rounded-lg border bg-background p-3">
+      <div className="flex items-center gap-2">
+        <Heading>Summary</Heading>
+        <Button size="sm" variant="outline" className="ml-auto h-7" onClick={copy}>
+          {copied ? <Check /> : <Copy />}
+          {copied ? 'Copied' : 'Copy summary'}
+        </Button>
+      </div>
+      <Markdown text={body} />
+      <ErrorText error={failed} />
+    </section>
+  )
+}
+
 function Closed({ gate }: { gate: PostGate }) {
   const skip = useSkipPost()
   const now = useNow()
@@ -518,8 +547,12 @@ function Closed({ gate }: { gate: PostGate }) {
       </p>
       {gate.kind === 'review' && gate.mode === 'draft' && (
         <p className="text-sm text-muted-foreground">
-          Open it on GitHub to pick the status and submit it.
+          Open it on GitHub to pick the status and submit it. GitHub does not fill in the summary
+          when you submit, so paste it from below.
         </p>
+      )}
+      {gate.kind === 'review' && gate.mode === 'draft' && (gate.postedBody ?? gate.body).trim() && (
+        <DraftSummary body={gate.postedBody ?? gate.body} />
       )}
       {gate.reviewUrl && (
         <Button size="sm" variant="outline" asChild>
