@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import {
   gateKindOf,
+  needsAnswer,
   runStagesByTab,
   stageLabels,
   threadStages,
@@ -471,11 +472,11 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
   const isOpen = pr.state === 'OPEN'
   const needsThreads = isOpen && threadStages.includes(stage)
   const { data: threads } = usePrThreads(pr.id, needsThreads)
-  const openThreads = (threads ?? []).filter((thread) => !thread.isResolved).length
+  const openThreads = (threads ?? []).filter(needsAnswer).length
   const threadCount = chosenThreads ? chosenThreads.size : openThreads
   const active = runs?.find((run) => isLive(run.status) || run.status === 'needs_you')
   const current = runs?.find((run) => run.id === openRunId) ?? runs?.[0] ?? null
-  const blocked = stage === 'draft-replies' && threads !== undefined && threadCount === 0
+  const blocked = needsThreads && threads !== undefined && threadCount === 0
 
   const run = () =>
     start.mutate(
@@ -492,31 +493,33 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
       <SetupNeeded pr={pr} />
       {isOpen && (
         <div className="space-y-3">
-          <ToggleGroup
-            type="single"
-            value={stage}
-            onValueChange={(value) => value && setStage(value as Stage)}
-            aria-label="Run stage"
-            className="flex-wrap bg-secondary/50"
-          >
-            {runStagesByTab[pr.tab].map((item) => (
-              <ToggleGroupItem key={item} value={item} className="h-7 px-2.5 text-xs">
-                {stageLabels[item]}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+          <div className="flex flex-wrap items-center gap-2">
+            <ToggleGroup
+              type="single"
+              value={stage}
+              onValueChange={(value) => value && setStage(value as Stage)}
+              aria-label="Run stage"
+              className="flex-wrap"
+            >
+              {runStagesByTab[pr.tab].map((item) => (
+                <ToggleGroupItem key={item} value={item}>
+                  {stageLabels[item]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <Button
+              className="h-10"
+              disabled={!runs || Boolean(active) || start.isPending || blocked}
+              onClick={run}
+            >
+              {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
+              Run {stageLabels[stage].toLowerCase()}
+              {needsThreads && threads && ` · ${threadCount} thread${threadCount === 1 ? '' : 's'}`}
+            </Button>
+          </div>
           {needsThreads && (
             <ThreadPicker prId={pr.id} selected={chosenThreads} onChange={setChosenThreads} />
           )}
-          <Button
-            size="sm"
-            disabled={!runs || Boolean(active) || start.isPending || blocked}
-            onClick={run}
-          >
-            {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
-            Run {stageLabels[stage].toLowerCase()}
-            {needsThreads && threads && ` · ${threadCount} thread${threadCount === 1 ? '' : 's'}`}
-          </Button>
           <ErrorText error={start.error} />
         </div>
       )}
@@ -536,7 +539,7 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
         <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
           <Bot className="size-6" />
           No runs yet. Pick a stage and run it, or drag the card into{' '}
-          {pr.tab === 'reviews' ? 'Reviewing' : 'Addressing'}.
+          {pr.tab === 'reviews' ? 'Reviewing' : 'Reviewing or Addressing'}.
         </div>
       )}
     </div>

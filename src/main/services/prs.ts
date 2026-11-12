@@ -319,7 +319,7 @@ const threadsQuery = `
         nodes {
           id isResolved isOutdated path line originalLine
           comments(last: 30) { totalCount nodes {
-            id body createdAt url author { login avatarUrl }
+            id body createdAt url viewerDidAuthor author { login avatarUrl }
           } }
         }
       }
@@ -343,6 +343,7 @@ type ThreadNode = {
       body: string
       createdAt: string
       url: string
+      viewerDidAuthor?: boolean
       author: { login: string; avatarUrl: string } | null
     }[]
   }
@@ -376,6 +377,8 @@ export async function prThreads(ctx: Ctx, api: GithubApi, id: number): Promise<R
     isResolved: thread.isResolved,
     isOutdated: thread.isOutdated,
     totalComments: thread.comments.totalCount,
+    answered:
+      thread.comments.totalCount > 1 && thread.comments.nodes.at(-1)?.viewerDidAuthor === true,
     comments: thread.comments.nodes.map((comment) => ({
       id: comment.id,
       author: comment.author?.login ?? 'ghost',

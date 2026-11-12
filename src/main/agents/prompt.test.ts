@@ -71,6 +71,7 @@ describe('prompt', () => {
           line: 7,
           isResolved: false,
           isOutdated: true,
+          answered: false,
           totalComments: 10,
           comments: Array.from({ length: 8 }, (_, index) => comment(`u${index}`, `note ${index}`)),
         },

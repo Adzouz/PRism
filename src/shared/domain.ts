@@ -453,14 +453,18 @@ export const reviewThread = z.object({
   isOutdated: z.boolean(),
   comments: z.array(threadComment),
   totalComments: z.number(),
+  answered: z.boolean(),
 })
 export type ReviewThread = z.infer<typeof reviewThread>
+
+export const needsAnswer = (thread: Pick<ReviewThread, 'isResolved' | 'answered'>) =>
+  !thread.isResolved && !thread.answered
 
 export const threadStages: readonly Stage[] = ['address', 'draft-replies']
 
 export const runStagesByTab: Record<BoardTab, Stage[]> = {
   reviews: ['review', 're-review', 'draft-replies', 'test-plan'],
-  mine: ['address', 'draft-replies', 'test-plan', 'review'],
+  mine: ['review', 're-review', 'address', 'draft-replies', 'test-plan'],
 }
 
 export const appChoice = z.object({ id: z.string(), name: z.string() })

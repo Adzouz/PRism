@@ -104,6 +104,20 @@ async function setup(count = 1) {
 
 let threadNodes: unknown[] = []
 
+const answeredNode = (id: string) => {
+  const node = threadNode(id, false)
+  return {
+    ...node,
+    comments: {
+      totalCount: 2,
+      nodes: [
+        ...node.comments.nodes,
+        { ...node.comments.nodes[0]!, id: `${id}-r`, body: 'Fixed.', viewerDidAuthor: true },
+      ],
+    },
+  }
+}
+
 const threadNode = (id: string, isResolved: boolean) => ({
   id,
   isResolved,
@@ -350,7 +364,12 @@ describe('agent runner', () => {
 
   it('hands the selected review threads to address runs', async () => {
     const { ctx, ids } = await setup(2)
-    threadNodes = [threadNode('T1', false), threadNode('T2', false), threadNode('T3', true)]
+    threadNodes = [
+      threadNode('T1', false),
+      threadNode('T2', false),
+      threadNode('T3', true),
+      answeredNode('T4'),
+    ]
     const { runner, adapter } = makeRunner(ctx, async (input) => {
       input.tools.reportChanges({
         threads: [{ threadId: 'T1', action: 'fix' }],
@@ -370,6 +389,7 @@ describe('agent runner', () => {
     expect(prompt(1).prompt).toContain('Thread `T1`')
     expect(prompt(1).prompt).toContain('Thread `T2`')
     expect(prompt(1).prompt).not.toContain('Thread `T3`')
+    expect(prompt(1).prompt).not.toContain('Thread `T4`')
     expect(prompt(2).prompt).toContain('Thread `T2`')
     expect(prompt(2).prompt).not.toContain('Thread `T1`')
     expect(prompt(1).readOnly).toBe(false)
@@ -379,13 +399,13 @@ describe('agent runner', () => {
     })
   })
 
-  it('fails draft replies when there is nothing to reply to', async () => {
+  it('fails draft replies when every thread is resolved or already answered', async () => {
     const { ctx, ids } = await setup()
-    threadNodes = [threadNode('T9', true)]
+    threadNodes = [threadNode('T9', true), answeredNode('T8')]
     const { runner, adapter } = makeRunner(ctx, async () => ok('s'))
     const run = runner.start({ prId: ids[0]!, stage: 'draft-replies' })
     await until(() => getRun(ctx, run.id).status === 'failed')
-    expect(getRun(ctx, run.id).error).toBe('There are no review threads to reply to')
+    expect(getRun(ctx, run.id).error).toBe('There are no review threads waiting for an answer')
     expect(adapter.run).not.toHaveBeenCalled()
   })
 
