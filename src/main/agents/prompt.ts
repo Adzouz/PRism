@@ -1,4 +1,5 @@
 import type { ReviewThread, Stage } from '@shared/domain'
+import type { Delta } from '../services/delta'
 
 export const readOnlyStages = new Set<Stage>(['review', 're-review', 'test-plan', 'draft-replies'])
 
@@ -31,7 +32,7 @@ export type PromptContext = {
   skill: string | null
   worktreeWarning: string | null
   priorFindings: string[]
-  lastReviewedHead: string | null
+  delta: Delta | null
   threads: ReviewThread[]
 }
 
@@ -39,7 +40,7 @@ const reportSteps: Record<Stage, string> = {
   review:
     'When the review is complete, call `prism_report_findings` once with the verdict, a short summary, the dimensions you checked and every finding.',
   're-review':
-    'If earlier findings are listed below, first call `prism_report_prior_status` with the status of each. Then review what changed since the last review and call `prism_report_findings` with new findings only.',
+    'If earlier findings are listed below, first call `prism_report_prior_status` with the status of each. Then review the scope below and call `prism_report_findings` with new findings only. PRism drops findings that repeat an open earlier one.',
   'test-plan':
     'Write the "How to test" plan and return it as the `summary` of `prism_report_findings` (verdict `comment`, no findings).',
   address:
@@ -64,12 +65,8 @@ export function buildPrompt(context: PromptContext) {
     `- \`gh api repos/${context.repo}/pulls/${context.number}/comments --paginate\` for review threads`,
     `- \`git diff ${context.baseRemote}/${context.baseRef}...HEAD\` for the full change`,
   ]
-  if (context.stage === 're-review' && context.lastReviewedHead) {
-    lines.push(
-      `- Last PRism review was at ${context.lastReviewedHead.slice(0, 12)}: \`git diff ${context.lastReviewedHead}..HEAD\` shows what changed since (after a force-push that commit may be gone; then use \`git range-diff\` or the full diff)`,
-    )
-  }
   if (context.worktreeWarning) lines.push('', `Note: ${context.worktreeWarning}.`)
+  if (context.stage === 're-review' && context.delta) lines.push('', ...scopeLines(context.delta))
   lines.push('', '## Reporting', '', reportSteps[context.stage])
   if (context.stage === 'address' || context.stage === 'draft-replies') {
     lines.push('', '## Review threads to handle', '')
@@ -83,7 +80,9 @@ export function buildPrompt(context: PromptContext) {
   if (context.priorFindings.length > 0) {
     lines.push(
       '',
-      '## Earlier PRism findings',
+      context.stage === 're-review'
+        ? '## Earlier PRism findings'
+        : '## Open findings from earlier reviews (do not report them again)',
       '',
       ...context.priorFindings.map((item) => `- ${item}`),
     )
@@ -124,5 +123,35 @@ function threadLines(thread: ReviewThread) {
     ...(hidden > 0 ? [`- … ${hidden} earlier comment(s)`] : []),
     ...shown.map((comment) => `- @${comment.author}: ${excerpt(comment.body)}`),
     '',
+  ]
+}
+
+function scopeLines(delta: Delta) {
+  const since = delta.kind === 'full' ? '' : delta.since.slice(0, 12)
+  if (delta.kind === 'full') {
+    return ['## Scope', '', `Review the whole pull request: ${delta.reason}.`]
+  }
+  if (delta.kind === 'none' || delta.kind === 'base-only') {
+    const why =
+      delta.kind === 'none'
+        ? 'there are no new commits'
+        : delta.rebased
+          ? 'the branch was only rebased'
+          : 'only the base branch was merged in'
+    return [
+      '## Scope',
+      '',
+      `Nothing new to review since the last PRism review at ${since}: ${why}. Update the earlier findings, then report the verdict with no new findings unless an earlier finding needs a new one.`,
+    ]
+  }
+  return [
+    '## Scope',
+    '',
+    `The code up to ${since} was already reviewed. Review only these commits${delta.rebased ? ' (the branch was force-pushed; commits that only moved are left out)' : ''}, with \`git show <sha>\`:`,
+    '',
+    ...delta.commits.map((commit) => `- ${commit.sha.slice(0, 12)} ${commit.subject}`),
+    '',
+    `Files they touch: ${delta.files.map((file) => `\`${file}\``).join(', ') || 'none'}.`,
+    'Read the surrounding code as needed, but report only what these commits change or break.',
   ]
 }

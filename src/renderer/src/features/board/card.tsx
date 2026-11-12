@@ -20,6 +20,7 @@ import {
 import {
   boardColumns,
   runStagesByTab,
+  runStageLabel,
   stageLabels,
   type BoardPr,
   type BoardStage,
@@ -421,7 +422,7 @@ export const PrCard = memo(function PrCard({
             <>
               <ContextMenuItem onSelect={() => actions.run(pr)}>
                 <Play />
-                Run {stageLabels[defaultStage].toLowerCase()}
+                Run {runStageLabel(defaultStage, pr).toLowerCase()}
               </ContextMenuItem>
               <ContextMenuSub>
                 <ContextMenuSubTrigger>
@@ -433,7 +434,7 @@ export const PrCard = memo(function PrCard({
                     .filter((stage) => stage !== defaultStage)
                     .map((stage) => (
                       <ContextMenuItem key={stage} onSelect={() => actions.run(pr, stage)}>
-                        {stageLabels[stage]}
+                        {runStageLabel(stage, pr)}
                       </ContextMenuItem>
                     ))}
                 </ContextMenuSubContent>

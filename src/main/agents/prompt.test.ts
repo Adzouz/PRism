@@ -18,7 +18,13 @@ const context: PromptContext = {
   skill: '# Re-review\n\nCheck the delta.',
   worktreeWarning: null,
   priorFindings: ['#4 [blocking] src/a.ts:3 Null check (open)'],
-  lastReviewedHead: 'fedcba9876543210',
+  delta: {
+    kind: 'commits',
+    since: 'fedcba9876543210',
+    rebased: false,
+    commits: [{ sha: 'abcdef1234567890', subject: 'fix null check' }],
+    files: ['src/a.ts'],
+  },
   threads: [],
 }
 
@@ -31,7 +37,9 @@ describe('prompt', () => {
     expect(prompt).toContain('- #4 [blocking] src/a.ts:3 Null check (open)')
     expect(prompt).toContain('Check the delta.')
     expect(prompt).toContain('relative to /skills/pr-re-review')
-    expect(prompt).toContain('`git diff fedcba9876543210..HEAD`')
+    expect(prompt).toContain('The code up to fedcba987654 was already reviewed')
+    expect(prompt).toContain('- abcdef123456 fix null check')
+    expect(prompt).toContain('Files they touch: `src/a.ts`.')
     expect(prompt).not.toMatch(/\n{3,}/)
   })
 
@@ -40,7 +48,23 @@ describe('prompt', () => {
     expect(prompt).toContain('prism_report_findings')
     expect(prompt).not.toContain('## Skill')
     expect(prompt).not.toContain('Earlier PRism findings')
-    expect(prompt).not.toContain('Last PRism review')
+    expect(prompt).not.toContain('## Scope')
+  })
+
+  it('tells a full review not to repeat open findings', () => {
+    const prompt = buildPrompt({ ...context, stage: 'review' })
+    expect(prompt).toContain('## Open findings from earlier reviews (do not report them again)')
+    expect(prompt).not.toContain('## Scope')
+  })
+
+  it('narrows a re-review with nothing new to the earlier findings', () => {
+    const rebased = buildPrompt({
+      ...context,
+      delta: { kind: 'base-only', since: 'fedcba9876543210', rebased: true },
+    })
+    expect(rebased).toContain('the branch was only rebased')
+    const full = buildPrompt({ ...context, delta: { kind: 'full', reason: 'no earlier review' } })
+    expect(full).toContain('Review the whole pull request: no earlier review.')
   })
 
   it('keeps the contract strict and answers readable', () => {

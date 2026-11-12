@@ -533,6 +533,9 @@ export const boardPr = z.object({
 })
 export type BoardPr = z.infer<typeof boardPr>
 
+export const runStageLabel = (value: Stage, pr: Pick<BoardPr, 'reviewed'>) =>
+  value === 'review' && pr.reviewed ? 'Full review' : stageLabels[value]
+
 export function reviewStageFor(pr: Pick<BoardPr, 'reviewed' | 'myReviewState'>): Stage {
   return pr.reviewed || pr.myReviewState ? 're-review' : 'review'
 }

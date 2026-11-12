@@ -25,6 +25,7 @@ import {
 import { redact, redactText } from '../agents/redact'
 import type { SessionTotals } from '../agents/types'
 import { asks, findings, postGates, runEvents, runs } from '../db/schema'
+import { titleKey } from './anchors'
 import type { Ctx } from './context'
 import { reviewDirection, type LoopFacts } from './pr-stage'
 
@@ -227,6 +228,7 @@ export type NewFinding = {
   body: string
   suggestion?: string
   priorFindingId?: number
+  hunkHash?: string
 }
 
 export function saveReview(
@@ -252,6 +254,7 @@ export function saveReview(
           body: redactText(item.body),
           suggestion: item.suggestion === undefined ? null : redactText(item.suggestion),
           priorFindingId: item.priorFindingId ?? null,
+          hunkHash: item.hunkHash ?? null,
         })
         .run()
     }
@@ -347,9 +350,9 @@ export function openReviewFindings(ctx: Ctx, prId: number): Finding[] {
     .map(({ finding }) => toFinding(finding))
 }
 
-export function lastReviewedHead(ctx: Ctx, prId: number, exceptRunId: number) {
+export function lastReviewed(ctx: Ctx, prId: number, exceptRunId: number) {
   const row = ctx.db
-    .select({ oid: runs.reviewedHeadOid })
+    .select({ head: runs.reviewedHeadOid, base: runs.reviewedBaseOid })
     .from(runs)
     .where(
       and(
@@ -361,7 +364,42 @@ export function lastReviewedHead(ctx: Ctx, prId: number, exceptRunId: number) {
     )
     .orderBy(desc(runs.id))
     .get()
-  return row?.oid ?? null
+  return { head: row?.head ?? null, base: row?.base ?? null }
+}
+
+export type RepeatCheck = NewFinding & { hunkHash: string }
+
+export function splitRepeats(ctx: Ctx, prId: number, runId: number, items: RepeatCheck[]) {
+  const open = ctx.db
+    .select({ finding: findings })
+    .from(findings)
+    .innerJoin(runs, eq(runs.id, findings.runId))
+    .where(
+      and(
+        eq(findings.prId, prId),
+        ne(findings.runId, runId),
+        inArray(runs.stage, [...reviewStages]),
+        inArray(findings.status, openFindingStatuses),
+      ),
+    )
+    .all()
+    .map(({ finding }) => finding)
+  const ids = new Set(open.map((item) => item.id))
+  const byHash = new Map(open.flatMap((item) => (item.hunkHash ? [[item.hunkHash, item.id]] : [])))
+  const byTitle = new Map(open.map((item) => [titleKey(item.anchorPath, item.title), item.id]))
+  const kept: RepeatCheck[] = []
+  const repeats: { title: string; findingId: number }[] = []
+  for (const item of items) {
+    const match =
+      (item.priorFindingId !== undefined && ids.has(item.priorFindingId)
+        ? item.priorFindingId
+        : undefined) ??
+      byHash.get(item.hunkHash) ??
+      byTitle.get(titleKey(item.path, item.title))
+    if (match === undefined) kept.push(item)
+    else repeats.push({ title: item.title, findingId: match })
+  }
+  return { kept, repeats }
 }
 
 export function createAsk(

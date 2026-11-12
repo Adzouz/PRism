@@ -228,7 +228,9 @@ A re-review runs two cheap passes instead of one full one:
 
 The agent gets the ledger as context with the rule "don't raise anything already in the ledger".
 
-**Escalation to a full review:** a **Full review** button, plus automatic escalation when the delta touches more than ~40% of the PR's changed lines or the PR's scope changed (new packages touched).
+**Escalation to a full review:** a **Full review** button (the Review stage on an already reviewed pull request). Automatic escalation when the delta touches more than ~40% of the PR's changed lines or the PR's scope changed (new packages touched) is a follow-up.
+
+**Phase 5 scope (trimmed, 2026-11-12):** PRism-computed delta (new commits, base-merge skip, range-diff after a force-push), repeat guard on stable anchors, Full review. Follow-ups: automatic escalation, the disputed-finding view with the author's reply, and a per-PR ledger history in the drawer.
 
 Cost/time win: a typical re-review reads a few hundred lines instead of the whole PR, and only new findings are posted.
 

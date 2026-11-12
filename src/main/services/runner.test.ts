@@ -646,9 +646,53 @@ describe('agent runner', () => {
       .filter((input) => input.stage === 're-review')
       .map((input) => input.prompt)
     expect(prompts[0]).toContain('Null check (open)')
-    expect(prompts[0]).toContain('Last PRism review was at head1')
+    expect(prompts[0]).toContain('Nothing new to review since the last PRism review at head1')
     expect(prompts[1]).toContain('Missing test (open)')
     expect(prompts[1]).not.toContain('Null check')
+  })
+
+  it('drops findings that repeat an open earlier finding', async () => {
+    const { ctx, ids } = await setup()
+    const skill = ctx.db.select().from(skills).get()!
+    ctx.db
+      .insert(stageBindings)
+      .values({ scope: 'global', stage: 're-review', skillId: skill.id, validatedAt: 1 })
+      .run()
+    const replies: string[] = []
+    const { runner } = makeRunner(ctx, async (input) => {
+      const items =
+        input.stage === 'review'
+          ? [finding]
+          : [
+              { ...finding, line: 40, title: `  ${finding.title.toUpperCase()} ` },
+              { ...finding, title: 'Missing test' },
+            ]
+      replies.push(
+        input.tools.reportFindings({ verdict: 'comment', summary: 'Done.', dimensions: [] }, items),
+      )
+      return ok('s')
+    })
+    const runAndWait = async (stage: Stage) => {
+      const run = runner.start({ prId: ids[0]!, stage })
+      await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
+      return run
+    }
+    const review = await runAndWait('review')
+    const earlier = listFindings(ctx, review.id)[0]!
+    const again = await runAndWait('re-review')
+    expect(listFindings(ctx, again.id).map((item) => item.title)).toEqual(['Missing test'])
+    expect(replies[1]).toContain(`Dropped 1 that repeat open findings`)
+    expect(replies[1]).toContain(`= #${earlier.id}`)
+    expect(
+      listEvents(ctx, again.id).some((event) =>
+        String(event.payload.text).startsWith('Dropped 1 finding(s) already reported'),
+      ),
+    ).toBe(true)
+    expect(
+      listEvents(ctx, again.id).some((event) =>
+        String(event.payload.text).startsWith('No new commits since the last review'),
+      ),
+    ).toBe(true)
   })
 
   it('counts session cost once across resumed segments', async () => {

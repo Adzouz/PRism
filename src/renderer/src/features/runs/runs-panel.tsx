@@ -18,6 +18,7 @@ import {
   gateKindOf,
   needsAnswer,
   runStagesByTab,
+  runStageLabel,
   stageLabels,
   threadStages,
   type BoardPr,
@@ -503,7 +504,7 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
             >
               {runStagesByTab[pr.tab].map((item) => (
                 <ToggleGroupItem key={item} value={item}>
-                  {stageLabels[item]}
+                  {runStageLabel(item, pr)}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
@@ -513,7 +514,7 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
               onClick={run}
             >
               {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
-              Run {stageLabels[stage].toLowerCase()}
+              Run {runStageLabel(stage, pr).toLowerCase()}
               {needsThreads && threads && ` · ${threadCount} thread${threadCount === 1 ? '' : 's'}`}
             </Button>
           </div>

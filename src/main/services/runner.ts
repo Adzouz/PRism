@@ -24,8 +24,10 @@ import { prs } from '../db/schema'
 import { userEnv, userPath, which } from '../system/exec'
 import { agentShell, probeShell } from '../system/shell'
 import { openInEditor, openInTerminal, resumeCommand, runInTerminal } from './apps'
+import { anchorOf } from './anchors'
 import { getAgentConfig } from './config'
 import type { Ctx } from './context'
+import { computeDelta, describeDelta, type Delta } from './delta'
 import type { GithubApi } from './gh-api'
 import { effectiveBindings, findSkill, readSkillContent, skillDirOf } from './library'
 import { prThreads } from './prs'
@@ -40,7 +42,7 @@ import {
   dismissRun,
   getRun,
   getRunRow,
-  lastReviewedHead,
+  lastReviewed,
   latestAsk,
   listRuns,
   listRunsForPr,
@@ -50,6 +52,7 @@ import {
   saveChanges,
   saveReplies,
   saveReview,
+  splitRepeats,
   setPriorStatus,
   updateRun,
 } from './runs'
@@ -182,10 +185,26 @@ export function createRunner(deps: RunnerDeps) {
     const prId = getRunRow(ctx, runId).prId
     return {
       reportFindings: (report, items) => {
-        const run = saveReview(ctx, runId, report, items)
+        const worktree = getRunRow(ctx, runId).worktreePath
+        const anchored = items.map((item) => ({ ...item, hunkHash: anchorOf(worktree, item) }))
+        const { kept, repeats } = splitRepeats(ctx, prId, runId, anchored)
+        const run = saveReview(ctx, runId, report, kept)
+        if (repeats.length > 0) {
+          event(runId, 'note', {
+            text: `Dropped ${repeats.length} finding(s) already reported and still open: ${repeats
+              .map((item) => `#${item.findingId}`)
+              .join(', ')}`,
+          })
+        }
         emit.run(run)
         emit.prsChanged()
-        return `Recorded the ${report.verdict} verdict with ${items.length} finding(s).`
+        const dropped =
+          repeats.length > 0
+            ? ` Dropped ${repeats.length} that repeat open findings (${repeats
+                .map((item) => `"${item.title}" = #${item.findingId}`)
+                .join(', ')}); update those with prism_report_prior_status instead.`
+            : ''
+        return `Recorded the ${report.verdict} verdict with ${kept.length} finding(s).${dropped}`
       },
       reportPriorStatus: (items) => `Updated ${setPriorStatus(ctx, prId, items)} finding(s).`,
       reportChanges: (changes) => {
@@ -304,6 +323,18 @@ export function createRunner(deps: RunnerDeps) {
       pr,
     )
     if (signal.aborted) return null
+    const reviewing = run.stage === 'review' || run.stage === 're-review'
+    let delta: Delta | null = null
+    if (run.stage === 're-review') {
+      const last = lastReviewed(ctx, run.prId, runId)
+      delta = await computeDelta(worktree.path, {
+        lastHead: last.head,
+        lastBase: last.base,
+        head: worktree.headOid,
+        base: `${worktree.baseRemote}/${pr.baseRef}`,
+      })
+      event(runId, 'note', { text: describeDelta(delta) })
+    }
     update(runId, {
       worktreePath: worktree.path,
       reviewedHeadOid: worktree.headOid,
@@ -330,8 +361,8 @@ export function createRunner(deps: RunnerDeps) {
         skillDir,
         skill: content,
         worktreeWarning: worktree.warning,
-        priorFindings: run.stage === 're-review' ? priorFindings(run.prId) : [],
-        lastReviewedHead: run.stage === 're-review' ? lastReviewedHead(ctx, run.prId, runId) : null,
+        priorFindings: reviewing ? priorFindings(run.prId) : [],
+        delta,
         threads,
       }),
     }
