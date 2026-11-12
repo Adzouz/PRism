@@ -360,7 +360,7 @@ export function Board({ tab }: { tab: BoardTab }) {
           accessibility={{ announcements }}
           autoScroll={{ threshold: { x: 0.08, y: 0.15 }, acceleration: 6 }}
         >
-          <div className="-mr-7 -ml-1 flex min-h-0 flex-1 items-stretch gap-3 overflow-x-auto pr-7 pb-3 pl-1">
+          <div className="-mr-7 -ml-10 flex min-h-0 flex-1 items-stretch gap-3 overflow-x-auto pr-7 pb-3 pl-10">
             {(drag?.columns ?? visibleColumns).map((column) => (
               <Column
                 key={column.stage}
