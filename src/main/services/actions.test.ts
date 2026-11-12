@@ -384,6 +384,31 @@ describe('review gate', () => {
     expect((await actions.get(runId)).postedAt).toBeNull()
   })
 
+  it('refuses skip and approve while a post is running on the pull request', async () => {
+    const { ctx, pr, addRun } = await setup()
+    const runId = addRun('review')
+    saveReview(ctx, runId, report, [finding()])
+    const fake = fakeApi({ headRefOid: 'head1', viewerDidAuthor: false, pending: null })
+    let release!: () => void
+    const held = new Promise<void>((done) => (release = done))
+    const partial = fake.api.graphqlPartial
+    fake.api.graphqlPartial = async <T>(query: string, variables?: Record<string, unknown>) => {
+      if (query.includes('mutation AddReview')) await held
+      return partial<T>(query, variables)
+    }
+    const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => {} } })
+    await actions.update({ runId, confirmed: true })
+    const posting = actions.post(runId)
+    await new Promise((done) => setTimeout(done, 10))
+    await expect(actions.skip(runId, true)).rejects.toThrow(/Another action/)
+    await expect(actions.approve(pr.id)).rejects.toThrow(/Another action/)
+    release()
+    const gate = await posting
+    expect(gate.postedAt).not.toBeNull()
+    expect(gate.skippedAt).toBeNull()
+    expect(fake.named('AddReview')).toHaveLength(1)
+  })
+
   it('skips and un-skips posting', async () => {
     const { ctx, addRun } = await setup()
     const runId = addRun('review')

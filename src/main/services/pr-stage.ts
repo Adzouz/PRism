@@ -18,7 +18,8 @@ export function deriveStage(facts: PrFacts): BoardStage {
   if (facts.state !== 'OPEN') return 'done'
   if (tabOf(facts.role) === 'reviews') {
     const review = facts.myReview
-    if (review?.state === 'APPROVED') return 'approved'
+    const approvedHere = !review?.oid || review.oid === facts.headOid
+    if (review?.state === 'APPROVED' && approvedHere && !facts.reviewRequested) return 'approved'
     if (facts.reviewRequested) return review ? 're-review' : 'to-review'
     if (!review) return 'to-review'
     if (review.oid && review.oid !== facts.headOid) return 're-review'

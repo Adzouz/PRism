@@ -157,6 +157,10 @@ describe('deriveStage', () => {
     expect(deriveStage({ ...base, myReview: review })).toBe('changes-requested')
     expect(deriveStage({ ...base, myReview: { ...review, oid: 'h0' } })).toBe('re-review')
     expect(deriveStage({ ...base, myReview: { ...review, state: 'APPROVED' } })).toBe('approved')
+    const approved = { ...review, state: 'APPROVED' }
+    expect(deriveStage({ ...base, reviewRequested: true, myReview: approved })).toBe('re-review')
+    expect(deriveStage({ ...base, myReview: { ...approved, oid: 'h0' } })).toBe('re-review')
+    expect(deriveStage({ ...base, myReview: { ...approved, oid: null } })).toBe('approved')
     expect(deriveStage({ ...base, state: 'MERGED' })).toBe('done')
   })
 

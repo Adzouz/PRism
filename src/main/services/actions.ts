@@ -521,14 +521,18 @@ export function createActions(deps: ActionDeps) {
     }
   }
 
-  async function exclusive<T>(runId: number, fn: () => Promise<T>) {
-    if (busy.has(runId)) throw new Error('Another action is in progress for this run')
-    busy.add(runId)
+  async function lockPr<T>(prId: number, fn: () => Promise<T>) {
+    if (busy.has(prId)) throw new Error('Another action is in progress on this pull request')
+    busy.add(prId)
     try {
       return await fn()
     } finally {
-      busy.delete(runId)
+      busy.delete(prId)
     }
+  }
+
+  function exclusive<T>(runId: number, fn: () => Promise<T>) {
+    return lockPr(getRun(ctx, runId).prId, fn)
   }
 
   async function update(patch: GatePatch) {
@@ -752,17 +756,19 @@ export function createActions(deps: ActionDeps) {
   }
 
   async function skip(runId: number, skipped: boolean) {
-    const loaded = load(runId)
-    if (loaded.gate.postedAt !== null) throw new Error('Already posted')
-    if (skipped) {
-      const current = await build(runId)
-      setGate(runId, { skippedAt: Date.now(), mode: current.mode, event: current.event })
-      clearManualStage(ctx, loaded.run.prId)
-    } else {
-      setGate(runId, { skippedAt: null })
-    }
-    emit.prsChanged()
-    return build(runId)
+    return exclusive(runId, async () => {
+      const current = skipped ? await build(runId) : null
+      const loaded = load(runId)
+      if (loaded.gate.postedAt !== null) throw new Error('Already posted')
+      if (current) {
+        setGate(runId, { skippedAt: Date.now(), mode: current.mode, event: current.event })
+        clearManualStage(ctx, loaded.run.prId)
+      } else {
+        setGate(runId, { skippedAt: null })
+      }
+      emit.prsChanged()
+      return build(runId)
+    })
   }
 
   async function approve(prId: number) {
@@ -771,7 +777,7 @@ export function createActions(deps: ActionDeps) {
     if (activeRunFor(ctx, prId)) {
       throw new Error('An agent run is in progress on this pull request. Wait for it or stop it.')
     }
-    return exclusive(-prId, async () => {
+    return lockPr(prId, async () => {
       const node = await liveNode(pr.nodeId)
       const event = node.viewerDidAuthor ? 'COMMENT' : 'APPROVE'
       const body = `✅ GO\n\n${aiTag}`
