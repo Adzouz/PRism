@@ -6,7 +6,14 @@ export type Delta =
   | { kind: 'full'; reason: string }
   | { kind: 'none'; since: string }
   | { kind: 'base-only'; since: string; rebased: boolean }
-  | { kind: 'commits'; since: string; rebased: boolean; commits: DeltaCommit[]; files: string[] }
+  | {
+      kind: 'commits'
+      since: string
+      rebased: boolean
+      commits: DeltaCommit[]
+      dropped: DeltaCommit[]
+      files: string[]
+    }
 
 export type DeltaInput = {
   lastHead: string | null
@@ -35,20 +42,23 @@ function parseLog(text: string): DeltaCommit[] {
   })
 }
 
-const rangeLine =
-  /^\s*(?:-|\d+):\s+(?:-+|[0-9a-f]+)\s+([=!<>])\s+(?:-|\d+):\s+(-+|[0-9a-f]+)\s?(.*)$/
+const rangeLine = /^\s*(?:-|\d+):\s+(-+|[0-9a-f]+)\s+([=!<>])\s+(?:-|\d+):\s+(-+|[0-9a-f]+)\s?(.*)$/
 
-export function parseRangeDiff(output: string): DeltaCommit[] {
+const isSha = (text: string) => !/^-+$/.test(text)
+
+export function parseRangeDiff(output: string) {
   const commits: DeltaCommit[] = []
+  const dropped: DeltaCommit[] = []
   for (const line of output.split('\n')) {
     const match = rangeLine.exec(line)
     if (!match) continue
-    const [, mark, sha = '', subject = ''] = match
-    if ((mark === '!' || mark === '>') && !/^-+$/.test(sha)) {
-      commits.push({ sha, subject: subject.trim() })
-    }
+    const [, oldSha = '', mark, sha = '', rest = ''] = match
+    const subject = rest.trim()
+    if ((mark === '!' || mark === '>') && isSha(sha)) commits.push({ sha, subject })
+    if (mark === '<' && isSha(oldSha)) dropped.push({ sha: oldSha, subject })
   }
-  return commits
+  const rewritten = new Set(commits.map((commit) => commit.subject))
+  return { commits, dropped: dropped.filter((commit) => !rewritten.has(commit.subject)) }
 }
 
 async function filesOf(cwd: string, commits: DeltaCommit[]) {
@@ -84,6 +94,7 @@ export async function computeDelta(cwd: string, input: DeltaInput): Promise<Delt
         since: lastHead,
         rebased: false,
         commits,
+        dropped: [],
         files: await filesOf(cwd, commits),
       }
     }
@@ -98,17 +109,26 @@ export async function computeDelta(cwd: string, input: DeltaInput): Promise<Delt
       `${newBase}..${head}`,
     ])
     if (!diff.ok) return { kind: 'full', reason: 'git range-diff failed after a force-push' }
-    const commits: DeltaCommit[] = []
-    for (const item of parseRangeDiff(diff.out)) {
-      commits.push({ ...item, sha: await gitOut(cwd, ['rev-parse', item.sha]) })
+    const parsed = parseRangeDiff(diff.out)
+    const resolveShas = async (items: DeltaCommit[]) => {
+      const resolved: DeltaCommit[] = []
+      for (const item of items) {
+        resolved.push({ ...item, sha: await gitOut(cwd, ['rev-parse', item.sha]) })
+      }
+      return resolved
     }
-    if (commits.length === 0) return { kind: 'base-only', since: lastHead, rebased: true }
+    const commits = await resolveShas(parsed.commits)
+    const dropped = await resolveShas(parsed.dropped)
+    if (commits.length === 0 && dropped.length === 0) {
+      return { kind: 'base-only', since: lastHead, rebased: true }
+    }
     return {
       kind: 'commits',
       since: lastHead,
       rebased: true,
       commits,
-      files: await filesOf(cwd, commits),
+      dropped,
+      files: await filesOf(cwd, [...commits, ...dropped]),
     }
   } catch (error) {
     return { kind: 'full', reason: error instanceof Error ? error.message : String(error) }
@@ -124,6 +144,7 @@ export function describeDelta(delta: Delta) {
       ? `The branch was rebased since ${since}, with no change to its own commits.`
       : `Only base-branch merges since ${since}.`
   }
-  const count = `${delta.commits.length} commit${delta.commits.length === 1 ? '' : 's'}`
-  return `Re-review covers ${count} since ${since}${delta.rebased ? ' (after a force-push, commits that only moved are left out)' : ''}.`
+  const plural = (n: number) => `${n} commit${n === 1 ? '' : 's'}`
+  const removed = delta.dropped.length ? `, ${plural(delta.dropped.length)} removed` : ''
+  return `Re-review covers ${plural(delta.commits.length)}${removed} since ${since}${delta.rebased ? ' (after a force-push, commits that only moved are left out)' : ''}.`
 }

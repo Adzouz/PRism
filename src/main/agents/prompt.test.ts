@@ -23,6 +23,7 @@ const context: PromptContext = {
     since: 'fedcba9876543210',
     rebased: false,
     commits: [{ sha: 'abcdef1234567890', subject: 'fix null check' }],
+    dropped: [],
     files: ['src/a.ts'],
   },
   threads: [],
@@ -63,8 +64,33 @@ describe('prompt', () => {
       delta: { kind: 'base-only', since: 'fedcba9876543210', rebased: true },
     })
     expect(rebased).toContain('the branch was only rebased')
+    expect(rebased).not.toContain('--remerge-diff')
+    const merged = buildPrompt({
+      ...context,
+      delta: { kind: 'base-only', since: 'fedcba9876543210', rebased: false },
+    })
+    expect(merged).toContain('git show --remerge-diff <merge>')
     const full = buildPrompt({ ...context, delta: { kind: 'full', reason: 'no earlier review' } })
     expect(full).toContain('Review the whole pull request: no earlier review.')
+  })
+
+  it('lists commits a force-push removed', () => {
+    const prompt = buildPrompt({
+      ...context,
+      delta: {
+        kind: 'commits',
+        since: 'fedcba9876543210',
+        rebased: true,
+        commits: [],
+        dropped: [{ sha: '1234567890abcdef', subject: 'add input validation' }],
+        files: ['src/check.ts'],
+      },
+    })
+    expect(prompt).toContain('force-pushed with no new commits')
+    expect(prompt).toContain('These reviewed commits were removed from the branch')
+    expect(prompt).toContain('- 1234567890ab add input validation')
+    expect(prompt).not.toContain('Review only these commits')
+    expect(prompt).not.toMatch(/\n{3,}/)
   })
 
   it('keeps the contract strict and answers readable', () => {

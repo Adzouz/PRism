@@ -160,19 +160,40 @@ function scopeLines(delta: Delta) {
         : delta.rebased
           ? 'the branch was only rebased'
           : 'only the base branch was merged in'
+    const merges =
+      delta.kind === 'base-only' && !delta.rebased
+        ? ' A base merge can still carry conflict resolutions that change this pull request’s code: check them with `git show --remerge-diff <merge>`.'
+        : ''
     return [
       '## Scope',
       '',
-      `Nothing new to review since the last PRism review at ${since}: ${why}. Update the earlier findings, then report the verdict with no new findings unless an earlier finding needs a new one.`,
+      `Nothing new to review since the last PRism review at ${since}: ${why}. Update the earlier findings, then report the verdict with no new findings unless an earlier finding needs a new one.${merges}`,
     ]
   }
+  const line = (commit: { sha: string; subject: string }) =>
+    `- ${commit.sha.slice(0, 12)} ${commit.subject}`
   return [
     '## Scope',
     '',
-    `The code up to ${since} was already reviewed. Review only these commits${delta.rebased ? ' (the branch was force-pushed; commits that only moved are left out)' : ''}, with \`git show <sha>\`:`,
-    '',
-    ...delta.commits.map((commit) => `- ${commit.sha.slice(0, 12)} ${commit.subject}`),
-    '',
+    ...(delta.commits.length
+      ? [
+          `The code up to ${since} was already reviewed. Review only these commits${delta.rebased ? ' (the branch was force-pushed; commits that only moved are left out)' : ''}, with \`git show <sha>\`:`,
+          '',
+          ...delta.commits.map(line),
+          '',
+        ]
+      : [
+          `The code up to ${since} was already reviewed. The branch was force-pushed with no new commits.`,
+          '',
+        ]),
+    ...(delta.dropped.length
+      ? [
+          'These reviewed commits were removed from the branch (`git show <sha>` still shows them). Check that their removal breaks nothing and update earlier findings on their code:',
+          '',
+          ...delta.dropped.map(line),
+          '',
+        ]
+      : []),
     `Files they touch: ${delta.files.map((file) => `\`${file}\``).join(', ') || 'none'}.`,
     'Read the surrounding code as needed, but report only what these commits change or break.',
   ]

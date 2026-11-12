@@ -756,6 +756,50 @@ describe('agent runner', () => {
     expect(listFindings(ctx, run.id).map((item) => item.line)).toEqual([3])
   })
 
+  it('keeps a different finding on the same code as an open one', async () => {
+    const { ctx, ids } = await setup()
+    const dir = await mkdtemp(join(tmpdir(), 'prism-repeat-'))
+    await mkdir(join(dir, 'src'))
+    const rows = Array.from({ length: 60 }, (_, index) => `line ${index + 1}`)
+    await writeFile(join(dir, 'src/a.ts'), `${rows.join('\n')}\n`)
+    const skill = ctx.db.select().from(skills).get()!
+    ctx.db
+      .insert(stageBindings)
+      .values({ scope: 'global', stage: 're-review', skillId: skill.id, validatedAt: 1 })
+      .run()
+    const { runner } = makeRunner(
+      ctx,
+      async (input) => {
+        const items =
+          input.stage === 'review'
+            ? [finding]
+            : [
+                { ...finding, title: 'Unescaped HTML' },
+                { ...finding, line: 50 },
+                { ...finding, line: 4 },
+              ]
+        await input.tools.reportFindings(
+          { verdict: 'comment', summary: 'Done.', dimensions: [] },
+          items,
+        )
+        return ok('s')
+      },
+      undefined,
+      async (options, pr) => ({ ...(await prepare(options, pr)), path: dir }),
+    )
+    const runAndWait = async (stage: Stage) => {
+      const run = runner.start({ prId: ids[0]!, stage })
+      await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
+      return run
+    }
+    await runAndWait('review')
+    const again = await runAndWait('re-review')
+    expect(listFindings(ctx, again.id).map((item) => [item.title, item.line])).toEqual([
+      ['Unescaped HTML', 3],
+      ['Null check', 50],
+    ])
+  })
+
   it('drops findings that repeat an open earlier finding', async () => {
     const { ctx, ids } = await setup()
     const skill = ctx.db.select().from(skills).get()!

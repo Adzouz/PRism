@@ -35,7 +35,7 @@ async function repo() {
 }
 
 describe('parseRangeDiff', () => {
-  it('keeps changed and new commits only', () => {
+  it('splits changed and new commits from dropped ones', () => {
     const output = [
       '1:  1111111 = 1:  aaaaaaa same commit',
       '2:  2222222 ! 2:  bbbbbbb changed commit',
@@ -43,12 +43,18 @@ describe('parseRangeDiff', () => {
       '    -old',
       '    +new',
       '3:  3333333 < -:  ------- dropped commit',
+      '4:  4444444 < -:  ------- rewritten commit',
       '-:  ------- > 3:  ccccccc new commit',
+      '-:  ------- > 4:  ddddddd rewritten commit',
     ].join('\n')
-    expect(parseRangeDiff(output)).toEqual([
-      { sha: 'bbbbbbb', subject: 'changed commit' },
-      { sha: 'ccccccc', subject: 'new commit' },
-    ])
+    expect(parseRangeDiff(output)).toEqual({
+      commits: [
+        { sha: 'bbbbbbb', subject: 'changed commit' },
+        { sha: 'ccccccc', subject: 'new commit' },
+        { sha: 'ddddddd', subject: 'rewritten commit' },
+      ],
+      dropped: [{ sha: '3333333', subject: 'dropped commit' }],
+    })
   })
 })
 
@@ -91,6 +97,7 @@ describe('computeDelta', () => {
       since: reviewed,
       rebased: false,
       commits: [{ sha: head, subject: 'add b' }],
+      dropped: [],
       files: ['b.txt'],
     })
     expect(describeDelta(delta)).toBe(`Re-review covers 1 commit since ${reviewed.slice(0, 12)}.`)
@@ -117,7 +124,27 @@ describe('computeDelta', () => {
       kind: 'commits',
       rebased: true,
       commits: [{ sha: amended, subject: 'add a' }],
+      dropped: [],
       files: ['a.txt'],
     })
+  })
+
+  it('lists commits a force-push removed', async () => {
+    const { dir, reviewed: kept, reviewedBase } = await repo()
+    const reviewed = await commit(dir, 'check.txt', 'validate\n', 'add input validation')
+    git(dir, 'reset', '-q', '--hard', kept)
+    const input = { lastHead: reviewed, lastBase: reviewedBase, head: kept, base: 'main' }
+    const delta = await computeDelta(dir, input)
+    expect(delta).toEqual({
+      kind: 'commits',
+      since: reviewed,
+      rebased: true,
+      commits: [],
+      dropped: [{ sha: reviewed, subject: 'add input validation' }],
+      files: ['check.txt'],
+    })
+    expect(describeDelta(delta)).toBe(
+      `Re-review covers 0 commits, 1 commit removed since ${reviewed.slice(0, 12)} (after a force-push, commits that only moved are left out).`,
+    )
   })
 })

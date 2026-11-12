@@ -405,6 +405,8 @@ export function lastReviewed(ctx: Ctx, prId: number, exceptRunId: number) {
 
 export type RepeatCheck = NewFinding & { hunkHash: string }
 
+const nearbyLines = 3
+
 export function splitRepeats(ctx: Ctx, prId: number, runId: number, items: RepeatCheck[]) {
   const open = ctx.db
     .select({ finding: findings })
@@ -421,17 +423,19 @@ export function splitRepeats(ctx: Ctx, prId: number, runId: number, items: Repea
     .all()
     .map(({ finding }) => finding)
   const ids = new Set(open.map((item) => item.id))
-  const byHash = new Map(open.flatMap((item) => (item.hunkHash ? [[item.hunkHash, item.id]] : [])))
-  const byTitle = new Map(open.map((item) => [titleKey(item.anchorPath, item.title), item.id]))
+  const byTitle = Map.groupBy(open, (item) => titleKey(item.anchorPath, item.title))
+  const sameSpot = (item: RepeatCheck, prior: (typeof open)[number]) =>
+    prior.hunkHash === item.hunkHash ||
+    item.line === null ||
+    prior.anchorLine === null ||
+    Math.abs(prior.anchorLine - item.line) <= nearbyLines
   const kept: RepeatCheck[] = []
   const repeats: { title: string; findingId: number }[] = []
   for (const item of items) {
     const match =
-      (item.priorFindingId !== undefined && ids.has(item.priorFindingId)
+      item.priorFindingId !== undefined && ids.has(item.priorFindingId)
         ? item.priorFindingId
-        : undefined) ??
-      byHash.get(item.hunkHash) ??
-      byTitle.get(titleKey(item.path, item.title))
+        : byTitle.get(titleKey(item.path, item.title))?.find((prior) => sameSpot(item, prior))?.id
     if (match === undefined) kept.push(item)
     else repeats.push({ title: item.title, findingId: match })
   }
