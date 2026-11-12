@@ -24,10 +24,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { usePrDetail, usePrs, useSetFlags, useSetStage } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { isLive } from '../runs/parts'
+import { PostPanel } from '../post/post-panel'
 import { RunsPanel } from '../runs/runs-panel'
 import { WorktreeFooter } from '../runs/worktree-footer'
 import { Avatar } from './card'
-import { age, hasLiveRun, prSize, stageLabel, useBoardStore, useNow } from './model'
+import { age, hasLiveRun, prSize, readyToPost, stageLabel, useBoardStore, useNow } from './model'
 
 const reviewTone: Record<string, 'success' | 'destructive' | 'default' | 'accent'> = {
   APPROVED: 'success',
@@ -310,8 +311,8 @@ export function PrDrawer() {
   return (
     <DialogPrimitive.Root open={pr !== null} onOpenChange={(open) => !open && openPr(null)}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/30 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
-        <DialogPrimitive.Content className="fixed inset-y-3 right-3 z-50 flex w-[min(620px,calc(100vw-48px))] flex-col rounded-2xl border bg-background shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-right-8 data-[state=open]:fade-in-0">
+        <DialogPrimitive.Overlay className="no-drag fixed inset-0 z-40 bg-black/30 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Content className="no-drag fixed inset-y-3 right-3 z-50 flex w-[min(620px,calc(100vw-48px))] flex-col rounded-2xl border bg-background shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-right-8 data-[state=open]:fade-in-0">
           {pr && (
             <>
               <header className="space-y-3 border-b px-6 pt-6 pb-4">
@@ -365,7 +366,9 @@ export function PrDrawer() {
               </header>
               <Tabs
                 value={drawerTab}
-                onValueChange={(value) => setDrawerTab(value === 'runs' ? 'runs' : 'overview')}
+                onValueChange={(value) =>
+                  setDrawerTab(value === 'runs' || value === 'post' ? value : 'overview')
+                }
                 className="flex min-h-0 flex-1 flex-col"
               >
                 <TabsList aria-label="Pull request sections" className="px-5">
@@ -385,12 +388,24 @@ export function PrDrawer() {
                       </>
                     )}
                   </TabsTrigger>
+                  <TabsTrigger value="post">
+                    Post
+                    {readyToPost(pr) && (
+                      <>
+                        <span aria-hidden className="size-1.5 rounded-full bg-primary" />
+                        <span className="sr-only">(ready to post)</span>
+                      </>
+                    )}
+                  </TabsTrigger>
                 </TabsList>
                 <TabsContent value="overview" className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                   <Overview pr={pr} />
                 </TabsContent>
                 <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                   <RunsPanel key={pr.id} pr={pr} />
+                </TabsContent>
+                <TabsContent value="post" className="min-h-0 flex-1 overflow-y-auto px-6 pt-5">
+                  <PostPanel key={pr.id} pr={pr} />
                 </TabsContent>
               </Tabs>
               <WorktreeFooter pr={pr} />

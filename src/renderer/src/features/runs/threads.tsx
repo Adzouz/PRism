@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Check, Loader2 } from 'lucide-react'
-import type { ReviewThread } from '@shared/domain'
+import { needsAnswer, type ReviewThread } from '@shared/domain'
 import { ErrorText } from '@/components/page'
 import { Badge } from '@/components/ui/badge'
 import { usePrThreads } from '@/lib/api'
@@ -47,6 +47,9 @@ function ThreadRow({
           <span className="truncate font-mono text-muted-foreground">{threadWhere(thread)}</span>
           {thread.isOutdated && <Badge className="px-1.5 py-0 text-[10px]">outdated</Badge>}
           {thread.isResolved && <Badge className="px-1.5 py-0 text-[10px]">resolved</Badge>}
+          {!thread.isResolved && thread.answered && (
+            <Badge className="px-1.5 py-0 text-[10px]">answered</Badge>
+          )}
           <span className="ml-auto shrink-0 text-muted-foreground">{thread.totalComments}</span>
         </span>
         <span className="line-clamp-2 text-sm">{lastComment(thread)}</span>
@@ -77,7 +80,7 @@ export function ThreadPicker({
   const all = threads ?? []
   const open = all.filter((thread) => !thread.isResolved)
   const resolved = all.filter((thread) => thread.isResolved)
-  const chosen = selected ?? new Set(open.map((thread) => thread.id))
+  const chosen = selected ?? new Set(all.filter(needsAnswer).map((thread) => thread.id))
   const toggle = (id: string) => {
     const next = new Set(chosen)
     if (next.has(id)) next.delete(id)

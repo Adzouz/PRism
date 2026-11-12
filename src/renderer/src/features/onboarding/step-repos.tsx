@@ -58,7 +58,7 @@ function SuggestionRow({
   )
 }
 
-export function StepRepos() {
+export function StepRepos({ onAdded }: { onAdded?: (repoId: number) => void } = {}) {
   const { data: repos = [] } = useRepos()
   const [query, setQuery] = useState('')
   const deferred = useDeferredValue(query.trim())
@@ -90,7 +90,12 @@ export function StepRepos() {
 
   const submit = () => {
     if (!query.trim()) return
-    add.mutate(query.trim(), { onSuccess: () => setQuery('') })
+    add.mutate(query.trim(), {
+      onSuccess: (repo) => {
+        setQuery('')
+        onAdded?.(repo.id)
+      },
+    })
   }
 
   return (
@@ -161,7 +166,9 @@ export function StepRepos() {
                 repo={repo}
                 added={addedNames.has(repo.fullName.toLowerCase())}
                 busy={add.isPending}
-                onAdd={() => add.mutate(repo.fullName)}
+                onAdd={() =>
+                  add.mutate(repo.fullName, { onSuccess: (added) => onAdded?.(added.id) })
+                }
               />
             ))}
           </ul>

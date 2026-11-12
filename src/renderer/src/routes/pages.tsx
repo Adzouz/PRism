@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -9,9 +9,11 @@ import {
   GitPullRequestArrow,
   RotateCcw,
 } from 'lucide-react'
+import { postModeLabels, type PostMode, type Repo } from '@shared/domain'
 import { GithubIcon } from '@/components/github-icon'
 import { Page, QuickCard, Section } from '@/components/page'
 import { Switch } from '@/components/ui/switch'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -31,10 +33,14 @@ import {
   useAction,
   useBoardSettings,
   useConfigStatus,
+  usePostMode,
   usePrs,
   useRepos,
+  useSetPostMode,
+  useSetRepoPostMode,
   useSkillsChanged,
 } from '@/lib/api'
+import { useRepoFocus } from '@/lib/repo-focus'
 import { cn } from '@/lib/utils'
 
 function greeting() {
@@ -118,7 +124,7 @@ export function DashboardPage() {
 
 export function ReviewsPage() {
   return (
-    <Page eyebrow="Pull requests" title="Reviews" actions={<SyncIndicator />}>
+    <Page eyebrow="Pull requests" title="Reviews" actions={<SyncIndicator />} fill>
       <Board tab="reviews" />
     </Page>
   )
@@ -126,7 +132,7 @@ export function ReviewsPage() {
 
 export function MyPrsPage() {
   return (
-    <Page eyebrow="Pull requests" title="My PRs" actions={<SyncIndicator />}>
+    <Page eyebrow="Pull requests" title="My PRs" actions={<SyncIndicator />} fill>
       <Board tab="mine" />
     </Page>
   )
@@ -145,6 +151,70 @@ export function RunsPage() {
     <Page eyebrow="Agents" title="Runs" description="Every agent run, live and past.">
       <RunsList />
     </Page>
+  )
+}
+
+function PostModePicker({
+  value,
+  onChange,
+  inherit,
+  label,
+}: {
+  value: PostMode | null
+  onChange: (value: PostMode | null) => void
+  inherit?: string
+  label: string
+}) {
+  return (
+    <ToggleGroup
+      type="single"
+      value={value ?? 'default'}
+      onValueChange={(next) => next && onChange(next === 'default' ? null : (next as PostMode))}
+      aria-label={label}
+    >
+      {inherit && <ToggleGroupItem value="default">Default ({inherit})</ToggleGroupItem>}
+      {(['draft', 'submit'] as const).map((mode) => (
+        <ToggleGroupItem key={mode} value={mode}>
+          {postModeLabels[mode]}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  )
+}
+
+function PostingOptions() {
+  const { data: mode } = usePostMode()
+  const save = useSetPostMode()
+  return (
+    <div className="flex max-w-2xl items-center justify-between gap-4 rounded-2xl bg-surface p-5">
+      <div>
+        <p className="text-base font-medium">Post reviews</p>
+        <p className="text-sm text-muted-foreground">Each repository can override it.</p>
+      </div>
+      {mode && (
+        <PostModePicker
+          label="Default post mode"
+          value={mode}
+          onChange={(next) => next && save.mutate(next)}
+        />
+      )}
+    </div>
+  )
+}
+
+function RepoPostMode({ repo }: { repo: Repo }) {
+  const { data: mode } = usePostMode()
+  const save = useSetRepoPostMode()
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-surface px-4 py-3">
+      <p className="text-sm font-medium">Post reviews</p>
+      <PostModePicker
+        label={`Post mode for ${repo.owner}/${repo.name}`}
+        value={repo.postMode}
+        inherit={mode ? postModeLabels[mode].toLowerCase() : 'global'}
+        onChange={(postMode) => save.mutate({ id: repo.id, postMode })}
+      />
+    </div>
   )
 }
 
@@ -177,9 +247,24 @@ export function SettingsPage() {
   })
 
   useSkillsChanged()
-  const { data: repos = [] } = useRepos()
+  const { data: repos = [], isSuccess: reposLoaded } = useRepos()
   const { data: status } = useConfigStatus()
-  const [open, setOpen] = useState<number | null>(null)
+  const open = useRepoFocus((state) => state.openRepoId)
+  const setOpen = useRepoFocus((state) => state.setOpen)
+  const reveal = useRepoFocus((state) => state.reveal)
+  const scrollTo = useRepoFocus((state) => state.scrollTo)
+  const scrolled = useRepoFocus((state) => state.scrolled)
+
+  useEffect(() => {
+    if (scrollTo === null || !reposLoaded) return
+    const frame = requestAnimationFrame(() => {
+      document
+        .getElementById(`repo-${scrollTo}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      scrolled()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [scrollTo, reposLoaded, scrolled])
 
   return (
     <Page eyebrow="Preferences" title="Settings">
@@ -195,12 +280,12 @@ export function SettingsPage() {
       </Section>
       <Section title="Repositories">
         <div className="max-w-3xl space-y-3">
-          <StepRepos />
+          <StepRepos onAdded={reveal} />
           {repos.map((repo) => {
             const issues = status?.issues.filter((issue) => issue.repoId === repo.id) ?? []
             const expanded = open === repo.id
             return (
-              <div key={repo.id} className="rounded-2xl border">
+              <div key={repo.id} id={`repo-${repo.id}`} className="scroll-mt-6 rounded-2xl border">
                 <button
                   type="button"
                   aria-expanded={expanded}
@@ -222,7 +307,8 @@ export function SettingsPage() {
                   </span>
                 </button>
                 {expanded && (
-                  <div className="border-t p-4">
+                  <div className="space-y-4 border-t p-4">
+                    <RepoPostMode repo={repo} />
                     <RepoSetup repo={repo} />
                   </div>
                 )}
@@ -239,6 +325,9 @@ export function SettingsPage() {
       </Section>
       <Section title="Board">
         <BoardOptions />
+      </Section>
+      <Section title="Posting">
+        <PostingOptions />
       </Section>
       <Section title="Appearance">
         <div className="flex max-w-2xl items-center justify-between gap-4 rounded-2xl bg-surface p-5">

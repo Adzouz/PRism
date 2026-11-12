@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { eq } from 'drizzle-orm'
-import { parseRepoInput, type Repo } from '@shared/domain'
+import { parseRepoInput, type PostMode, type Repo } from '@shared/domain'
 import { repos, stageBindings } from '../db/schema'
 import type { Ctx } from './context'
 import { cloneRepo, exists, findClones, hasRemote, isGitRepo } from './git'
@@ -31,6 +31,7 @@ const toRepo = (row: Row): Repo => ({
   autoRun: row.autoRun,
   ignoredChecks: parseList(row.ignoredChecksJson),
   qaLabels: parseList(row.qaLabelsJson),
+  postMode: row.postMode,
 })
 
 function getRow(ctx: Ctx, id: number) {
@@ -140,4 +141,10 @@ export function setRepoOptions(
     ignoredChecksJson: JSON.stringify(clean(options.ignoredChecks)),
     qaLabelsJson: JSON.stringify(clean(options.qaLabels)),
   })
+}
+
+export function setRepoPostMode(ctx: Ctx, id: number, postMode: PostMode | null) {
+  getRow(ctx, id)
+  ctx.db.update(repos).set({ postMode }).where(eq(repos.id, id)).run()
+  return getRepo(ctx, id)
 }

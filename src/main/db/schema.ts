@@ -39,6 +39,7 @@ export const repos = sqliteTable(
     autoRun: integer('auto_run', { mode: 'boolean' }).notNull().default(false),
     ignoredChecksJson: text('ignored_checks_json').notNull().default('[]'),
     qaLabelsJson: text('qa_labels_json').notNull().default('[]'),
+    postMode: text('post_mode', { enum: ['submit', 'draft'] }),
     addedAt: integer('added_at').notNull(),
   },
   (t) => [uniqueIndex('repos_owner_name').on(t.owner, t.name)],
@@ -121,6 +122,8 @@ export const prFlags = sqliteTable('pr_flags', {
   restoredAt: integer('restored_at'),
   manualStage: text('manual_stage'),
   manualStageBasis: text('manual_stage_basis'),
+  approvedOid: text('approved_oid'),
+  approvedAt: integer('approved_at'),
 })
 
 export const snapshots = sqliteTable(
@@ -167,6 +170,8 @@ export const runs = sqliteTable(
     changesJson: text('changes_json'),
     repliesJson: text('replies_json'),
     threadsJson: text('threads_json'),
+    pushRemote: text('push_remote'),
+    pushRef: text('push_ref'),
     createdAt: integer('created_at').notNull(),
     startedAt: integer('started_at'),
     endedAt: integer('ended_at'),
@@ -240,3 +245,22 @@ export const asks = sqliteTable(
   },
   (t) => [index('asks_run').on(t.runId)],
 )
+
+export const postGates = sqliteTable('post_gates', {
+  runId: integer('run_id')
+    .primaryKey()
+    .references(() => runs.id, { onDelete: 'cascade' }),
+  kind: text('kind', { enum: ['review', 'address', 'replies'] }).notNull(),
+  mode: text('mode', { enum: ['submit', 'draft'] }),
+  event: text('event', { enum: ['approve', 'comment', 'request_changes'] }),
+  body: text('body'),
+  commitMessage: text('commit_message'),
+  committedOid: text('committed_oid'),
+  pushedOid: text('pushed_oid'),
+  repliesJson: text('replies_json'),
+  ghReviewId: text('gh_review_id'),
+  ghReviewUrl: text('gh_review_url'),
+  confirmedAt: integer('confirmed_at'),
+  postedAt: integer('posted_at'),
+  skippedAt: integer('skipped_at'),
+})

@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import {
   Bot,
   CircleCheck,
@@ -8,11 +9,14 @@ import {
   Loader2,
   Play,
   Send,
+  Settings,
   Square,
   SquareTerminal,
   X,
 } from 'lucide-react'
 import {
+  gateKindOf,
+  needsAnswer,
   runStagesByTab,
   stageLabels,
   threadStages,
@@ -31,6 +35,7 @@ import {
   runStageFor,
   useApps,
   useCancelRun,
+  useConfigStatus,
   useDismissRun,
   useFollowUp,
   usePrRuns,
@@ -39,6 +44,7 @@ import {
   useRunFindings,
   useStartRun,
 } from '@/lib/api'
+import { useRepoFocus } from '@/lib/repo-focus'
 import { cn } from '@/lib/utils'
 import { age, useBoardStore, useNow } from '../board/model'
 import {
@@ -53,9 +59,9 @@ import {
 import { lastComment, threadWhere, ThreadPicker } from './threads'
 import { Transcript } from './transcript'
 
-const severityOrder: Finding['severity'][] = ['blocking', 'refactor', 'nit']
+export const severityOrder: Finding['severity'][] = ['blocking', 'refactor', 'nit']
 
-const severityTone: Record<Finding['severity'], 'destructive' | 'warning' | 'default'> = {
+export const severityTone: Record<Finding['severity'], 'destructive' | 'warning' | 'default'> = {
   blocking: 'destructive',
   refactor: 'warning',
   nit: 'default',
@@ -79,7 +85,7 @@ const actionTone: Record<
 const terminal = (run: Run) =>
   run.status === 'done' || run.status === 'failed' || run.status === 'cancelled'
 
-function Heading({ children }: { children: ReactNode }) {
+export function Heading({ children }: { children: ReactNode }) {
   return (
     <h3 className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
       {children}
@@ -118,7 +124,7 @@ function Findings({ runId }: { runId: number }) {
   )
 }
 
-function ThreadContext({ thread, id }: { thread: ReviewThread | undefined; id: string }) {
+export function ThreadContext({ thread, id }: { thread: ReviewThread | undefined; id: string }) {
   return (
     <div className="mb-1.5 space-y-0.5">
       <p className="truncate font-mono text-xs text-muted-foreground">
@@ -241,6 +247,8 @@ function RunDetail({
   const dismiss = useDismissRun()
   const resume = useResumeInTerminal()
   const terminalName = useTerminalName()
+  const selectRun = useBoardStore((state) => state.selectRun)
+  const setDrawerTab = useBoardStore((state) => state.setDrawerTab)
   const live = isLive(run.status)
   const wantsThreads = run.threadIds.length > 0 || run.replies.length > 0 || run.changes !== null
   const { data: threadList } = usePrThreads(run.prId, wantsThreads)
@@ -275,6 +283,19 @@ function RunDetail({
             >
               <SquareTerminal />
               Resume in {terminalName}
+            </Button>
+          )}
+          {run.status === 'done' && gateKindOf[run.stage] && (
+            <Button
+              size="sm"
+              className="h-7"
+              onClick={() => {
+                selectRun(run.id)
+                setDrawerTab('post')
+              }}
+            >
+              <Send />
+              Post
             </Button>
           )}
           {done && run.dismissedAt === null && (
@@ -409,6 +430,37 @@ function RunPicker({
   )
 }
 
+function SetupNeeded({ pr }: { pr: BoardPr }) {
+  const { data: status } = useConfigStatus()
+  const reveal = useRepoFocus((state) => state.reveal)
+  const openPr = useBoardStore((state) => state.openPr)
+  const navigate = useNavigate()
+  const issues = status?.issues.filter((issue) => issue.repoId === pr.repoId) ?? []
+  if (issues.length === 0) return null
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-warning/40 bg-warning/5 p-3">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium">{pr.repo} is not fully set up</p>
+        <p className="text-xs text-muted-foreground">
+          {issues[0]!.message}
+          {issues.length > 1 && ` and ${issues.length - 1} more`}
+        </p>
+      </div>
+      <Button
+        size="sm"
+        onClick={() => {
+          reveal(pr.repoId)
+          openPr(null)
+          void navigate({ to: '/settings' })
+        }}
+      >
+        <Settings />
+        Set up
+      </Button>
+    </div>
+  )
+}
+
 export function RunsPanel({ pr }: { pr: BoardPr }) {
   const { data: runs, isLoading, error } = usePrRuns(pr.id)
   const start = useStartRun()
@@ -420,11 +472,11 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
   const isOpen = pr.state === 'OPEN'
   const needsThreads = isOpen && threadStages.includes(stage)
   const { data: threads } = usePrThreads(pr.id, needsThreads)
-  const openThreads = (threads ?? []).filter((thread) => !thread.isResolved).length
+  const openThreads = (threads ?? []).filter(needsAnswer).length
   const threadCount = chosenThreads ? chosenThreads.size : openThreads
   const active = runs?.find((run) => isLive(run.status) || run.status === 'needs_you')
   const current = runs?.find((run) => run.id === openRunId) ?? runs?.[0] ?? null
-  const blocked = stage === 'draft-replies' && threads !== undefined && threadCount === 0
+  const blocked = needsThreads && threads !== undefined && threadCount === 0
 
   const run = () =>
     start.mutate(
@@ -438,33 +490,36 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
 
   return (
     <div className="space-y-5">
+      <SetupNeeded pr={pr} />
       {isOpen && (
         <div className="space-y-3">
-          <ToggleGroup
-            type="single"
-            value={stage}
-            onValueChange={(value) => value && setStage(value as Stage)}
-            aria-label="Run stage"
-            className="flex-wrap bg-secondary/50"
-          >
-            {runStagesByTab[pr.tab].map((item) => (
-              <ToggleGroupItem key={item} value={item} className="h-7 px-2.5 text-xs">
-                {stageLabels[item]}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+          <div className="flex flex-wrap items-center gap-2">
+            <ToggleGroup
+              type="single"
+              value={stage}
+              onValueChange={(value) => value && setStage(value as Stage)}
+              aria-label="Run stage"
+              className="flex-wrap"
+            >
+              {runStagesByTab[pr.tab].map((item) => (
+                <ToggleGroupItem key={item} value={item}>
+                  {stageLabels[item]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <Button
+              className="h-10"
+              disabled={!runs || Boolean(active) || start.isPending || blocked}
+              onClick={run}
+            >
+              {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
+              Run {stageLabels[stage].toLowerCase()}
+              {needsThreads && threads && ` · ${threadCount} thread${threadCount === 1 ? '' : 's'}`}
+            </Button>
+          </div>
           {needsThreads && (
             <ThreadPicker prId={pr.id} selected={chosenThreads} onChange={setChosenThreads} />
           )}
-          <Button
-            size="sm"
-            disabled={!runs || Boolean(active) || start.isPending || blocked}
-            onClick={run}
-          >
-            {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
-            Run {stageLabels[stage].toLowerCase()}
-            {needsThreads && threads && ` · ${threadCount} thread${threadCount === 1 ? '' : 's'}`}
-          </Button>
           <ErrorText error={start.error} />
         </div>
       )}
@@ -484,7 +539,7 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
         <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
           <Bot className="size-6" />
           No runs yet. Pick a stage and run it, or drag the card into{' '}
-          {pr.tab === 'reviews' ? 'Reviewing' : 'Addressing'}.
+          {pr.tab === 'reviews' ? 'Reviewing' : 'Reviewing or Addressing'}.
         </div>
       )}
     </div>

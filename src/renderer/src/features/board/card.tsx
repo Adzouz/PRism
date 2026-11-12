@@ -39,7 +39,7 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { errorMessage, runStageFor } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { AnswerForm, isLive, statusLabel, verdictLabel } from '../runs/parts'
-import { age, hasLiveRun, prSize, type Density } from './model'
+import { age, hasLiveRun, prSize, readyToPost, type Density } from './model'
 
 export type CardActions = {
   open: (pr: BoardPr) => void
@@ -54,10 +54,7 @@ export type CardActions = {
 
 const findingCount = (count: number) => `${count} finding${count === 1 ? '' : 's'}`
 
-const shownVerdict = (pr: BoardPr) =>
-  pr.run?.status === 'done' && (pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post')
-    ? pr.run.verdict
-    : null
+const shownVerdict = (pr: BoardPr) => (pr.run && readyToPost(pr) ? pr.run.verdict : null)
 
 function runSummary(pr: BoardPr) {
   const run = pr.run
@@ -328,12 +325,11 @@ export const PrCard = memo(function PrCard({
   })
   const { onKeyDown: dragKeyDown, ...pointerListeners }: NonNullable<DraggableSyntheticListeners> =
     listeners ?? {}
-  const needsMe =
-    pr.stage === 'verdict-ready' || pr.stage === 'ready-to-post' || pr.stage === 'needs-you'
+  const needsMe = readyToPost(pr) || pr.stage === 'needs-you'
   const live = hasLiveRun(pr)
   const defaultStage = runStageFor(pr)
   const finished = pr.run !== null && ['done', 'failed', 'cancelled'].includes(pr.run.status)
-  const columns = boardColumns[pr.tab].filter((column) => !column.agent)
+  const columns = boardColumns[pr.tab].filter((column) => !column.agent && !column.approve)
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     dragKeyDown?.(event)
@@ -448,7 +444,7 @@ export const PrCard = memo(function PrCard({
         {finished && (
           <ContextMenuItem onSelect={() => actions.dismiss(pr)}>
             <X />
-            Dismiss {pr.run?.verdict && pr.stage === 'verdict-ready' ? 'verdict' : 'run'}
+            Dismiss {pr.run?.verdict && readyToPost(pr) ? 'verdict' : 'run'}
           </ContextMenuItem>
         )}
         <ContextMenuSub>

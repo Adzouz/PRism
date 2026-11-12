@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
 import {
   activeRunStatuses,
+  needsAnswer,
   threadStages,
   type AgentId,
   type Run,
@@ -275,7 +276,7 @@ export function createRunner(deps: RunnerDeps) {
   async function selectThreads(runId: number, prId: number, stored: string[] | null) {
     const all = await prThreads(ctx, api, prId)
     if (stored) return stored.flatMap((id) => all.find((thread) => thread.id === id) ?? [])
-    const open = all.filter((thread) => !thread.isResolved)
+    const open = all.filter(needsAnswer)
     update(runId, { threadsJson: JSON.stringify(open.map((thread) => thread.id)) }, false)
     return open
   }
@@ -287,8 +288,8 @@ export function createRunner(deps: RunnerDeps) {
     const threads = threadStages.includes(run.stage as Stage)
       ? await selectThreads(runId, run.prId, run.threadsJson ? getRun(ctx, runId).threadIds : null)
       : []
-    if (run.stage === 'draft-replies' && threads.length === 0) {
-      throw new Error('There are no review threads to reply to')
+    if (threadStages.includes(run.stage as Stage) && threads.length === 0) {
+      throw new Error('There are no review threads waiting for an answer')
     }
     const skill = skillOf(run)
     const content = skill ? await readSkillContent(ctx, skill.id) : null
@@ -307,6 +308,8 @@ export function createRunner(deps: RunnerDeps) {
       worktreePath: worktree.path,
       reviewedHeadOid: worktree.headOid,
       reviewedBaseOid: row.baseOid,
+      pushRemote: worktree.remote,
+      pushRef: pr.headRef,
     })
     return {
       cwd: worktree.path,

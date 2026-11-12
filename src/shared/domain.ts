@@ -84,6 +84,14 @@ export const agentModels: Partial<Record<AgentId, { id: string; label: string }[
   ],
 }
 
+export const postMode = z.enum(['submit', 'draft'])
+export type PostMode = z.infer<typeof postMode>
+
+export const postModeLabels: Record<PostMode, string> = {
+  submit: 'Submit now',
+  draft: 'Stage as pending draft',
+}
+
 export const repo = z.object({
   id: z.number(),
   owner: z.string(),
@@ -94,6 +102,7 @@ export const repo = z.object({
   autoRun: z.boolean(),
   ignoredChecks: z.array(z.string()),
   qaLabels: z.array(z.string()),
+  postMode: postMode.nullable(),
 })
 export type Repo = z.infer<typeof repo>
 
@@ -209,14 +218,10 @@ export const boardStages = [
   'needs-you',
   'to-review',
   'reviewing',
-  'verdict-ready',
-  'waiting-on-author',
-  're-review',
-  'draft',
-  'waiting-for-review',
   'changes-requested',
   'addressing',
-  'ready-to-post',
+  're-review',
+  'to-approve',
   'approved',
   'done',
 ] as const
@@ -228,6 +233,7 @@ export type BoardColumn = {
   label: string
   needsMe?: boolean
   agent?: boolean
+  approve?: boolean
   hideEmpty?: boolean
 }
 
@@ -239,27 +245,21 @@ const needsYouColumn: BoardColumn = {
   hideEmpty: true,
 }
 
+const loopColumns = (author: boolean): BoardColumn[] => [
+  needsYouColumn,
+  { stage: 'to-review', label: 'To review', needsMe: true },
+  { stage: 'reviewing', label: 'Reviewing', agent: true },
+  { stage: 'changes-requested', label: 'Changes requested', needsMe: author },
+  ...(author ? [{ stage: 'addressing', label: 'Addressing', agent: true } as const] : []),
+  { stage: 're-review', label: 'To re-review', needsMe: true },
+  { stage: 'to-approve', label: 'To approve', needsMe: true },
+  { stage: 'approved', label: 'Approved', approve: true },
+  { stage: 'done', label: 'Done' },
+]
+
 export const boardColumns: Record<BoardTab, BoardColumn[]> = {
-  reviews: [
-    needsYouColumn,
-    { stage: 'to-review', label: 'To review', needsMe: true },
-    { stage: 'reviewing', label: 'Reviewing', agent: true },
-    { stage: 'verdict-ready', label: 'Verdict ready', needsMe: true, agent: true },
-    { stage: 'waiting-on-author', label: 'Waiting on author' },
-    { stage: 're-review', label: 'Re-review', needsMe: true },
-    { stage: 'approved', label: 'Approved' },
-    { stage: 'done', label: 'Done' },
-  ],
-  mine: [
-    needsYouColumn,
-    { stage: 'draft', label: 'Draft' },
-    { stage: 'waiting-for-review', label: 'Waiting for review' },
-    { stage: 'changes-requested', label: 'Changes requested', needsMe: true },
-    { stage: 'addressing', label: 'Addressing', agent: true },
-    { stage: 'ready-to-post', label: 'Ready to post', needsMe: true, agent: true },
-    { stage: 'approved', label: 'Approved' },
-    { stage: 'done', label: 'Done' },
-  ],
+  reviews: loopColumns(false),
+  mine: loopColumns(true),
 }
 
 export const prRole = z.enum(['reviewer', 'author', 'takeover'])
@@ -369,8 +369,18 @@ export const finding = z.object({
   body: z.string(),
   suggestion: z.string().nullable(),
   status: findingStatus,
+  included: z.boolean(),
+  editedBody: z.string().nullable(),
+  posted: z.boolean(),
 })
 export type Finding = z.infer<typeof finding>
+
+export const findingPatch = z.object({
+  id: z.number().int().positive(),
+  included: z.boolean().optional(),
+  editedBody: z.string().nullable().optional(),
+})
+export type FindingPatch = z.infer<typeof findingPatch>
 
 export const run = z.object({
   id: z.number(),
@@ -443,14 +453,18 @@ export const reviewThread = z.object({
   isOutdated: z.boolean(),
   comments: z.array(threadComment),
   totalComments: z.number(),
+  answered: z.boolean(),
 })
 export type ReviewThread = z.infer<typeof reviewThread>
+
+export const needsAnswer = (thread: Pick<ReviewThread, 'isResolved' | 'answered'>) =>
+  !thread.isResolved && !thread.answered
 
 export const threadStages: readonly Stage[] = ['address', 'draft-replies']
 
 export const runStagesByTab: Record<BoardTab, Stage[]> = {
   reviews: ['review', 're-review', 'draft-replies', 'test-plan'],
-  mine: ['address', 'draft-replies', 'test-plan', 'review'],
+  mine: ['review', 're-review', 'address', 'draft-replies', 'test-plan'],
 }
 
 export const appChoice = z.object({ id: z.string(), name: z.string() })
@@ -479,6 +493,7 @@ export const boardRun = z.object({
   findings: z.number(),
   ask: ask.nullable(),
   stale: z.boolean(),
+  gateClosed: z.boolean(),
 })
 export type BoardRun = z.infer<typeof boardRun>
 
@@ -513,17 +528,31 @@ export const boardPr = z.object({
   starred: z.boolean(),
   hidden: z.boolean(),
   archivedAt: z.number().nullable(),
+  reviewed: z.boolean(),
   run: boardRun.nullable(),
 })
 export type BoardPr = z.infer<typeof boardPr>
 
+export function reviewStageFor(pr: Pick<BoardPr, 'reviewed' | 'myReviewState'>): Stage {
+  return pr.reviewed || pr.myReviewState ? 're-review' : 'review'
+}
+
+export function columnStage(
+  column: BoardStage,
+  pr: Pick<BoardPr, 'tab' | 'reviewed' | 'myReviewState'>,
+): Stage | null {
+  if (column === 'reviewing') return reviewStageFor(pr)
+  if (column === 'addressing' && pr.tab === 'mine') return 'address'
+  return null
+}
+
 export function runStageFor(
-  pr: Pick<BoardPr, 'tab' | 'derivedStage' | 'myReviewState' | 'run'>,
+  pr: Pick<BoardPr, 'tab' | 'stage' | 'reviewed' | 'myReviewState'>,
 ): Stage {
-  if (pr.tab === 'mine') return 'address'
-  const reviewed =
-    pr.run?.status === 'done' && (pr.run.stage === 'review' || pr.run.stage === 're-review')
-  return pr.derivedStage === 're-review' || pr.myReviewState || reviewed ? 're-review' : 'review'
+  if (pr.tab === 'mine' && (pr.stage === 'changes-requested' || pr.stage === 'addressing')) {
+    return 'address'
+  }
+  return reviewStageFor(pr)
 }
 
 export const checkState = z.enum(['success', 'failure', 'pending', 'neutral', 'skipped'])
@@ -582,3 +611,112 @@ export type SyncStatus = z.infer<typeof syncStatus>
 
 export const boardSettings = z.object({ autoArchiveDone: z.boolean() })
 export type BoardSettings = z.infer<typeof boardSettings>
+
+export const gateKind = z.enum(['review', 'address', 'replies'])
+export type GateKind = z.infer<typeof gateKind>
+
+export const gateKindOf: Partial<Record<Stage, GateKind>> = {
+  review: 'review',
+  're-review': 'review',
+  address: 'address',
+  'draft-replies': 'replies',
+}
+
+export const gateCheckKey = z.enum([
+  'findings',
+  'event',
+  'mode',
+  'threads',
+  'commit',
+  'push',
+  'replies',
+])
+export type GateCheckKey = z.infer<typeof gateCheckKey>
+
+export const gateCheck = z.object({
+  key: gateCheckKey,
+  label: z.string(),
+  ok: z.boolean(),
+  detail: z.string().nullable(),
+})
+export type GateCheck = z.infer<typeof gateCheck>
+
+export const gateReply = z.object({
+  threadId: z.string(),
+  body: z.string(),
+  selected: z.boolean(),
+  postedUrl: z.string().nullable(),
+})
+export type GateReply = z.infer<typeof gateReply>
+
+export const gateWorktree = z.object({
+  path: z.string(),
+  dirty: z.array(z.string()),
+  localHead: z.string().nullable(),
+  checkoutHead: z.string().nullable(),
+  remoteHead: z.string().nullable(),
+  branch: z.string().nullable(),
+})
+export type GateWorktree = z.infer<typeof gateWorktree>
+
+export const postGate = z.object({
+  runId: z.number(),
+  prId: z.number(),
+  kind: gateKind,
+  mode: postMode,
+  modeFromRepo: z.boolean(),
+  event: verdict,
+  allowedEvents: z.array(verdict),
+  body: z.string(),
+  findings: z.object({
+    included: z.number(),
+    total: z.number(),
+    outsideDiff: z.number(),
+  }),
+  pendingReview: z.boolean(),
+  commitMessage: z.string(),
+  worktree: gateWorktree.nullable(),
+  replies: z.array(gateReply),
+  checks: z.array(gateCheck),
+  ready: z.boolean(),
+  live: z.boolean(),
+  confirmedAt: z.number().nullable(),
+  postedAt: z.number().nullable(),
+  skippedAt: z.number().nullable(),
+  reviewUrl: z.string().nullable(),
+  nextStage: boardStage.nullable(),
+  warning: z.string().nullable(),
+})
+export type PostGate = z.infer<typeof postGate>
+
+export const gatePatch = z.object({
+  runId: z.number().int().positive(),
+  mode: postMode.optional(),
+  event: verdict.optional(),
+  body: z.string().optional(),
+  commitMessage: z.string().optional(),
+  confirmed: z.boolean().optional(),
+  replies: z
+    .array(
+      gateReply
+        .pick({ threadId: true, body: true, selected: true })
+        .partial({ body: true, selected: true }),
+    )
+    .optional(),
+})
+export type GatePatch = z.infer<typeof gatePatch>
+
+export const aiTag = '_Drafted with AI, reviewed and posted by the author._'
+
+export function findingComment(
+  item: Pick<Finding, 'severity' | 'title' | 'body' | 'suggestion'>,
+): string {
+  const title = `${item.severity === 'nit' ? 'Nit: ' : ''}**${item.title.trim()}**`
+  const parts = [title, item.body.trim()]
+  const suggestion = item.suggestion?.trimEnd()
+  if (suggestion?.trim()) {
+    const fence = suggestion.includes('```') ? '````' : '```'
+    parts.push(`${fence}\n${suggestion}\n${fence}`)
+  }
+  return parts.filter(Boolean).join('\n\n')
+}

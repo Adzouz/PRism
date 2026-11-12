@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull, lte, ne, or } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lte, ne, or } from 'drizzle-orm'
 import { z } from 'zod'
 import {
   activeRunStatuses,
@@ -14,6 +14,7 @@ import {
   type ChangesReport,
   type DraftReply,
   type Finding,
+  type FindingPatch,
   type ReviewReport,
   type Run,
   type RunEvent,
@@ -23,8 +24,9 @@ import {
 } from '@shared/domain'
 import { redact, redactText } from '../agents/redact'
 import type { SessionTotals } from '../agents/types'
-import { asks, findings, runEvents, runs } from '../db/schema'
+import { asks, findings, postGates, runEvents, runs } from '../db/schema'
 import type { Ctx } from './context'
+import { reviewDirection, type LoopFacts } from './pr-stage'
 
 type RunRow = typeof runs.$inferSelect
 type AskRow = typeof asks.$inferSelect
@@ -291,7 +293,30 @@ const toFinding = (row: FindingRow): Finding => ({
   body: row.body,
   suggestion: row.suggestion,
   status: row.status,
+  included: row.included,
+  editedBody: row.editedBody,
+  posted: row.ghCommentId !== null,
 })
+
+export function updateFinding(ctx: Ctx, patch: FindingPatch): Finding {
+  const row = ctx.db.select().from(findings).where(eq(findings.id, patch.id)).get()
+  if (!row) throw new Error(`Finding ${patch.id} not found`)
+  if (row.ghCommentId) throw new Error('This finding is already posted on GitHub')
+  const set: Partial<FindingRow> = {}
+  if (patch.included !== undefined) set.included = patch.included
+  if (patch.editedBody !== undefined) {
+    const text = patch.editedBody?.trim() ?? ''
+    set.editedBody = text ? patch.editedBody : null
+  }
+  if (Object.keys(set).length > 0) {
+    ctx.db.update(findings).set(set).where(eq(findings.id, patch.id)).run()
+  }
+  return toFinding({ ...row, ...set })
+}
+
+export function linkFinding(ctx: Ctx, id: number, ghCommentId: string) {
+  ctx.db.update(findings).set({ ghCommentId }).where(eq(findings.id, id)).run()
+}
 
 export function listFindings(ctx: Ctx, runId: number): Finding[] {
   return ctx.db
@@ -381,19 +406,19 @@ export function answerAsk(ctx: Ctx, askId: number, answer: string) {
 
 export function runStage(
   tab: BoardTab,
-  run: Pick<BoardRun, 'stage' | 'status'> & { endedAt: number | null },
+  run: Pick<BoardRun, 'stage' | 'status'> & { endedAt: number | null; gateClosed?: boolean },
   pr: { state: string; myReviewAt: number | null },
 ): BoardStage | null {
   if (run.status === 'needs_you') return 'needs-you'
   const active = run.status === 'queued' || run.status === 'preparing' || run.status === 'running'
-  if (!active && pr.state !== 'OPEN') return null
-  if (tab === 'reviews' && reviewStages.has(run.stage)) {
+  if (!active && (pr.state !== 'OPEN' || run.gateClosed)) return null
+  if (reviewStages.has(run.stage)) {
     if (active) return 'reviewing'
-    if (run.status === 'done' && (pr.myReviewAt ?? 0) < (run.endedAt ?? 0)) return 'verdict-ready'
+    if (run.status === 'done' && (pr.myReviewAt ?? 0) < (run.endedAt ?? 0)) return 'reviewing'
   }
   if (tab === 'mine' && run.stage === 'address') {
     if (active) return 'addressing'
-    if (run.status === 'done') return 'ready-to-post'
+    if (run.status === 'done') return 'addressing'
   }
   return null
 }
@@ -401,6 +426,7 @@ export function runStage(
 export type BoardRunInfo = Omit<BoardRun, 'stale'> & {
   endedAt: number | null
   reviewedHeadOid: string | null
+  gateClosed: boolean
 }
 
 export type PrRuns = {
@@ -463,7 +489,20 @@ export function latestBoardRuns(ctx: Ctx, onlyPrId?: number) {
   }
   const counts = new Map<number, number>()
   const verdicts = new Map<number, ReviewReport['verdict']>()
+  const closed = new Set<number>()
   if (used.size > 0) {
+    for (const item of ctx.db
+      .select({ runId: postGates.runId })
+      .from(postGates)
+      .where(
+        and(
+          inArray(postGates.runId, [...used]),
+          or(isNotNull(postGates.postedAt), isNotNull(postGates.skippedAt)),
+        ),
+      )
+      .all()) {
+      closed.add(item.runId)
+    }
     for (const item of ctx.db
       .select({ runId: findings.runId })
       .from(findings)
@@ -493,6 +532,7 @@ export function latestBoardRuns(ctx: Ctx, onlyPrId?: number) {
           ask: row.status === 'needs_you' ? pendingAsk(ctx, row.id) : null,
           endedAt: row.endedAt,
           reviewedHeadOid: row.reviewedHeadOid,
+          gateClosed: closed.has(row.id),
         }
       : null
   const result = new Map<number, PrRuns>()
@@ -513,7 +553,10 @@ export function boardRunFor(
   pr: { state: string; myReviewAt: number | null },
 ): { run: BoardRunInfo; stage: BoardStage | null } {
   const activeStage = set.active ? runStage(tab, set.active, pr) : null
-  const done = tab === 'reviews' ? set.reviewed : set.addressed
+  const candidates = [set.reviewed, tab === 'mine' ? set.addressed : null]
+    .filter((item): item is BoardRunInfo => item !== null)
+    .sort((a, b) => b.id - a.id)
+  const done = candidates.find((item) => runStage(tab, item, pr) !== null) ?? null
   const doneStage = done ? runStage(tab, done, pr) : null
   return {
     stage: activeStage ?? doneStage,
@@ -585,4 +628,56 @@ export function saveReplies(ctx: Ctx, runId: number, replies: DraftReply[]) {
   const merged = new Map(existing.map((reply) => [reply.threadId, reply]))
   for (const reply of replies) merged.set(reply.threadId, reply)
   return updateRun(ctx, runId, { repliesJson: JSON.stringify(redact([...merged.values()])) })
+}
+
+export function reviewedPrIds(ctx: Ctx, onlyPrId?: number) {
+  const reviewed = and(eq(runs.status, 'done'), inArray(runs.stage, [...reviewStages]))
+  return new Set(
+    ctx.db
+      .selectDistinct({ prId: runs.prId })
+      .from(runs)
+      .where(onlyPrId === undefined ? reviewed : and(reviewed, eq(runs.prId, onlyPrId)))
+      .all()
+      .map((row) => row.prId),
+  )
+}
+
+export function latestLoops(ctx: Ctx, onlyPrId?: number) {
+  const closed = and(
+    inArray(postGates.kind, ['review', 'address']),
+    or(isNotNull(postGates.postedAt), isNotNull(postGates.skippedAt)),
+  )
+  const rows = ctx.db
+    .select({
+      prId: runs.prId,
+      kind: postGates.kind,
+      mode: postGates.mode,
+      event: postGates.event,
+      postedAt: postGates.postedAt,
+      skippedAt: postGates.skippedAt,
+      reportJson: runs.reportJson,
+      reviewedHeadOid: runs.reviewedHeadOid,
+    })
+    .from(postGates)
+    .innerJoin(runs, eq(runs.id, postGates.runId))
+    .where(onlyPrId === undefined ? closed : and(closed, eq(runs.prId, onlyPrId)))
+    .all()
+  const latest = new Map<number, (typeof rows)[number]>()
+  const closedAt = (row: (typeof rows)[number]) => Math.max(row.postedAt ?? 0, row.skippedAt ?? 0)
+  for (const row of rows) {
+    const current = latest.get(row.prId)
+    if (!current || closedAt(row) > closedAt(current)) latest.set(row.prId, row)
+  }
+  const result = new Map<number, LoopFacts>()
+  for (const [prId, row] of latest) {
+    const verdict = parse(reviewReport, row.reportJson, null as ReviewReport | null)?.verdict
+    const direction = reviewDirection(row.mode, row.event, verdict)
+    result.set(prId, {
+      kind: row.kind === 'address' ? 'address' : 'review',
+      goes: direction.goes,
+      approvedOnGithub: direction.approvedOnGithub && row.postedAt !== null,
+      reviewedHeadOid: row.reviewedHeadOid,
+    })
+  }
+  return result
 }

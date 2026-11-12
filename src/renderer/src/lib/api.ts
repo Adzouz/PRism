@@ -1,6 +1,19 @@
 import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query'
-import type { AppPreferences, BoardPr, InstalledApps, Run, RunEvent, Stage } from '@shared/domain'
+import type {
+  AppPreferences,
+  BoardPr,
+  Finding,
+  FindingPatch,
+  GatePatch,
+  InstalledApps,
+  PostGate,
+  PostMode,
+  Repo,
+  Run,
+  RunEvent,
+  Stage,
+} from '@shared/domain'
 import type { IpcChannel, IpcInput, IpcOutput } from '@shared/ipc'
 
 export function invoke<C extends IpcChannel>(
@@ -51,6 +64,8 @@ export const keys = {
   runFindings: (runId: number) => ['runs', runId, 'findings'] as const,
   prThreads: (prId: number) => ['prs', prId, 'threads'] as const,
   apps: ['apps'] as const,
+  gate: (runId: number) => ['gates', runId] as const,
+  postMode: ['settings', 'postMode'] as const,
 }
 
 export const useGithubStatus = () =>
@@ -149,6 +164,7 @@ export function useBoardEvents() {
       client.setQueryData<Run[]>(keys.prRuns(run.prId), merge)
       client.setQueryData<Run[]>(keys.runs, merge)
       if (run.report) void client.invalidateQueries({ queryKey: keys.runFindings(run.id) })
+      void client.invalidateQueries({ queryKey: keys.gate(run.id) })
     })
     const offEvent = window.prism.on('runs:event', (event) => {
       client.setQueryData<RunEvent[]>(keys.runEvents(event.runId), (list) =>
@@ -286,5 +302,86 @@ export const useDismissRun = () => useRunMutation((runId: number) => invoke('run
 
 export const useAnswer = () =>
   useRunMutation((input: { askId: number; answer: string }) => invoke('runs:answer', input))
+
+export const useGate = (runId: number | null) =>
+  useQuery({
+    queryKey: keys.gate(runId ?? 0),
+    queryFn: () => invoke('gates:get', runId!),
+    enabled: runId !== null,
+    refetchOnWindowFocus: true,
+  })
+
+function useGateMutation<I>(fn: (input: I) => Promise<PostGate>) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (gate) => {
+      client.setQueryData(keys.gate(gate.runId), gate)
+      void client.invalidateQueries({ queryKey: keys.runFindings(gate.runId) })
+    },
+  })
+}
+
+export const useUpdateGate = () =>
+  useGateMutation((patch: GatePatch) => invoke('gates:update', patch))
+
+export const useCommit = () =>
+  useGateMutation((input: { runId: number; message?: string }) => invoke('gates:commit', input))
+
+export const usePush = () => useGateMutation((runId: number) => invoke('gates:push', runId))
+
+export const usePost = () => useGateMutation((runId: number) => invoke('gates:post', runId))
+
+export const useSkipPost = () =>
+  useGateMutation((input: { runId: number; skipped: boolean }) => invoke('gates:skip', input))
+
+export function useApprove() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (prId: number) => invoke('gates:approve', prId),
+    onSuccess: () => client.invalidateQueries({ queryKey: keys.prs, exact: true }),
+  })
+}
+
+export function useUpdateFinding(runId: number) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (patch: FindingPatch) => invoke('findings:update', patch),
+    onSuccess: (finding) => {
+      client.setQueryData<Finding[]>(keys.runFindings(runId), (list) =>
+        list?.map((item) => (item.id === finding.id ? finding : item)),
+      )
+      void client.invalidateQueries({ queryKey: keys.gate(runId) })
+    },
+  })
+}
+
+export const usePostMode = () =>
+  useQuery({ queryKey: keys.postMode, queryFn: () => invoke('settings:getPostMode') })
+
+export function useSetPostMode() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (mode: PostMode) => invoke('settings:setPostMode', mode),
+    onSuccess: (mode) => {
+      client.setQueryData(keys.postMode, mode)
+      void client.invalidateQueries({ queryKey: ['gates'] })
+    },
+  })
+}
+
+export function useSetRepoPostMode() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { id: number; postMode: PostMode | null }) =>
+      invoke('repos:setPostMode', input),
+    onSuccess: (repo) => {
+      client.setQueryData<Repo[]>(keys.repos, (list) =>
+        list?.map((item) => (item.id === repo.id ? repo : item)),
+      )
+      void client.invalidateQueries({ queryKey: ['gates'] })
+    },
+  })
+}
 
 export { runStageFor } from '@shared/domain'
