@@ -216,6 +216,7 @@ export type BoardTab = z.infer<typeof boardTab>
 
 export const boardStages = [
   'needs-you',
+  'waiting-review',
   'to-review',
   'reviewing',
   'changes-requested',
@@ -247,7 +248,9 @@ const needsYouColumn: BoardColumn = {
 
 const loopColumns = (author: boolean): BoardColumn[] => [
   needsYouColumn,
-  { stage: 'to-review', label: 'To review', needsMe: true },
+  author
+    ? { stage: 'waiting-review', label: 'Waiting review' }
+    : { stage: 'to-review', label: 'To review', needsMe: true },
   { stage: 'reviewing', label: 'Reviewing', agent: true },
   { stage: 'changes-requested', label: 'Changes requested', needsMe: author },
   ...(author ? [{ stage: 'addressing', label: 'Addressing', agent: true } as const] : []),

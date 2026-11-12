@@ -29,7 +29,7 @@ export function deriveStage(facts: PrFacts): BoardStage {
   if (facts.reviewDecision === 'CHANGES_REQUESTED' || facts.unresolvedThreads > 0) {
     return 'changes-requested'
   }
-  return 'to-review'
+  return 'waiting-review'
 }
 
 type Verdict = 'approve' | 'comment' | 'request_changes'

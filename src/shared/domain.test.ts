@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { columnStage, runStageFor } from './domain'
+import { boardColumns, columnStage, runStageFor } from './domain'
 
 describe('runStageFor', () => {
   const reviews = {
@@ -29,6 +29,12 @@ describe('runStageFor', () => {
 
 describe('columnStage', () => {
   const pr = { tab: 'mine', myReviewState: null, reviewed: true } as const
+
+  it('starts My PRs in Waiting review and Reviews in To review', () => {
+    expect(boardColumns.mine[1]).toMatchObject({ stage: 'waiting-review', label: 'Waiting review' })
+    expect(boardColumns.mine.some((column) => column.stage === 'to-review')).toBe(false)
+    expect(boardColumns.reviews[1]).toMatchObject({ stage: 'to-review', needsMe: true })
+  })
 
   it('maps action columns to the stage they run', () => {
     expect(columnStage('reviewing', pr)).toBe('re-review')
