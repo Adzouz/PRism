@@ -124,7 +124,7 @@ export function DashboardPage() {
 
 export function ReviewsPage() {
   return (
-    <Page eyebrow="Pull requests" title="Reviews" actions={<SyncIndicator />}>
+    <Page eyebrow="Pull requests" title="Reviews" actions={<SyncIndicator />} fill>
       <Board tab="reviews" />
     </Page>
   )
@@ -132,7 +132,7 @@ export function ReviewsPage() {
 
 export function MyPrsPage() {
   return (
-    <Page eyebrow="Pull requests" title="My PRs" actions={<SyncIndicator />}>
+    <Page eyebrow="Pull requests" title="My PRs" actions={<SyncIndicator />} fill>
       <Board tab="mine" />
     </Page>
   )

@@ -8,18 +8,20 @@ export function Page({
   title,
   description,
   actions,
+  fill = false,
   children,
 }: {
   eyebrow: string
   title: string
   description?: string
   actions?: ReactNode
+  fill?: boolean
   children: ReactNode
 }) {
   return (
-    <div className="pb-10">
-      <div>
-        <header className="drag mb-8 flex items-end justify-between gap-6 pt-9">
+    <div className={fill ? 'flex h-full flex-col pb-3' : 'pb-10'}>
+      <div className={fill ? 'flex min-h-0 flex-1 flex-col' : undefined}>
+        <header className="drag mb-8 flex shrink-0 items-end justify-between gap-6 pt-9">
           <div className="space-y-2">
             <p className="text-sm font-medium text-accent-foreground">{eyebrow}</p>
             <h1 className="text-4xl font-semibold tracking-tight">{title}</h1>
@@ -27,7 +29,7 @@ export function Page({
           </div>
           {actions}
         </header>
-        <div className="space-y-10">{children}</div>
+        <div className={fill ? 'min-h-0 flex-1' : 'space-y-10'}>{children}</div>
       </div>
     </div>
   )

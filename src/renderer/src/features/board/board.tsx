@@ -141,12 +141,13 @@ function Column({
       aria-label={column.label}
       className={cn(
         'flex w-72 shrink-0 flex-col gap-2 rounded-2xl bg-secondary/50 p-2 transition-colors',
+        'max-h-full min-h-0',
         dragged && !disabled && !fromHere && 'bg-accent/50',
         isOver && !disabled && !fromHere && 'bg-accent ring-2 ring-primary/40',
         dragged && disabled && 'opacity-50',
       )}
     >
-      <header className="flex h-8 items-center gap-2 px-2">
+      <header className="flex h-8 shrink-0 items-center gap-2 px-2">
         <h3 className="text-sm font-medium">{column.label}</h3>
         <span className="font-mono text-xs text-muted-foreground">{prs.length}</span>
         {column.agent && column.stage !== 'needs-you' && (
@@ -159,7 +160,7 @@ function Column({
           </Badge>
         )}
       </header>
-      <div className="flex flex-col gap-2">
+      <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-1 pb-1">
         {prs.map((pr) => (
           <PrCard
             key={pr.id}
@@ -332,7 +333,7 @@ export function Board({ tab }: { tab: BoardTab }) {
   const ownApproval = pendingApprove?.role === 'author'
 
   return (
-    <div className="space-y-5">
+    <div className="flex h-full flex-col gap-5">
       <Toolbar tab={tab} repos={repoIds} hiddenCount={view.hiddenCount} />
       {isLoading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -359,7 +360,7 @@ export function Board({ tab }: { tab: BoardTab }) {
           accessibility={{ announcements }}
           autoScroll={{ threshold: { x: 0.08, y: 0.15 }, acceleration: 6 }}
         >
-          <div className="-mx-1 flex items-start gap-3 overflow-x-auto px-1 pb-4">
+          <div className="-mr-7 -ml-1 flex min-h-0 flex-1 items-stretch gap-3 overflow-x-auto pr-7 pb-3 pl-1">
             {(drag?.columns ?? visibleColumns).map((column) => (
               <Column
                 key={column.stage}
