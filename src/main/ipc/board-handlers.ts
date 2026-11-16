@@ -1,4 +1,5 @@
 import type { Ctx } from '../services/context'
+import { getDashboard } from '../services/dashboard'
 import type { GithubApi } from '../services/gh-api'
 import {
   getBoardSettings,
@@ -22,6 +23,7 @@ export type BoardChannel =
   | 'sync:status'
   | 'board:getSettings'
   | 'board:setSettings'
+  | 'dashboard:get'
 
 export function boardHandlers(
   ctx: Ctx,
@@ -46,5 +48,6 @@ export function boardHandlers(
     'sync:status': () => sync.status(),
     'board:getSettings': () => getBoardSettings(ctx),
     'board:setSettings': (value) => setBoardSettings(ctx, value),
+    'dashboard:get': (input) => getDashboard(ctx, input),
   }
 }

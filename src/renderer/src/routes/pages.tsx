@@ -1,25 +1,18 @@
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import {
-  ArrowUpRight,
-  Bot,
-  ChevronDown,
-  GitPullRequest,
-  GitPullRequestArrow,
-  RotateCcw,
-} from 'lucide-react'
+import { ArrowUpRight, ChevronDown, RotateCcw } from 'lucide-react'
 import { postModeLabels, type PostMode, type Repo } from '@shared/domain'
 import { GithubIcon } from '@/components/github-icon'
-import { Page, QuickCard, Section } from '@/components/page'
+import { Page, Section } from '@/components/page'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ArchiveList } from '@/features/board/archive'
+import { DashboardOverview } from '@/features/dashboard/dashboard'
 import { Board } from '@/features/board/board'
-import { isNeedsMe } from '@/features/board/model'
 import { SyncIndicator } from '@/features/board/sync-indicator'
 import { RunsList } from '@/features/runs/runs-list'
 import { RepoSetup } from '@/features/onboarding/repo-setup'
@@ -34,7 +27,6 @@ import {
   useBoardSettings,
   useConfigStatus,
   usePostMode,
-  usePrs,
   useRepos,
   useSetPostMode,
   useSetRepoPostMode,
@@ -52,13 +44,6 @@ function greeting() {
 
 export function DashboardPage() {
   const { data: status } = useConfigStatus()
-  const { data: prs = [] } = usePrs()
-  const running = prs.filter(
-    (pr) => pr.run && ['queued', 'preparing', 'running'].includes(pr.run.status),
-  ).length
-  const active = prs.filter((pr) => pr.archivedAt === null && pr.state === 'OPEN')
-  const toReview = active.filter((pr) => pr.tab === 'reviews' && isNeedsMe(pr)).length
-  const mine = active.filter((pr) => pr.tab === 'mine').length
   return (
     <div className="pb-10">
       <div className="space-y-10">
@@ -92,31 +77,7 @@ export function DashboardPage() {
           </Link>
         )}
 
-        <Section title="Quick access">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <QuickCard
-              to="/reviews"
-              icon={GitPullRequest}
-              label="Reviews"
-              description="Pull requests waiting for your review"
-              meta={`${toReview} to review`}
-            />
-            <QuickCard
-              to="/my-prs"
-              icon={GitPullRequestArrow}
-              label="My PRs"
-              description="What you authored or took over"
-              meta={`${mine} open`}
-            />
-            <QuickCard
-              to="/runs"
-              icon={Bot}
-              label="Runs"
-              description="Agents reviewing and addressing comments"
-              meta={`${running} running`}
-            />
-          </div>
-        </Section>
+        <DashboardOverview />
       </div>
     </div>
   )
