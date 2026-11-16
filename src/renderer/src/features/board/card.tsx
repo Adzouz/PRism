@@ -41,7 +41,7 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { errorMessage, runStageFor } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { AnswerForm, isLive, statusLabel, verdictLabel } from '../runs/parts'
-import { age, hasLiveRun, prSize, readyToPost, type Density } from './model'
+import { age, columnOf, hasLiveRun, prSize, readyToPost, type Density } from './model'
 
 export type CardActions = {
   open: (pr: BoardPr) => void
@@ -467,7 +467,7 @@ export const PrCard = memo(function PrCard({
             {columns.map((column) => (
               <ContextMenuItem
                 key={column.stage}
-                disabled={column.stage === pr.stage}
+                disabled={column.stage === columnOf(pr)}
                 onSelect={() => actions.move(pr, column.stage)}
               >
                 {column.label}

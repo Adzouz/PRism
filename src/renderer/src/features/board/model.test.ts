@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { boardView, migrateBoard } from './model'
+import { boardView, columnOf, migrateBoard } from './model'
 
 const filters = {
   reviews: { repoIds: [], starred: false, needsMe: false, showHidden: false, search: '' },
@@ -51,5 +51,13 @@ describe('boardView', () => {
       filters.mine,
     )
     expect([...view.byStage.keys()]).toEqual(['waiting-review'])
+  })
+})
+
+describe('columnOf', () => {
+  it('returns the column the card is shown in', () => {
+    expect(columnOf({ tab: 'mine', stage: 'to-review' })).toBe('waiting-review')
+    expect(columnOf({ tab: 'mine', stage: 'changes-requested' })).toBe('changes-requested')
+    expect(columnOf({ tab: 'reviews', stage: 'to-review' })).toBe('to-review')
   })
 })
