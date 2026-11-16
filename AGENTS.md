@@ -142,11 +142,12 @@ Agents run by PRism, and agents working on this repo, never commit, push, or pos
 | 2 Sync + board               | Done                  |
 | 3 Agent runner (Claude)      | Done                  |
 | 4 Post gate + actions        | Done                  |
-| 5 Re-review ledger           | In progress           |
+| 5 Re-review ledger           | Done (trimmed)        |
 | 6–8                          | Planned (PLAN.md §15) |
 
 Known follow-ups:
 
+- Re-review (Phase 5 leftovers, PLAN.md §7): automatic escalation to a full review on large deltas, the disputed-finding view with the author's reply, a per-PR ledger history in the drawer.
 - Address runs do not rebase onto the PR base yet (PLAN.md §11).
 - Guard layers are not a sandbox; run agents under an OS-level sandbox (SDK `sandbox`) for real containment.
 - Codex / Gemini / Cursor adapters (Phase 7) plug into `AgentAdapter`.
