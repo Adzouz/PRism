@@ -55,6 +55,7 @@ export type LoopFacts = {
   approvedOnGithub: boolean
   reviewedHeadOid: string | null
   postedHeadOid?: string | null
+  closedAt?: number
 }
 
 export function loopStage(
@@ -62,11 +63,15 @@ export function loopStage(
   headOid: string,
   loop: LoopFacts | null,
   approvedOid: string | null,
+  changesRequestedAt: number | null = null,
 ): BoardStage {
   if (derived === 'done' || derived === 'approved') return derived
   if (approvedOid && approvedOid === headOid) return 'approved'
   if (!loop) return derived
-  if (loop.kind === 'handback') return 'waiting-review'
+  if (loop.kind === 'handback') {
+    const askedAgain = changesRequestedAt !== null && changesRequestedAt > (loop.closedAt ?? 0)
+    return askedAgain ? derived : 'waiting-review'
+  }
   if (loop.goes === 'changes') {
     const since = loop.postedHeadOid ?? loop.reviewedHeadOid
     if (since && since !== headOid) return 're-review'

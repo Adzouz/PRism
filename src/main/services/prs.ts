@@ -64,10 +64,17 @@ const boardRunOf = (run: BoardRunInfo, headOid: string | null): BoardPr['run'] =
 type Loop = { loop: LoopFacts | null; reviewed: boolean }
 
 const autoStage = (
-  pr: { derivedStage: string; headOid: string },
+  pr: { derivedStage: string; headOid: string; changesRequestedAt: number | null },
   flags: { approvedOid: string | null } | null | undefined,
   loop: LoopFacts | null,
-) => loopStage(pr.derivedStage as BoardStage, pr.headOid, loop, flags?.approvedOid ?? null)
+) =>
+  loopStage(
+    pr.derivedStage as BoardStage,
+    pr.headOid,
+    loop,
+    flags?.approvedOid ?? null,
+    pr.changesRequestedAt,
+  )
 
 function toBoardPr(
   { pr, flags, owner, name }: BoardRow,

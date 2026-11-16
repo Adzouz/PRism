@@ -763,6 +763,7 @@ export function latestLoops(ctx: Ctx, onlyPrId?: number) {
       approvedOnGithub: direction.approvedOnGithub && row.postedAt !== null,
       reviewedHeadOid: row.reviewedHeadOid,
       postedHeadOid: row.postedHeadOid,
+      closedAt: closedAt(row),
     })
   }
   return result

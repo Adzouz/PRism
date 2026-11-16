@@ -52,6 +52,7 @@ export function NextStepButton({ pr, className }: { pr: BoardPr; className?: str
   const move = useSetStage()
   const openPr = useBoardStore((state) => state.openPr)
   const [approving, setApproving] = useState(false)
+  const [pendingLabel, setPendingLabel] = useState<string | null>(null)
   if (!steps) return null
 
   const pending = start.isPending || move.isPending
@@ -60,10 +61,13 @@ export function NextStepButton({ pr, className }: { pr: BoardPr; className?: str
   const runs = others.filter((step) => step.kind === 'run')
   const moves = others.filter((step) => step.kind === 'move')
   const approve = others.find((step) => step.kind === 'approve')
+  const primaryPending = pending && !!primary && pendingLabel === stepLabel(primary, pr)
+  const menuPending = pending && !primaryPending
 
   function act(step: NextStep) {
     start.reset()
     move.reset()
+    setPendingLabel(stepLabel(step, pr))
     if (step.kind === 'run') {
       start.mutate(
         { prId: pr.id, stage: step.stage },
@@ -87,7 +91,7 @@ export function NextStepButton({ pr, className }: { pr: BoardPr; className?: str
             disabled={disabled}
             onClick={() => act(primary)}
           >
-            {pending ? <Loader2 className="animate-spin" /> : <PrimaryIcon />}
+            {primaryPending ? <Loader2 className="animate-spin" /> : <PrimaryIcon />}
             {stepLabel(primary, pr)}
           </Button>
         )}
@@ -99,9 +103,9 @@ export function NextStepButton({ pr, className }: { pr: BoardPr; className?: str
               aria-label={primary ? 'Other next steps' : undefined}
               className={cn(primary && 'rounded-l-none border-l border-primary-foreground/20 px-2')}
             >
-              {!primary && (pending ? <Loader2 className="animate-spin" /> : <MoveRight />)}
+              {!primary && (menuPending ? <Loader2 className="animate-spin" /> : <MoveRight />)}
               {!primary && 'Next step'}
-              <ChevronDown />
+              {primary && menuPending ? <Loader2 className="animate-spin" /> : <ChevronDown />}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">

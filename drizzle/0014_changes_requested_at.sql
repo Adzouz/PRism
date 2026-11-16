@@ -1,0 +1,1 @@
+ALTER TABLE `prs` ADD `changes_requested_at` integer;

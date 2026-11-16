@@ -43,7 +43,9 @@ export type GqlPr = {
   reviews: {
     nodes: { state: string; submittedAt: string | null; commit: { oid: string } | null }[]
   }
-  latestOpinionatedReviews: { nodes: { state: string; author: { login: string } | null }[] }
+  latestOpinionatedReviews: {
+    nodes: { state: string; submittedAt?: string | null; author: { login: string } | null }[]
+  }
   reviewThreads: { nodes: { isResolved: boolean }[] }
   commits: { nodes: { commit: { statusCheckRollup: { contexts: CheckCounts } | null } }[] }
   recent?: {
@@ -68,7 +70,7 @@ const prFields = `
   reviews(last: 1, author: $login, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
     nodes { state submittedAt commit { oid } }
   }
-  latestOpinionatedReviews(first: 100) { nodes { state author { login } } }
+  latestOpinionatedReviews(first: 100) { nodes { state submittedAt author { login } } }
   reviewThreads(first: 100) { nodes { isResolved } }
   commits(last: 1) { nodes { commit { statusCheckRollup { ${checkCountsFields} } } } }
 `
@@ -134,6 +136,13 @@ export function myReviewOf(pr: GqlPr, login: string) {
       ? verdict.state
       : latest.state
   return { state, oid: latest.commit?.oid ?? null, at: Date.parse(latest.submittedAt) }
+}
+
+export function changesRequestedAt(pr: GqlPr, login: string) {
+  const times = pr.latestOpinionatedReviews.nodes
+    .filter((review) => review.state === 'CHANGES_REQUESTED' && !same(review.author?.login, login))
+    .map((review) => time(review.submittedAt ?? null) ?? 0)
+  return times.length > 0 ? Math.max(...times) : null
 }
 
 export function hasTakeoverCommits(pr: GqlPr, login: string) {
@@ -228,6 +237,7 @@ export function applyPr(
     myReviewState: myReview?.state ?? null,
     myReviewOid: myReview?.oid ?? null,
     myReviewAt: myReview?.at ?? null,
+    changesRequestedAt: changesRequestedAt(pr, login),
     myRole: role,
     derivedStage,
     stageSince: prev
