@@ -41,7 +41,15 @@ import {
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { CardPreview, PrCard, type CardActions } from './card'
-import { boardView, hasLiveRun, stageLabel, useBoardStore, useNow, type Density } from './model'
+import {
+  boardView,
+  columnOf,
+  hasLiveRun,
+  stageLabel,
+  useBoardStore,
+  useNow,
+  type Density,
+} from './model'
 import { Toolbar } from './toolbar'
 
 const runColumns = new Set<BoardStage>(['reviewing', 'addressing'])
@@ -124,7 +132,7 @@ function Column({
 }) {
   const { active } = useDndContext()
   const dragged = active?.data.current?.pr as BoardPr | undefined
-  const fromHere = dragged?.stage === column.stage
+  const fromHere = dragged !== undefined && columnOf(dragged) === column.stage
   const disabled =
     column.agent || column.approve
       ? !(
@@ -291,7 +299,7 @@ export function Board({ tab }: { tab: BoardTab }) {
       }, 0)
       const pr = event.active.data.current?.pr as BoardPr | undefined
       const target = event.over?.id
-      if (!pr || typeof target !== 'string' || target === pr.stage) return
+      if (!pr || typeof target !== 'string' || target === columnOf(pr)) return
       const column = boardColumns[tab].find((item) => item.stage === target)
       if (!column || hasLiveRun(pr)) return
       if (runColumns.has(column.stage)) {

@@ -185,7 +185,8 @@ Action columns run something when a card is dropped on them; state columns show 
 | Column | Kind | Shown when |
 | --- | --- | --- |
 | Needs you | agent | A run asks a question (hidden when empty) |
-| To review | state | Nothing reviewed yet (Reviews: review requested; My PRs: no change request) |
+| Waiting review | state | My PRs only: nobody reviewed yet, waiting on reviewers (drop on Reviewing to self-review) |
+| To review | state | Reviews only: review requested, nothing reviewed yet |
 | Reviewing | **action**: review / re-review | Review run active, or finished with its post gate open |
 | Changes requested | state | Last posted review is NO GO or GO WITH NITS; on Reviews also my review with no new commits since |
 | Addressing | **action**: address (My PRs only) | Address run active, or finished with its post gate open |

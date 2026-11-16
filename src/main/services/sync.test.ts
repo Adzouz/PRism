@@ -166,8 +166,8 @@ describe('deriveStage', () => {
 
   it('derives my PR columns', () => {
     const mine = { ...base, role: 'author' as const }
-    expect(deriveStage({ ...mine, isDraft: true })).toBe('to-review')
-    expect(deriveStage(mine)).toBe('to-review')
+    expect(deriveStage({ ...mine, isDraft: true })).toBe('waiting-review')
+    expect(deriveStage(mine)).toBe('waiting-review')
     expect(deriveStage({ ...mine, unresolvedThreads: 2 })).toBe('changes-requested')
     expect(deriveStage({ ...mine, reviewDecision: 'CHANGES_REQUESTED' })).toBe('changes-requested')
     expect(deriveStage({ ...mine, reviewDecision: 'APPROVED' })).toBe('approved')
@@ -240,7 +240,7 @@ describe('syncRepo', () => {
       stage: 'to-review',
       requestedTeam: 'core',
     })
-    expect(byNumber.get(authored.number)).toMatchObject({ tab: 'mine', stage: 'to-review' })
+    expect(byNumber.get(authored.number)).toMatchObject({ tab: 'mine', stage: 'waiting-review' })
     expect(byNumber.get(takeover.number)).toMatchObject({ role: 'takeover', tab: 'mine' })
     expect(byNumber.has(mentioned.number)).toBe(false)
     expect(byNumber.has(suggested.number)).toBe(false)

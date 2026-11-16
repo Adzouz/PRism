@@ -12,6 +12,7 @@ import {
   MoveRight,
   Play,
   RotateCcw,
+  Send,
   Square,
   Star,
   Users,
@@ -40,7 +41,7 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { errorMessage, runStageFor } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { AnswerForm, isLive, statusLabel, verdictLabel } from '../runs/parts'
-import { age, hasLiveRun, prSize, readyToPost, type Density } from './model'
+import { age, columnOf, hasLiveRun, prSize, readyToPost, type Density } from './model'
 
 export type CardActions = {
   open: (pr: BoardPr) => void
@@ -70,6 +71,7 @@ function runSummary(pr: BoardPr) {
       .filter(Boolean)
       .join(', ')
   }
+  if (readyToPost(pr)) return `${stageLabels[run.stage]} done, ready to post`
   if (run.status === 'done' || run.status === 'cancelled') return null
   return `${stageLabels[run.stage]} run ${statusLabel[run.status].toLowerCase()}`
 }
@@ -122,6 +124,14 @@ function RunStrip({ pr, interactive }: { pr: BoardPr; interactive: boolean }) {
           </p>
         )}
       </div>
+    )
+  }
+  if (readyToPost(pr)) {
+    return (
+      <p className="flex items-center gap-1.5 text-xs font-medium text-primary">
+        <Send className="size-3 shrink-0" />
+        <span className="truncate">{stageLabels[run.stage]} done · ready to post</span>
+      </p>
     )
   }
   if (run.status === 'failed') {
@@ -457,7 +467,7 @@ export const PrCard = memo(function PrCard({
             {columns.map((column) => (
               <ContextMenuItem
                 key={column.stage}
-                disabled={column.stage === pr.stage}
+                disabled={column.stage === columnOf(pr)}
                 onSelect={() => actions.move(pr, column.stage)}
               >
                 {column.label}

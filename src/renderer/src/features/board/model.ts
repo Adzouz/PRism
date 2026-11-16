@@ -132,8 +132,17 @@ export function boardView(prs: BoardPr[], tab: BoardTab, filters: Filters) {
       (a, b) => Number(b.starred) - Number(a.starred) || b.updatedAt - a.updatedAt || b.id - a.id,
     )
   const byStage = new Map<BoardStage, BoardPr[]>()
-  for (const pr of visible) byStage.set(pr.stage, [...(byStage.get(pr.stage) ?? []), pr])
+  for (const pr of visible) {
+    const stage = columnOf(pr)
+    byStage.set(stage, [...(byStage.get(stage) ?? []), pr])
+  }
   return { byStage, hiddenCount, total: visible.length }
+}
+
+export function columnOf(pr: Pick<BoardPr, 'tab' | 'stage'>): BoardStage {
+  const columns = boardColumns[pr.tab]
+  if (columns.some((column) => column.stage === pr.stage)) return pr.stage
+  return columns.find((column) => !column.agent)!.stage
 }
 
 export function prSize(pr: Pick<BoardPr, 'additions' | 'deletions'>) {

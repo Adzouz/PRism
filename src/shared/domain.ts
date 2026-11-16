@@ -216,6 +216,7 @@ export type BoardTab = z.infer<typeof boardTab>
 
 export const boardStages = [
   'needs-you',
+  'waiting-review',
   'to-review',
   'reviewing',
   'changes-requested',
@@ -247,7 +248,9 @@ const needsYouColumn: BoardColumn = {
 
 const loopColumns = (author: boolean): BoardColumn[] => [
   needsYouColumn,
-  { stage: 'to-review', label: 'To review', needsMe: true },
+  author
+    ? { stage: 'waiting-review', label: 'Waiting review' }
+    : { stage: 'to-review', label: 'To review', needsMe: true },
   { stage: 'reviewing', label: 'Reviewing', agent: true },
   { stage: 'changes-requested', label: 'Changes requested', needsMe: author },
   ...(author ? [{ stage: 'addressing', label: 'Addressing', agent: true } as const] : []),
@@ -718,6 +721,33 @@ export const gatePatch = z.object({
 export type GatePatch = z.infer<typeof gatePatch>
 
 export const aiTag = '_Drafted with AI, reviewed and posted by the author._'
+
+const isAiSignature = (line: string) => {
+  const trimmed = line.trim()
+  const marked = /^([_*]).*\1$/.test(trimmed) || trimmed.startsWith('🤖')
+  const text = trimmed.replace(/^[_*]+|[_*]+$/g, '').trim()
+  return (
+    marked &&
+    text.length > 0 &&
+    text.length <= 120 &&
+    /\b(?:AI|Claude)\b/i.test(text) &&
+    /\b(?:drafted|generated|written|assisted|reviewed)\b/i.test(text)
+  )
+}
+
+export function withoutAiSignature(body: string) {
+  const lines = body.trimEnd().split('\n')
+  while (lines.length > 2 && lines.at(-2)!.trim() === '' && isAiSignature(lines.at(-1)!)) {
+    lines.pop()
+    while (lines.length > 1 && lines.at(-1)!.trim() === '') lines.pop()
+  }
+  return lines.join('\n').trimEnd()
+}
+
+export function withAiTag(body: string) {
+  const text = withoutAiSignature(body).trim()
+  return text ? `${text}\n\n${aiTag}` : aiTag
+}
 
 export function findingComment(
   item: Pick<Finding, 'severity' | 'title' | 'body' | 'suggestion'>,

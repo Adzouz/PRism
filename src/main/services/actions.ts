@@ -13,6 +13,8 @@ import {
   postMode,
   postModeLabels,
   verdict as verdictSchema,
+  withAiTag,
+  withoutAiSignature,
   type Finding,
   type GateCheck,
   type GateKind,
@@ -182,7 +184,7 @@ export function parsePorcelain(output: string) {
 export const findingText = (finding: Finding) => finding.editedBody ?? findingComment(finding)
 
 export function reviewBody(summary: string, outside: Finding[]) {
-  const parts = [summary.trim()]
+  const parts = [withoutAiSignature(summary).trim()]
   if (outside.length > 0) {
     const items = outside.map((finding) => {
       const where = `${finding.path}${finding.line ? `:${finding.line}` : ''}`
@@ -194,7 +196,7 @@ export function reviewBody(summary: string, outside: Finding[]) {
   return parts.filter(Boolean).join('\n\n')
 }
 
-export const replyBody = (body: string) => `${body.trim()}\n\n${aiTag}`
+export const replyBody = withAiTag
 
 type CheckInput = {
   kind: GateKind
