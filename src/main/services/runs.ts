@@ -21,6 +21,7 @@ import {
   type RunEventKind,
   type RunStatus,
   type Stage,
+  withoutAiSignature,
 } from '@shared/domain'
 import { redact, redactText } from '../agents/redact'
 import type { SessionTotals } from '../agents/types'
@@ -704,7 +705,8 @@ export function saveChanges(ctx: Ctx, runId: number, changes: ChangesReport) {
 export function saveReplies(ctx: Ctx, runId: number, replies: DraftReply[]) {
   const existing = getRun(ctx, runId).replies
   const merged = new Map(existing.map((reply) => [reply.threadId, reply]))
-  for (const reply of replies) merged.set(reply.threadId, reply)
+  for (const reply of replies)
+    merged.set(reply.threadId, { ...reply, body: withoutAiSignature(reply.body) })
   return updateRun(ctx, runId, { repliesJson: JSON.stringify(redact([...merged.values()])) })
 }
 

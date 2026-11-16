@@ -482,12 +482,13 @@ describe('replies gate', () => {
     const { ctx, addRun } = await setup('author')
     const runId = addRun('draft-replies', { threadsJson: JSON.stringify(['T1', 'T2', 'T3']) })
     saveReplies(ctx, runId, [
-      { threadId: 'T1', body: 'Fixed.' },
+      { threadId: 'T1', body: 'Fixed.\n\n_Reply drafted by AI, reviewed by the author._' },
       { threadId: 'T2', body: 'Kept on purpose.' },
     ])
     const fake = fakeApi({ headRefOid: 'head1', viewerDidAuthor: true, pending: null })
     const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => {} } })
     const gate = await actions.get(runId)
+    expect(gate.replies[0]!.body).toBe('Fixed.')
     expect(gate.replies.map((reply) => [reply.threadId, reply.selected])).toEqual([
       ['T1', true],
       ['T2', true],

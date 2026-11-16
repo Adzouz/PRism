@@ -722,6 +722,33 @@ export type GatePatch = z.infer<typeof gatePatch>
 
 export const aiTag = '_Drafted with AI, reviewed and posted by the author._'
 
+const isAiSignature = (line: string) => {
+  const trimmed = line.trim()
+  const marked = /^([_*]).*\1$/.test(trimmed) || trimmed.startsWith('🤖')
+  const text = trimmed.replace(/^[_*]+|[_*]+$/g, '').trim()
+  return (
+    marked &&
+    text.length > 0 &&
+    text.length <= 120 &&
+    /\b(?:AI|Claude)\b/i.test(text) &&
+    /\b(?:drafted|generated|written|assisted|reviewed)\b/i.test(text)
+  )
+}
+
+export function withoutAiSignature(body: string) {
+  const lines = body.trimEnd().split('\n')
+  while (lines.length > 2 && lines.at(-2)!.trim() === '' && isAiSignature(lines.at(-1)!)) {
+    lines.pop()
+    while (lines.length > 1 && lines.at(-1)!.trim() === '') lines.pop()
+  }
+  return lines.join('\n').trimEnd()
+}
+
+export function withAiTag(body: string) {
+  const text = withoutAiSignature(body).trim()
+  return text ? `${text}\n\n${aiTag}` : aiTag
+}
+
 export function findingComment(
   item: Pick<Finding, 'severity' | 'title' | 'body' | 'suggestion'>,
 ): string {
