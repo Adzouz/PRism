@@ -137,13 +137,41 @@ export const snapshots = sqliteTable(
     openIssues: integer('open_issues').notNull(),
     awaitingMe: integer('awaiting_me').notNull(),
     myOpen: integer('my_open').notNull(),
-    opened: integer('opened').notNull(),
-    merged: integer('merged').notNull(),
-    closed: integer('closed').notNull(),
-    latencyMedianS: integer('latency_median_s'),
     takenAt: integer('taken_at').notNull(),
   },
   (t) => [primaryKey({ columns: [t.repoId, t.day] })],
+)
+
+export const activity = sqliteTable(
+  'activity',
+  {
+    repoId: integer('repo_id')
+      .notNull()
+      .references(() => repos.id, { onDelete: 'cascade' }),
+    day: text('day').notNull(),
+    opened: integer('opened').notNull(),
+    merged: integer('merged').notNull(),
+    closed: integer('closed').notNull(),
+    openPrs: integer('open_prs'),
+    fetchedAt: integer('fetched_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.repoId, t.day] })],
+)
+
+export const reviewLatency = sqliteTable(
+  'review_latency',
+  {
+    repoId: integer('repo_id')
+      .notNull()
+      .references(() => repos.id, { onDelete: 'cascade' }),
+    prNodeId: text('pr_node_id').notNull(),
+    requestedAt: integer('requested_at').notNull(),
+    reviewedAt: integer('reviewed_at').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.prNodeId, t.requestedAt] }),
+    index('review_latency_reviewed').on(t.reviewedAt),
+  ],
 )
 
 export const runs = sqliteTable(

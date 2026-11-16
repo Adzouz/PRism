@@ -9,6 +9,7 @@ import {
   boardStage,
   commandResult,
   configStatus,
+  dashboard,
   appPreferences,
   effectiveBinding,
   finding,
@@ -276,6 +277,10 @@ export const ipcContract = {
   'board:setSettings': {
     input: boardSettings,
     output: boardSettings,
+  },
+  'dashboard:get': {
+    input: z.object({ repoId: id.nullable() }),
+    output: dashboard,
   },
   'runs:start': {
     input: z.object({ prId: id, stage, threadIds: z.array(z.string()).optional() }),

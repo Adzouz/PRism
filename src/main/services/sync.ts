@@ -10,6 +10,8 @@ import {
   fetchChecks,
   type CheckCounts,
 } from './checks'
+import { refreshDashboard } from './dashboard'
+import { localDay } from './days'
 import { deriveStage, stageBasis, tabOf, type PrFacts } from './pr-stage'
 import { getBoardSettings } from './prs'
 import { listRepos } from './repos'
@@ -94,14 +96,11 @@ const nodesQuery = `
 `
 
 const countsQuery = `
-  query Counts($a: String!, $b: String!, $c: String!, $d: String!, $e: String!, $f: String!, $g: String!) {
+  query Counts($a: String!, $b: String!, $c: String!, $d: String!) {
     openPrs: search(query: $a, type: ISSUE, first: 0) { issueCount }
     openIssues: search(query: $b, type: ISSUE, first: 0) { issueCount }
     awaitingMe: search(query: $c, type: ISSUE, first: 0) { issueCount }
     myOpen: search(query: $d, type: ISSUE, first: 0) { issueCount }
-    opened: search(query: $e, type: ISSUE, first: 0) { issueCount }
-    merged: search(query: $f, type: ISSUE, first: 0) { issueCount }
-    closed: search(query: $g, type: ISSUE, first: 0) { issueCount }
   }
 `
 
@@ -291,10 +290,8 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 
 const repoSlug = (repo: Repo) => `${repo.owner}/${repo.name}`
 
-const today = (now: number) => new Date(now).toISOString().slice(0, 10)
-
 async function writeSnapshot(ctx: Ctx, api: GithubApi, repo: Repo, now: number) {
-  const day = today(now)
+  const day = localDay(now)
   const existing = ctx.db
     .select()
     .from(snapshots)
@@ -307,9 +304,6 @@ async function writeSnapshot(ctx: Ctx, api: GithubApi, repo: Repo, now: number) 
     b: `${r} is:issue is:open`,
     c: `${r} is:pr is:open review-requested:@me`,
     d: `${r} is:pr is:open author:@me`,
-    e: `${r} is:pr created:${day}`,
-    f: `${r} is:pr merged:${day}`,
-    g: `${r} is:pr is:unmerged closed:${day}`,
   })
   const count = (key: string) => data[key]?.issueCount ?? 0
   const values = {
@@ -319,10 +313,6 @@ async function writeSnapshot(ctx: Ctx, api: GithubApi, repo: Repo, now: number) 
     openIssues: count('openIssues'),
     awaitingMe: count('awaitingMe'),
     myOpen: count('myOpen'),
-    opened: count('opened'),
-    merged: count('merged'),
-    closed: count('closed'),
-    latencyMedianS: null,
     takenAt: now,
   }
   ctx.db
@@ -416,6 +406,9 @@ export async function syncRepo(
 
   await writeSnapshot(ctx, api, repo, now).catch((error: unknown) => {
     console.warn(`Snapshot failed for ${repoSlug(repo)}:`, error)
+  })
+  await refreshDashboard(ctx, api, repo, login, now).catch((error: unknown) => {
+    console.warn(`Dashboard refresh failed for ${repoSlug(repo)}:`, error)
   })
 
   const rows = ctx.db

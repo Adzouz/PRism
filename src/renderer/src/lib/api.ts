@@ -66,6 +66,7 @@ export const keys = {
   apps: ['apps'] as const,
   gate: (runId: number) => ['gates', runId] as const,
   postMode: ['settings', 'postMode'] as const,
+  dashboard: (repoId: number | null) => ['dashboard', repoId] as const,
 }
 
 export const useGithubStatus = () =>
@@ -143,6 +144,13 @@ export const usePrDetail = (id: number | null) =>
 export const useSyncStatus = () =>
   useQuery({ queryKey: keys.sync, queryFn: () => invoke('sync:status') })
 
+export const useDashboard = (repoId: number | null) =>
+  useQuery({
+    queryKey: keys.dashboard(repoId),
+    queryFn: () => invoke('dashboard:get', { repoId }),
+    placeholderData: (previous) => previous,
+  })
+
 export const useBoardSettings = () =>
   useQuery({ queryKey: keys.boardSettings, queryFn: () => invoke('board:getSettings') })
 
@@ -151,6 +159,7 @@ export function useBoardEvents() {
   useEffect(() => {
     const offPrs = window.prism.on('prs:changed', () => {
       void client.invalidateQueries({ queryKey: keys.prs, exact: true })
+      void client.invalidateQueries({ queryKey: ['dashboard'] })
     })
     const offSync = window.prism.on('sync:status', (status) => {
       client.setQueryData(keys.sync, status)

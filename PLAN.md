@@ -278,7 +278,7 @@ Tabs:
 
 - Stat tiles with Δ% vs yesterday: open PRs, open issues, awaiting my review, my open PRs.
 - Opened / merged / closed per day: exact daily counts from GitHub search date qualifiers, so useful from day 1.
-- Open-total trend from daily snapshots, starting at install.
+- Open-total trend: open pull requests at the end of each day (open now and created by then, plus closed after it), from GitHub search, so useful from day 1.
 - Review latency: median time from request to my first review (7d / 30d).
 - Needs-you list + running agents strip.
 
@@ -314,7 +314,9 @@ findings(id, pr_id, run_id, anchor_path, anchor_line, hunk_hash, severity, nit_d
          title, body, suggestion, included, edited_body, status, gh_comment_id)
 post_gates(run_id, kind[review|address], checklist_json, mode, posted_at, skipped_at)
 asks(id, run_id, prompt, schema_json, answer_json, answered_at)
-snapshots(repo_id, day, open_prs, open_issues, awaiting_me, my_open, opened, merged, closed, latency_median_s)
+snapshots(repo_id, day, open_prs, open_issues, awaiting_me, my_open, taken_at)
+activity(repo_id, day, opened, merged, closed, open_prs, fetched_at)
+review_latency(repo_id, pr_node_id, requested_at, reviewed_at)
 settings(key, value_json)
 ```
 

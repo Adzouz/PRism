@@ -622,6 +622,28 @@ export const syncStatus = z.object({
 })
 export type SyncStatus = z.infer<typeof syncStatus>
 
+export const dashboardMetric = z.enum(['openPrs', 'awaitingMe', 'myOpen', 'openIssues'])
+export type DashboardMetric = z.infer<typeof dashboardMetric>
+
+export const dashboardMetricLabels: Record<DashboardMetric, string> = {
+  openPrs: 'Open pull requests',
+  awaitingMe: 'Awaiting my review',
+  myOpen: 'My open pull requests',
+  openIssues: 'Open issues',
+}
+
+const count = z.number().nullable()
+const latencyWindow = z.object({ medianS: z.number().nullable(), count: z.number() })
+
+export const dashboard = z.object({
+  today: z.string(),
+  tiles: z.array(z.object({ metric: dashboardMetric, value: count, from: count, to: count })),
+  trend: z.array(z.object({ day: z.string(), openPrs: count })),
+  activity: z.array(z.object({ day: z.string(), opened: count, merged: count, closed: count })),
+  latency: z.object({ week: latencyWindow, month: latencyWindow }),
+})
+export type Dashboard = z.infer<typeof dashboard>
+
 export const boardSettings = z.object({ autoArchiveDone: z.boolean() })
 export type BoardSettings = z.infer<typeof boardSettings>
 

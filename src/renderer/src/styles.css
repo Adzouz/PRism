@@ -22,6 +22,9 @@
   --destructive: #d64045;
   --success: #1f9d67;
   --warning: #b7791f;
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
   --border: #e3e4ea;
   --input: #e3e4ea;
   --ring: #6a45dd;
@@ -48,6 +51,9 @@
   --destructive: #f2757a;
   --success: #60d6a0;
   --warning: #f5bb68;
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
   --border: #272b36;
   --input: #272b36;
   --ring: #7955e8;
@@ -79,6 +85,9 @@
   --color-destructive: var(--destructive);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);

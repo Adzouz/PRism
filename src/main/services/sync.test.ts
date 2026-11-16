@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { openDb } from '../db/client'
-import { repos, snapshots } from '../db/schema'
+import { activity, repos, snapshots } from '../db/schema'
 import type { Ctx } from './context'
 import type { GithubApi } from './gh-api'
 import { deriveStage, loopStage, type PrFacts } from './pr-stage'
@@ -108,6 +108,8 @@ function fakeApi(fixture: () => Fixture) {
       }
       if (name === 'Refresh') return { nodes: data.nodes ?? [] } as T
       if (name === 'Counts' && data.countsFail) throw new Error('search limit')
+      if (name === 'Latency') return { search: { nodes: [] } } as T
+      if (name === 'Activity') return {} as T
       if (name === 'Checks') {
         const nodes = [
           { __typename: 'CheckRun', name: 'flaky-e2e', status: 'COMPLETED', conclusion: 'FAILURE' },
@@ -245,6 +247,7 @@ describe('syncRepo', () => {
     expect(byNumber.has(mentioned.number)).toBe(false)
     expect(byNumber.has(suggested.number)).toBe(false)
     expect(ctx.db.select().from(snapshots).all()).toMatchObject([{ openPrs: 3, awaitingMe: 1 }])
+    expect(ctx.db.select().from(activity).all()).toHaveLength(30)
   })
 
   it('keeps a manual stage until GitHub state changes', async () => {

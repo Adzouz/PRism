@@ -51,6 +51,7 @@ export const ipcChannels = [
   'sync:status',
   'board:getSettings',
   'board:setSettings',
+  'dashboard:get',
   'runs:start',
   'runs:cancel',
   'runs:answer',
