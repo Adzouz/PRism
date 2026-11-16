@@ -230,10 +230,10 @@ export function DashboardOverview() {
               <Latency latency={data.latency} />
             </Panel>
           </div>
-          <Panel title="Open pull requests" description="Daily snapshots, last 30 days.">
+          <Panel title="Open pull requests" description="At the end of each day, last 30 days.">
             {trendDays < 2 ? (
               <p className="py-10 text-center text-sm text-muted-foreground">
-                The trend appears after a second day of snapshots.
+                The trend appears once GitHub search has answered.
               </p>
             ) : (
               <TrendChart data={data.trend} />

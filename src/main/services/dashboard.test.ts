@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { openDb } from '../db/client'
+import { eq } from 'drizzle-orm'
 import { activity, repos, reviewLatency, snapshots } from '../db/schema'
 import type { Ctx } from './context'
 import {
@@ -146,25 +147,33 @@ describe('refreshActivity', () => {
     )
     const now = Date.parse('2026-11-16T14:00:00+01:00')
     await refreshActivity(ctx, api, app, now)
-    expect(calls).toHaveLength(3)
+    expect(calls).toHaveLength(5)
     expect(Object.keys(calls[0]!.variables)).toHaveLength(30)
-    expect(calls[2]!.variables).toMatchObject({
-      opened9: `repo:acme/app is:pr created:${dayRange('2026-11-16')}`,
-      merged9: `repo:acme/app is:pr merged:${dayRange('2026-11-16')}`,
-      closed9: `repo:acme/app is:pr is:unmerged closed:${dayRange('2026-11-16')}`,
+    const end = '2026-11-16T23:59:59+01:00'
+    const today = (index: number) => ({
+      [`opened${index}`]: `repo:acme/app is:pr created:${dayRange('2026-11-16')}`,
+      [`merged${index}`]: `repo:acme/app is:pr merged:${dayRange('2026-11-16')}`,
+      [`closed${index}`]: `repo:acme/app is:pr is:unmerged closed:${dayRange('2026-11-16')}`,
+      [`openNow${index}`]: `repo:acme/app is:pr is:open created:<=${end}`,
+      [`closedLater${index}`]: `repo:acme/app is:pr closed:>${end} created:<=${end}`,
     })
-    expect(ctx.db.select().from(activity).all()).toHaveLength(30)
+    expect(calls[4]!.variables).toMatchObject(today(5))
+    const rows = ctx.db.select().from(activity).all()
+    expect(rows).toHaveLength(30)
+    expect(rows[0]).toMatchObject({ opened: 2, merged: 1, closed: 1, openPrs: 2 })
 
     calls.length = 0
     await expect(refreshActivity(ctx, api, app, now + 10 * 60_000)).resolves.toBe(false)
     expect(calls).toHaveLength(0)
     await expect(refreshActivity(ctx, api, app, now + hour)).resolves.toBe(true)
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.variables).toEqual({
-      opened0: `repo:acme/app is:pr created:${dayRange('2026-11-16')}`,
-      merged0: `repo:acme/app is:pr merged:${dayRange('2026-11-16')}`,
-      closed0: `repo:acme/app is:pr is:unmerged closed:${dayRange('2026-11-16')}`,
-    })
+    expect(calls[0]!.variables).toEqual(today(0))
+
+    calls.length = 0
+    ctx.db.update(activity).set({ openPrs: null }).where(eq(activity.day, '2026-11-01')).run()
+    await refreshActivity(ctx, api, app, now + hour)
+    expect(Object.keys(calls[0]!.variables)).toContain('openNow0')
+    expect(calls[0]!.variables.openNow0).toContain('created:<=2026-11-01T23:59:59+01:00')
   })
 })
 
@@ -209,7 +218,7 @@ describe('getDashboard', () => {
     takenAt: 0,
   })
 
-  it('compares today with yesterday and leaves incomplete days out of the trend', async () => {
+  it('compares today with yesterday on the repositories that have both', async () => {
     const { ctx, app, docs } = await makeCtx()
     ctx.db
       .insert(snapshots)
@@ -218,7 +227,6 @@ describe('getDashboard', () => {
         snap(app.id, '2026-11-15', 8),
         snap(app.id, '2026-11-16', 10),
         snap(docs.id, '2026-11-15', 3),
-        snap(docs.id, '2026-11-13', 2),
       ])
       .run()
     const dashboard = getDashboard(ctx, { repoId: null }, now)
@@ -229,13 +237,6 @@ describe('getDashboard', () => {
       from: 8,
       to: 10,
     })
-    expect(dashboard.trend).toHaveLength(30)
-    expect(dashboard.trend.slice(-4)).toEqual([
-      { day: '2026-11-13', openPrs: 2 },
-      { day: '2026-11-14', openPrs: null },
-      { day: '2026-11-15', openPrs: 11 },
-      { day: '2026-11-16', openPrs: null },
-    ])
     expect(getDashboard(ctx, { repoId: docs.id }, now).tiles[0]).toEqual({
       metric: 'openPrs',
       value: 3,
@@ -244,14 +245,56 @@ describe('getDashboard', () => {
     })
   })
 
-  it('sums daily activity and takes the median review latency per window', async () => {
+  it('sums daily activity and open totals, leaving incomplete days empty, and takes the median latency', async () => {
     const { ctx, app, docs } = await makeCtx()
     ctx.db
       .insert(activity)
       .values([
-        { repoId: app.id, day: '2026-11-16', opened: 2, merged: 1, closed: 0, fetchedAt: now },
-        { repoId: docs.id, day: '2026-11-16', opened: 1, merged: 0, closed: 1, fetchedAt: now },
-        { repoId: docs.id, day: '2026-11-15', opened: 1, merged: 0, closed: 1, fetchedAt: now },
+        {
+          repoId: app.id,
+          day: '2026-11-16',
+          opened: 2,
+          merged: 1,
+          closed: 0,
+          openPrs: 9,
+          fetchedAt: now,
+        },
+        {
+          repoId: docs.id,
+          day: '2026-11-16',
+          opened: 1,
+          merged: 0,
+          closed: 1,
+          openPrs: 3,
+          fetchedAt: now,
+        },
+        {
+          repoId: docs.id,
+          day: '2026-11-15',
+          opened: 1,
+          merged: 0,
+          closed: 1,
+          openPrs: 4,
+          fetchedAt: now,
+        },
+        {
+          repoId: app.id,
+          day: '2026-11-14',
+          opened: 0,
+          merged: 0,
+          closed: 0,
+          openPrs: null,
+          fetchedAt: now,
+        },
+        {
+          repoId: docs.id,
+          day: '2026-11-14',
+          opened: 0,
+          merged: 0,
+          closed: 0,
+          openPrs: 4,
+          fetchedAt: now,
+        },
       ])
       .run()
     const sample = (prNodeId: string, daysAgo: number, hours: number) => ({
@@ -277,6 +320,12 @@ describe('getDashboard', () => {
       merged: null,
       closed: null,
     })
+    expect(dashboard.trend).toHaveLength(30)
+    expect(dashboard.trend.slice(-3)).toEqual([
+      { day: '2026-11-14', openPrs: null },
+      { day: '2026-11-15', openPrs: null },
+      { day: '2026-11-16', openPrs: 12 },
+    ])
     expect(dashboard.latency).toEqual({
       week: { medianS: 2 * 3600, count: 2 },
       month: { medianS: 3 * 3600, count: 3 },

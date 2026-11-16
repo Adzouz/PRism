@@ -152,6 +152,7 @@ export const activity = sqliteTable(
     opened: integer('opened').notNull(),
     merged: integer('merged').notNull(),
     closed: integer('closed').notNull(),
+    openPrs: integer('open_prs'),
     fetchedAt: integer('fetched_at').notNull(),
   },
   (t) => [primaryKey({ columns: [t.repoId, t.day] })],

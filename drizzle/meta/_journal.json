@@ -92,6 +92,13 @@
       "when": 1794823634898,
       "tag": "0012_dashboard",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1794825441297,
+      "tag": "0013_activity_open_prs",
+      "breakpoints": true
     }
   ]
 }

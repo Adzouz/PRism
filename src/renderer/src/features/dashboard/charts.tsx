@@ -202,27 +202,29 @@ export function ActivityChart({ data }: { data: Dashboard['activity'] }) {
           </Tooltip>
         )}
       </div>
-      <table className="sr-only">
-        <caption>Pull requests opened, merged and closed per day</caption>
-        <thead>
-          <tr>
-            <th>Day</th>
-            {series.map(({ key, label }) => (
-              <th key={key}>{label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((entry) => (
-            <tr key={entry.day}>
-              <td>{entry.day}</td>
-              {series.map(({ key }) => (
-                <td key={key}>{entry[key] ?? 'unknown'}</td>
+      <div className="sr-only">
+        <table>
+          <caption>Pull requests opened, merged and closed per day</caption>
+          <thead>
+            <tr>
+              <th>Day</th>
+              {series.map(({ key, label }) => (
+                <th key={key}>{label}</th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data.map((entry) => (
+              <tr key={entry.day}>
+                <td>{entry.day}</td>
+                {series.map(({ key }) => (
+                  <td key={key}>{entry[key] ?? 'unknown'}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -360,17 +362,19 @@ export function TrendChart({ data }: { data: Dashboard['trend'] }) {
           </p>
         </Tooltip>
       )}
-      <table className="sr-only">
-        <caption>Open pull requests per day</caption>
-        <tbody>
-          {known.map((point) => (
-            <tr key={point.index}>
-              <td>{data[point.index]!.day}</td>
-              <td>{point.value}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="sr-only">
+        <table>
+          <caption>Open pull requests per day</caption>
+          <tbody>
+            {known.map((point) => (
+              <tr key={point.index}>
+                <td>{data[point.index]!.day}</td>
+                <td>{point.value}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

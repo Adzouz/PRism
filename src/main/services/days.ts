@@ -33,6 +33,6 @@ function stamp(ms: number) {
   return `${localDay(ms)}T${time}${zone}`
 }
 
-export function dayRange(day: string) {
-  return `${stamp(dayStart(day))}..${stamp(dayStart(addDays(day, 1)) - 1000)}`
-}
+export const dayEnd = (day: string) => stamp(dayStart(addDays(day, 1)) - 1000)
+
+export const dayRange = (day: string) => `${stamp(dayStart(day))}..${dayEnd(day)}`

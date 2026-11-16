@@ -1,24 +1,25 @@
-import { and, eq, gte, inArray, min } from 'drizzle-orm'
+import { and, eq, gte, inArray } from 'drizzle-orm'
 import type { Dashboard, DashboardMetric, Repo } from '@shared/domain'
 import { activity, reviewLatency, snapshots } from '../db/schema'
 import type { Ctx } from './context'
-import { addDays, dayRange, dayStart, lastDays, localDay } from './days'
+import { addDays, dayEnd, dayRange, dayStart, lastDays, localDay } from './days'
 import type { GithubApi } from './gh-api'
 import { listRepos } from './repos'
 
 export const activityDays = 30
-export const trendDays = 30
 const finalAfter = 6 * 3600_000
 const refreshEvery = 30 * 60_000
-const daysPerQuery = 10
+const daysPerQuery = 6
 const dayMs = 24 * 3600_000
 
 const slug = (repo: Repo) => `${repo.owner}/${repo.name}`
 
 const activityKinds = {
-  opened: (range: string) => `is:pr created:${range}`,
-  merged: (range: string) => `is:pr merged:${range}`,
-  closed: (range: string) => `is:pr is:unmerged closed:${range}`,
+  opened: (day: string) => `is:pr created:${dayRange(day)}`,
+  merged: (day: string) => `is:pr merged:${dayRange(day)}`,
+  closed: (day: string) => `is:pr is:unmerged closed:${dayRange(day)}`,
+  openNow: (day: string) => `is:pr is:open created:<=${dayEnd(day)}`,
+  closedLater: (day: string) => `is:pr closed:>${dayEnd(day)} created:<=${dayEnd(day)}`,
 } as const
 
 type ActivityKind = keyof typeof activityKinds
@@ -50,7 +51,7 @@ export async function refreshActivity(ctx: Ctx, api: GithubApi, repo: Repo, now:
   )
   const due = days.filter((day) => {
     const row = known.get(day)
-    if (!row) return true
+    if (!row || row.openPrs === null) return true
     if (day === today) return now - row.fetchedAt >= refreshEvery
     return !isFinal(day, row.fetchedAt)
   })
@@ -59,7 +60,7 @@ export async function refreshActivity(ctx: Ctx, api: GithubApi, repo: Repo, now:
     const variables: Record<string, string> = {}
     chunk.forEach((day, index) => {
       for (const [kind, query] of Object.entries(activityKinds)) {
-        variables[`${kind}${index}`] = `repo:${slug(repo)} ${query(dayRange(day))}`
+        variables[`${kind}${index}`] = `repo:${slug(repo)} ${query(day)}`
       }
     })
     const data = await api.graphql<Record<string, { issueCount: number } | undefined>>(
@@ -74,6 +75,7 @@ export async function refreshActivity(ctx: Ctx, api: GithubApi, repo: Repo, now:
         opened: count('opened', index),
         merged: count('merged', index),
         closed: count('closed', index),
+        openPrs: count('openNow', index) + count('closedLater', index),
         fetchedAt: now,
       }
       ctx.db
@@ -214,13 +216,12 @@ export function getDashboard(
   const today = localDay(now)
   const yesterday = addDays(today, -1)
   const repoIds = input.repoId === null ? listRepos(ctx).map((repo) => repo.id) : [input.repoId]
-  const trendWindow = lastDays(today, trendDays)
-  const activityWindow = lastDays(today, activityDays)
+  const period = lastDays(today, activityDays)
 
   const snaps = ctx.db
     .select()
     .from(snapshots)
-    .where(and(inArray(snapshots.repoId, repoIds), gte(snapshots.day, trendWindow[0]!)))
+    .where(and(inArray(snapshots.repoId, repoIds), gte(snapshots.day, period[0]!)))
     .all()
   const latest = new Map<number, (typeof snaps)[number]>()
   for (const snap of snaps) {
@@ -240,35 +241,28 @@ export function getDashboard(
     to: sum(compared.map((repoId) => todays.get(repoId)![metric])),
   }))
 
-  const firstDays = ctx.db
-    .select({ repoId: snapshots.repoId, day: min(snapshots.day) })
-    .from(snapshots)
-    .where(inArray(snapshots.repoId, repoIds))
-    .groupBy(snapshots.repoId)
-    .all()
-  const trend = trendWindow.map((target) => {
-    const rows = snaps.filter((snap) => snap.day === target)
-    const tracked = firstDays.filter((first) => first.day !== null && first.day <= target)
-    const complete = tracked.every((first) => rows.some((row) => row.repoId === first.repoId))
-    return { day: target, openPrs: complete ? sum(rows.map((row) => row.openPrs)) : null }
-  })
-
   const activityRows = ctx.db
     .select()
     .from(activity)
-    .where(and(inArray(activity.repoId, repoIds), gte(activity.day, activityWindow[0]!)))
+    .where(and(inArray(activity.repoId, repoIds), gte(activity.day, period[0]!)))
     .all()
-  const activitySeries = activityWindow.map((target) => {
+  const rowsOf = (target: string) => {
     const rows = activityRows.filter((row) => row.day === target)
-    if (rows.length < repoIds.length) {
-      return { day: target, opened: null, merged: null, closed: null }
-    }
+    return rows.length < repoIds.length ? [] : rows
+  }
+  const activitySeries = period.map((target) => {
+    const rows = rowsOf(target)
     return {
       day: target,
       opened: sum(rows.map((row) => row.opened)),
       merged: sum(rows.map((row) => row.merged)),
       closed: sum(rows.map((row) => row.closed)),
     }
+  })
+  const trend = period.map((target) => {
+    const rows = rowsOf(target)
+    const open = rows.flatMap((row) => (row.openPrs === null ? [] : [row.openPrs]))
+    return { day: target, openPrs: open.length === rows.length ? sum(open) : null }
   })
 
   const samples = ctx.db
