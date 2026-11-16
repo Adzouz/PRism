@@ -193,8 +193,8 @@ describe('loopStage', () => {
       loopStage('to-review', 'h1', { ...review, goes: 'approve', approvedOnGithub: true }, null),
     ).toBe('approved')
     expect(loopStage('to-review', 'h2', review, null)).toBe('re-review')
-    expect(loopStage('changes-requested', 'h1', { ...review, kind: 'address' }, null)).toBe(
-      're-review',
+    expect(loopStage('changes-requested', 'h1', { ...review, kind: 'handback' }, null)).toBe(
+      'waiting-review',
     )
   })
 

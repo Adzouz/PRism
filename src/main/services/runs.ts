@@ -25,7 +25,7 @@ import {
 } from '@shared/domain'
 import { redact, redactText } from '../agents/redact'
 import type { SessionTotals } from '../agents/types'
-import { asks, findings, postGates, runEvents, runs } from '../db/schema'
+import { asks, findings, postGates, prs, runEvents, runs } from '../db/schema'
 import { titleKey } from './anchors'
 import type { Ctx } from './context'
 import { reviewDirection, type LoopFacts } from './pr-stage'
@@ -724,7 +724,10 @@ export function reviewedPrIds(ctx: Ctx, onlyPrId?: number) {
 
 export function latestLoops(ctx: Ctx, onlyPrId?: number) {
   const closed = and(
-    inArray(postGates.kind, ['review', 'address']),
+    or(
+      inArray(postGates.kind, ['review', 'address']),
+      and(eq(postGates.kind, 'replies'), ne(prs.myRole, 'reviewer')),
+    ),
     or(isNotNull(postGates.postedAt), isNotNull(postGates.skippedAt)),
   )
   const rows = ctx.db
@@ -741,6 +744,7 @@ export function latestLoops(ctx: Ctx, onlyPrId?: number) {
     })
     .from(postGates)
     .innerJoin(runs, eq(runs.id, postGates.runId))
+    .innerJoin(prs, eq(prs.id, runs.prId))
     .where(onlyPrId === undefined ? closed : and(closed, eq(runs.prId, onlyPrId)))
     .all()
   const latest = new Map<number, (typeof rows)[number]>()
@@ -754,7 +758,7 @@ export function latestLoops(ctx: Ctx, onlyPrId?: number) {
     const verdict = parse(reviewReport, row.reportJson, null as ReviewReport | null)?.verdict
     const direction = reviewDirection(row.mode, row.event, verdict)
     result.set(prId, {
-      kind: row.kind === 'address' ? 'address' : 'review',
+      kind: row.kind === 'review' ? 'review' : 'handback',
       goes: direction.goes,
       approvedOnGithub: direction.approvedOnGithub && row.postedAt !== null,
       reviewedHeadOid: row.reviewedHeadOid,

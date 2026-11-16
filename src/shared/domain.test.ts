@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { aiTag, boardColumns, columnStage, runStageFor, withAiTag } from './domain'
+import { aiTag, boardColumns, columnStage, nextSteps, runStageFor, withAiTag } from './domain'
 
 describe('runStageFor', () => {
   const reviews = {
@@ -42,6 +42,54 @@ describe('columnStage', () => {
     expect(columnStage('addressing', pr)).toBe('address')
     expect(columnStage('addressing', { ...pr, tab: 'reviews' })).toBeNull()
     expect(columnStage('to-approve', pr)).toBeNull()
+  })
+})
+
+describe('nextSteps', () => {
+  const pr = {
+    tab: 'mine',
+    stage: 'waiting-review',
+    state: 'OPEN',
+    myReviewState: null,
+    reviewed: true,
+  } as const
+
+  it('suggests the step that moves each state column forward', () => {
+    expect(nextSteps(pr)?.primary).toEqual({ kind: 'run', stage: 're-review' })
+    expect(nextSteps({ ...pr, stage: 'changes-requested' })?.primary).toEqual({
+      kind: 'run',
+      stage: 'address',
+    })
+    expect(nextSteps({ ...pr, stage: 'to-approve' })?.primary).toEqual({ kind: 'approve' })
+    expect(nextSteps({ ...pr, stage: 'approved' })?.primary).toBeNull()
+    const reviews = { ...pr, tab: 'reviews', reviewed: false } as const
+    expect(nextSteps({ ...reviews, stage: 'to-review' })?.primary).toEqual({
+      kind: 'run',
+      stage: 'review',
+    })
+    expect(nextSteps({ ...reviews, stage: 'changes-requested' })?.primary).toEqual({
+      kind: 'move',
+      stage: 're-review',
+    })
+  })
+
+  it('offers every other run and state column, without the primary step', () => {
+    const steps = nextSteps({ ...pr, stage: 're-review' })!
+    expect(steps.others).not.toContainEqual({ kind: 'run', stage: 're-review' })
+    expect(steps.others).toContainEqual({ kind: 'run', stage: 'address' })
+    expect(steps.others).toContainEqual({ kind: 'move', stage: 'waiting-review' })
+    expect(steps.others).toContainEqual({ kind: 'approve' })
+    expect(steps.others).not.toContainEqual({ kind: 'move', stage: 're-review' })
+    expect(steps.others.some((step) => step.kind === 'move' && step.stage === 'reviewing')).toBe(
+      false,
+    )
+    expect(nextSteps({ ...pr, stage: 'approved' })!.others).not.toContainEqual({ kind: 'approve' })
+  })
+
+  it('stays out of agent columns and closed pull requests', () => {
+    expect(nextSteps({ ...pr, stage: 'reviewing' })).toBeNull()
+    expect(nextSteps({ ...pr, stage: 'needs-you' })).toBeNull()
+    expect(nextSteps({ ...pr, state: 'MERGED', stage: 'done' })).toBeNull()
   })
 })
 

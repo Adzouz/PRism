@@ -50,7 +50,7 @@ export function reviewDirection(
 }
 
 export type LoopFacts = {
-  kind: 'review' | 'address'
+  kind: 'review' | 'handback'
   goes: 'approve' | 'changes'
   approvedOnGithub: boolean
   reviewedHeadOid: string | null
@@ -66,7 +66,7 @@ export function loopStage(
   if (derived === 'done' || derived === 'approved') return derived
   if (approvedOid && approvedOid === headOid) return 'approved'
   if (!loop) return derived
-  if (loop.kind === 'address') return 're-review'
+  if (loop.kind === 'handback') return 'waiting-review'
   if (loop.goes === 'changes') {
     const since = loop.postedHeadOid ?? loop.reviewedHeadOid
     if (since && since !== headOid) return 're-review'
