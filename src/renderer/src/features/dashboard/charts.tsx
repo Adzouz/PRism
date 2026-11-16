@@ -119,7 +119,7 @@ export function ActivityChart({ data }: { data: Dashboard['activity'] }) {
   const hovered = hover === null ? null : data[hover]
 
   return (
-    <div className="space-y-4">
+    <div className="relative space-y-4">
       <ul className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
         {series.map(({ key, label, bg }, index) => (
           <li key={key} className="flex items-center gap-2">
