@@ -568,6 +568,45 @@ export function runStageFor(
   return reviewStageFor(pr)
 }
 
+export type NextStep =
+  { kind: 'run'; stage: Stage } | { kind: 'move'; stage: BoardStage } | { kind: 'approve' }
+
+type NextStepPr = Pick<BoardPr, 'tab' | 'stage' | 'state' | 'reviewed' | 'myReviewState'>
+
+function primaryNextStep(pr: NextStepPr): NextStep | null {
+  switch (pr.stage) {
+    case 'to-review':
+    case 'waiting-review':
+    case 're-review':
+      return { kind: 'run', stage: reviewStageFor(pr) }
+    case 'changes-requested':
+      return pr.tab === 'mine'
+        ? { kind: 'run', stage: 'address' }
+        : { kind: 'move', stage: 're-review' }
+    case 'to-approve':
+      return { kind: 'approve' }
+    default:
+      return null
+  }
+}
+
+const sameStep = (a: NextStep, b: NextStep) =>
+  a.kind === b.kind && (a.kind === 'approve' || a.stage === (b as typeof a).stage)
+
+export function nextSteps(pr: NextStepPr): { primary: NextStep | null; others: NextStep[] } | null {
+  const column = boardColumns[pr.tab].find((item) => item.stage === pr.stage)
+  if (pr.state !== 'OPEN' || !column || column.agent) return null
+  const primary = primaryNextStep(pr)
+  const all: NextStep[] = [
+    ...runStagesByTab[pr.tab].map((value) => ({ kind: 'run' as const, stage: value })),
+    ...(column.approve ? [] : [{ kind: 'approve' as const }]),
+    ...boardColumns[pr.tab]
+      .filter((item) => !item.agent && !item.approve && item.stage !== pr.stage)
+      .map((item) => ({ kind: 'move' as const, stage: item.stage })),
+  ]
+  return { primary, others: all.filter((step) => !primary || !sameStep(step, primary)) }
+}
+
 export const checkState = z.enum(['success', 'failure', 'pending', 'neutral', 'skipped'])
 export type CheckState = z.infer<typeof checkState>
 

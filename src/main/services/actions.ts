@@ -33,7 +33,7 @@ import { run as exec } from '../system/exec'
 import type { Ctx } from './context'
 import { diffMap, isCommentable, type DiffMap } from './diff'
 import type { GithubApi } from './gh-api'
-import { reviewDirection } from './pr-stage'
+import { reviewDirection, tabOf } from './pr-stage'
 import { clearManualStage, markApproved } from './prs'
 import { getRepo } from './repos'
 import { activeRunFor, getRun, getRunRow, linkFinding, listFindings } from './runs'
@@ -492,15 +492,15 @@ export function createActions(deps: ActionDeps) {
     const live = activeRunFor(ctx, run.prId) !== null || run.status !== 'done'
     const direction = reviewDirection(mode, event, run.report?.verdict)
     const nextStage: BoardStage | null =
-      kind === 'address'
-        ? 're-review'
-        : kind === 'replies'
-          ? null
-          : direction.goes === 'changes'
-            ? 'changes-requested'
-            : direction.approvedOnGithub
-              ? 'approved'
-              : 'to-approve'
+      kind !== 'review'
+        ? tabOf(pr.myRole) === 'mine'
+          ? 'waiting-review'
+          : null
+        : direction.goes === 'changes'
+          ? 'changes-requested'
+          : direction.approvedOnGithub
+            ? 'approved'
+            : 'to-approve'
     return {
       runId,
       prId: run.prId,

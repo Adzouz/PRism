@@ -732,7 +732,7 @@ describe('review loop', () => {
     expect(listPrs(ctx)[0]!.stage).toBe('approved')
   })
 
-  it('sends an addressed pull request to Re-review and keeps the posted mode', async () => {
+  it('hands an addressed pull request back to reviewers and keeps the posted mode', async () => {
     const { ctx, repo, addRun } = await setup('author')
     const reviewId = addRun('review')
     saveReview(ctx, reviewId, report, [])
@@ -751,8 +751,8 @@ describe('review loop', () => {
       threadsJson: JSON.stringify(['T1']),
       changesJson: JSON.stringify({ threads: [{ threadId: 'T1', action: 'fix' }] }),
     })
-    expect((await actions.skip(addressId, true)).nextStage).toBe('re-review')
-    expect(listPrs(ctx)[0]!.stage).toBe('re-review')
+    expect((await actions.skip(addressId, true)).nextStage).toBe('waiting-review')
+    expect(listPrs(ctx)[0]!.stage).toBe('waiting-review')
   })
 
   it('keeps Changes requested when commits landed between the review and the post', async () => {

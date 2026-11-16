@@ -1,6 +1,7 @@
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import Database from 'better-sqlite3'
 import { eq } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from './client'
@@ -18,6 +19,32 @@ function migrationsUpTo(dir: string, tag: string) {
   writeFileSync(journalPath, JSON.stringify(journal))
   return folder
 }
+
+const columns = {
+  repo_id: 'repoId',
+  node_id: 'nodeId',
+  number: 'number',
+  title: 'title',
+  url: 'url',
+  author: 'author',
+  is_draft: 'isDraft',
+  state: 'state',
+  head_ref: 'headRef',
+  head_oid: 'headOid',
+  base_ref: 'baseRef',
+  base_oid: 'baseOid',
+  ci_state: 'ciState',
+  additions: 'additions',
+  deletions: 'deletions',
+  changed_files: 'changedFiles',
+  review_requested: 'reviewRequested',
+  my_role: 'myRole',
+  derived_stage: 'derivedStage',
+  stage_since: 'stageSince',
+  created_at: 'createdAt',
+  updated_at: 'updatedAt',
+  synced_at: 'syncedAt',
+} as const
 
 describe('migration 0011_waiting_review', () => {
   let dir: string
@@ -60,7 +87,24 @@ describe('migration 0011_waiting_review', () => {
         syncedAt: 0,
       })),
     )
-    const inserted = before.insert(prs).values(rows).returning().all()
+    const raw = new Database(file)
+    const insertPr = raw.prepare(
+      `INSERT INTO prs (${Object.keys(columns).join(', ')}) VALUES (${Object.keys(columns)
+        .map((key) => `@${key}`)
+        .join(', ')}) RETURNING id, derived_stage AS derivedStage`,
+    )
+    const inserted = rows.map(
+      (row) =>
+        insertPr.get(
+          Object.fromEntries(
+            Object.entries(columns).map(([key, field]) => {
+              const value = row[field]
+              return [key, typeof value === 'boolean' ? Number(value) : value]
+            }),
+          ),
+        ) as { id: number; derivedStage: string },
+    )
+    raw.close()
     before
       .insert(prFlags)
       .values(inserted.map((pr) => ({ prId: pr.id, manualStage: pr.derivedStage })))

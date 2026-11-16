@@ -48,6 +48,7 @@ import {
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { age, useBoardStore, useNow } from '../board/model'
+import { NextStepButton } from '../board/next-step'
 import { Loading, Markdown, verdictLabel } from '../runs/parts'
 import { Heading, severityOrder, severityTone, ThreadContext } from '../runs/runs-panel'
 
@@ -516,7 +517,7 @@ function DraftSummary({ body }: { body: string }) {
   )
 }
 
-function Closed({ gate }: { gate: PostGate }) {
+function Closed({ gate, pr }: { gate: PostGate; pr: BoardPr }) {
   const skip = useSkipPost()
   const now = useNow()
   const posted = gate.replies.filter((reply) => reply.postedUrl)
@@ -524,15 +525,18 @@ function Closed({ gate }: { gate: PostGate }) {
     return (
       <div className="space-y-3 rounded-xl border p-4">
         <p className="text-sm">Posting skipped {ago(gate.skippedAt, now)}.</p>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={skip.isPending}
-          onClick={() => skip.mutate({ runId: gate.runId, skipped: false })}
-        >
-          <RotateCcw />
-          Undo
-        </Button>
+        <div className="flex flex-wrap items-start gap-2">
+          <NextStepButton pr={pr} />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={skip.isPending}
+            onClick={() => skip.mutate({ runId: gate.runId, skipped: false })}
+          >
+            <RotateCcw />
+            Undo
+          </Button>
+        </div>
         <ErrorText error={skip.error} />
       </div>
     )
@@ -580,11 +584,12 @@ function Closed({ gate }: { gate: PostGate }) {
           ))}
         </ul>
       )}
+      <NextStepButton pr={pr} className="border-t border-success/30 pt-3" />
     </div>
   )
 }
 
-function Gate({ run }: { run: Run }) {
+function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
   const { data: gate, error, isLoading, refetch, isFetching } = useGate(run.id)
   const post = usePost()
   const skip = useSkipPost()
@@ -612,7 +617,7 @@ function Gate({ run }: { run: Run }) {
         )}
       </div>
       {closed ? (
-        <Closed gate={gate} />
+        <Closed gate={gate} pr={pr} />
       ) : (
         <>
           {gate.live && (
@@ -705,7 +710,7 @@ export function PostPanel({ pr }: { pr: BoardPr }) {
           ))}
         </div>
       )}
-      <Gate key={run.id} run={run} />
+      <Gate key={run.id} run={run} pr={pr} />
     </div>
   )
 }

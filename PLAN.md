@@ -185,17 +185,19 @@ Action columns run something when a card is dropped on them; state columns show 
 | Column | Kind | Shown when |
 | --- | --- | --- |
 | Needs you | agent | A run asks a question (hidden when empty) |
-| Waiting review | state | My PRs only: nobody reviewed yet, waiting on reviewers (drop on Reviewing to self-review) |
+| Waiting review | state | My PRs only: nobody reviewed yet, or address / replies posted, waiting on reviewers (drop on Reviewing to self-review) |
 | To review | state | Reviews only: review requested, nothing reviewed yet |
 | Reviewing | **action**: review / re-review | Review run active, or finished with its post gate open |
 | Changes requested | state | Last posted review is NO GO or GO WITH NITS; on Reviews also my review with no new commits since |
 | Addressing | **action**: address (My PRs only) | Address run active, or finished with its post gate open |
-| To re-review | state | Address posted, or new commits pushed after a NO GO / GO WITH NITS was posted (after a GO: any commit the review did not cover); drop on Reviewing to re-review |
+| To re-review | state | New commits pushed after a NO GO / GO WITH NITS was posted (after a GO: any commit the review did not cover); drop on Reviewing to re-review |
 | To approve | state | Last posted review is GO |
 | Approved | **action**: approve | Approved on GitHub, or approved from PRism at the current head. Own PR: GitHub refuses Approve, so PRism posts a Comment saying GO |
 | Done | state | Merged / closed |
 
-Posting a gate moves the card: review → To approve (GO) or Changes requested (GO WITH NITS, NO GO), or straight to Approved when submitted as Approve; address → To re-review. Skipping a gate moves it the same way.
+Posting a gate moves the card: review → To approve (GO) or Changes requested (GO WITH NITS, NO GO), or straight to Approved when submitted as Approve; address and replies on My PRs → Waiting review (back to the reviewers). Skipping a gate moves it the same way.
+
+**Next step:** the drawer header, and the summary of a posted or skipped gate, show a split button for cards in state columns. Its main action moves the loop forward (To review / Waiting review / To re-review → review or re-review run, Changes requested → address on My PRs or To re-review on Reviews, To approve → approve); its menu lists every other run, Approve, and every other state column.
 
 **Card:** repo chip, `#num`, title, author avatar, stage age, CI dot, labels, size, verdict badge, unresolved threads, star, live spinner, Needs-you glow.
 

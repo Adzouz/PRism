@@ -25,13 +25,12 @@ import {
   type BoardTab,
   type Stage,
 } from '@shared/domain'
-import { EmptyState, ErrorText } from '@/components/page'
+import { EmptyState } from '@/components/page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import {
   runStageFor,
-  useApprove,
   useCancelRun,
   useDismissRun,
   useSetFlags,
@@ -40,6 +39,7 @@ import {
   usePrs,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { ApproveDialog } from './approve-dialog'
 import { CardPreview, PrCard, type CardActions } from './card'
 import {
   boardView,
@@ -168,7 +168,7 @@ function Column({
           </Badge>
         )}
       </header>
-      <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-1 pb-1">
+      <div className="-m-2 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
         {prs.map((pr) => (
           <PrCard
             key={pr.id}
@@ -217,7 +217,6 @@ export function Board({ tab }: { tab: BoardTab }) {
     stage: Stage
   } | null>(null)
   const [pendingApprove, setPendingApprove] = useState<BoardPr | null>(null)
-  const approve = useApprove()
   const [drag, setDrag] = useState<{ pr: BoardPr; columns: BoardColumn[] } | null>(null)
   const justDropped = useRef(false)
 
@@ -338,7 +337,6 @@ export function Board({ tab }: { tab: BoardTab }) {
 
   const tabTotal = (prs ?? []).filter((pr) => pr.tab === tab && pr.archivedAt === null).length
   const copy = pendingDrop && dropCopy[pendingDrop.stage]
-  const ownApproval = pendingApprove?.role === 'author'
 
   return (
     <div className="flex h-full flex-col gap-5">
@@ -419,50 +417,7 @@ export function Board({ tab }: { tab: BoardTab }) {
           </DialogContent>
         )}
       </Dialog>
-      <Dialog
-        open={pendingApprove !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setPendingApprove(null)
-            approve.reset()
-          }
-        }}
-      >
-        {pendingApprove && (
-          <DialogContent
-            title={ownApproval ? 'Post GO on your pull request?' : 'Approve this pull request?'}
-            description={`${pendingApprove.repo} #${pendingApprove.number}`}
-            className="w-[min(480px,calc(100vw-48px))]"
-          >
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                {ownApproval
-                  ? 'GitHub does not let you approve your own pull request, so PRism posts a Comment review saying “GO”, with the AI tag line.'
-                  : 'PRism submits an Approve review on GitHub saying “GO”, with the AI tag line.'}{' '}
-                A pending review of yours on this pull request is submitted with it.
-              </p>
-              <ErrorText error={approve.error} />
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setPendingApprove(null)}>
-                  Cancel
-                </Button>
-                <Button
-                  autoFocus
-                  disabled={approve.isPending}
-                  onClick={() =>
-                    approve.mutate(pendingApprove.id, {
-                      onSuccess: () => setPendingApprove(null),
-                    })
-                  }
-                >
-                  {approve.isPending ? <Loader2 className="animate-spin" /> : <BadgeCheck />}
-                  {ownApproval ? 'Post GO' : 'Approve'}
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        )}
-      </Dialog>
+      <ApproveDialog pr={pendingApprove} onClose={() => setPendingApprove(null)} />
     </div>
   )
 }

@@ -28,6 +28,7 @@ import { PostPanel } from '../post/post-panel'
 import { RunsPanel } from '../runs/runs-panel'
 import { WorktreeFooter } from '../runs/worktree-footer'
 import { Avatar } from './card'
+import { NextStepButton } from './next-step'
 import { age, hasLiveRun, prSize, readyToPost, stageLabel, useBoardStore, useNow } from './model'
 
 const reviewTone: Record<string, 'success' | 'destructive' | 'default' | 'accent'> = {
@@ -330,8 +331,9 @@ export function PrDrawer() {
                 <DialogPrimitive.Description className="sr-only">
                   Pull request overview
                 </DialogPrimitive.Description>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" asChild>
+                <div className="flex flex-wrap items-start gap-2">
+                  <NextStepButton pr={pr} />
+                  <Button size="sm" variant="outline" asChild>
                     <a href={pr.url} target="_blank" rel="noreferrer">
                       <ArrowUpRight />
                       Open on GitHub

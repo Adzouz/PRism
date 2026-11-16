@@ -101,6 +101,7 @@ export const prs = sqliteTable(
     myReviewState: text('my_review_state'),
     myReviewOid: text('my_review_oid'),
     myReviewAt: integer('my_review_at'),
+    changesRequestedAt: integer('changes_requested_at'),
     myRole: text('my_role', { enum: ['reviewer', 'author', 'takeover'] }).notNull(),
     derivedStage: text('derived_stage').notNull(),
     stageSince: integer('stage_since').notNull(),

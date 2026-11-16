@@ -2,11 +2,20 @@ import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { eq } from 'drizzle-orm'
 import { describe, expect, it, vi } from 'vitest'
 import type { Run, RunEvent, Stage } from '@shared/domain'
 import type { AgentAdapter, SegmentInput, SegmentResult } from '../agents/types'
 import { openDb } from '../db/client'
-import { findings, postGates, prs, repos, skills, stageBindings } from '../db/schema'
+import {
+  findings,
+  postGates,
+  prs,
+  repos,
+  runs as runTable,
+  skills,
+  stageBindings,
+} from '../db/schema'
 import { setSetting } from '../db/settings'
 import type { Ctx } from './context'
 import type { GithubApi } from './gh-api'
@@ -15,6 +24,7 @@ import { createRunner, type RunnerDeps } from './runner'
 import {
   boardRunFor,
   getRun,
+  latestLoops,
   listEvents,
   listFindings,
   pendingAsk,
@@ -966,6 +976,29 @@ describe('agent runner', () => {
     expect(listPrs(ctx)[0]!.run).toMatchObject({ stale: false })
     ctx.db.update(prs).set({ headOid: 'head2' }).run()
     expect(listPrs(ctx)[0]).toMatchObject({ stage: 'reviewing', run: { stale: true } })
+  })
+})
+
+describe('review loop', () => {
+  async function closedGate(ctx: Ctx, prId: number, stage: Stage, kind: 'review' | 'replies') {
+    const run = ctx.db
+      .insert(runTable)
+      .values({ prId, stage, agent: 'claude', model: 'm', status: 'done', createdAt: 1 })
+      .returning()
+      .get()
+    ctx.db.insert(postGates).values({ runId: run.id, kind, postedAt: run.id }).run()
+  }
+
+  it('hands my pull request back to reviewers after replies are posted', async () => {
+    const { ctx, ids } = await setup(2)
+    ctx.db.update(prs).set({ myRole: 'author' }).where(eq(prs.id, ids[0]!)).run()
+    for (const id of ids) {
+      await closedGate(ctx, id, 'review', 'review')
+      await closedGate(ctx, id, 'draft-replies', 'replies')
+    }
+    const loops = latestLoops(ctx)
+    expect(loops.get(ids[0]!)?.kind).toBe('handback')
+    expect(loops.get(ids[1]!)?.kind).toBe('review')
   })
 })
 

@@ -11,7 +11,14 @@ import { listPrs, setPrFlags, setPrStage } from './prs'
 import { getRepo } from './repos'
 import { checkState } from './checks'
 import { createRun, dismissRunsForPr, updateRun } from './runs'
-import { autoArchiveDone, createSyncService, myReviewOf, syncRepo, type GqlPr } from './sync'
+import {
+  autoArchiveDone,
+  changesRequestedAt,
+  createSyncService,
+  myReviewOf,
+  syncRepo,
+  type GqlPr,
+} from './sync'
 
 const migrations = resolve(__dirname, '../../../drizzle')
 const me = 'octocat'
@@ -193,9 +200,15 @@ describe('loopStage', () => {
       loopStage('to-review', 'h1', { ...review, goes: 'approve', approvedOnGithub: true }, null),
     ).toBe('approved')
     expect(loopStage('to-review', 'h2', review, null)).toBe('re-review')
-    expect(loopStage('changes-requested', 'h1', { ...review, kind: 'address' }, null)).toBe(
-      're-review',
+    expect(loopStage('changes-requested', 'h1', { ...review, kind: 'handback' }, null)).toBe(
+      'waiting-review',
     )
+  })
+
+  it('leaves Waiting review once a reviewer asks for changes after the handback', () => {
+    const handback = { ...review, kind: 'handback' as const, closedAt: 1000 }
+    expect(loopStage('changes-requested', 'h1', handback, null, 500)).toBe('waiting-review')
+    expect(loopStage('changes-requested', 'h1', handback, null, 2000)).toBe('changes-requested')
   })
 
   it('waits for commits pushed after the post before asking for a re-review', () => {
@@ -388,6 +401,26 @@ describe('review and check edge cases', () => {
         ?.state,
     ).toBe('COMMENTED')
     expect(myReviewOf(makePr(), me)).toBeNull()
+  })
+
+  it('takes the latest changes request from someone else', () => {
+    const review = (state: string, login: string, submittedAt: string) => ({
+      state,
+      submittedAt,
+      author: { login },
+    })
+    const pr = makePr({
+      latestOpinionatedReviews: {
+        nodes: [
+          review('CHANGES_REQUESTED', 'hubot', '2026-11-03T10:00:00Z'),
+          review('CHANGES_REQUESTED', 'monalisa', '2026-11-05T10:00:00Z'),
+          review('CHANGES_REQUESTED', me, '2026-11-06T10:00:00Z'),
+          review('APPROVED', 'mona', '2026-11-07T10:00:00Z'),
+        ],
+      },
+    })
+    expect(changesRequestedAt(pr, me)).toBe(Date.parse('2026-11-05T10:00:00Z'))
+    expect(changesRequestedAt(makePr(), me)).toBeNull()
   })
 
   it('keeps my verdict after many later comments', async () => {
