@@ -371,7 +371,7 @@ export const PrCard = memo(function PrCard({
             'cursor-pointer hover:shadow-md has-[[data-card-body]:focus-visible]:ring-2 has-[[data-card-body]:focus-visible]:ring-ring',
             isDragging && 'opacity-30',
             pr.hidden && 'opacity-60',
-            needsMe && 'shadow-[0_0_0_1px_var(--primary),0_0_18px_-4px_var(--primary)]',
+            needsMe && 'shadow-[0_0_0_1px_var(--primary),0_0_12px_-4px_var(--primary)]',
           )}
         >
           <div
