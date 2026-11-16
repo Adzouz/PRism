@@ -27,9 +27,10 @@ const useDashboardRepo = create<{ repoId: number | null; set: (repoId: number | 
 
 function RepoPicker() {
   const { data: repos = [] } = useRepos()
-  const { repoId, set } = useDashboardRepo()
+  const { repoId: selected, set } = useDashboardRepo()
   if (repos.length < 2) return null
-  const current = repos.find((repo) => repo.id === repoId)
+  const current = repos.find((repo) => repo.id === selected)
+  const repoId = current ? selected : null
   const label = (repo: (typeof repos)[number]) => `${repo.owner}/${repo.name}`
   const options = [
     { id: null, name: 'All repositories' },
@@ -203,7 +204,9 @@ function Agents() {
 }
 
 export function DashboardOverview() {
-  const repoId = useDashboardRepo((state) => state.repoId)
+  const selected = useDashboardRepo((state) => state.repoId)
+  const { data: repos } = useRepos()
+  const repoId = repos && !repos.some((repo) => repo.id === selected) ? null : selected
   const { data, error } = useDashboard(repoId)
   const trendDays = data?.trend.filter((entry) => entry.openPrs !== null).length ?? 0
   return (

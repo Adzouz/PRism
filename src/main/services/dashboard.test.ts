@@ -110,7 +110,7 @@ describe('latencySamples', () => {
     )
     expect(samples).toEqual([
       {
-        requestedAt: Date.parse('2026-11-10T10:00:00Z'),
+        requestedAt: Date.parse('2026-11-10T11:00:00Z'),
         reviewedAt: Date.parse('2026-11-10T14:00:00Z'),
       },
       {
@@ -131,6 +131,24 @@ describe('latencySamples', () => {
       me,
     )
     expect(samples).toEqual([])
+  })
+
+  it('measures from a direct request to me over an older team request', () => {
+    const samples = latencySamples(
+      [
+        requested('2026-11-01T10:00:00Z', 'core', 'Team'),
+        review('2026-11-01T11:00:00Z', 'someone'),
+        requested('2026-11-06T10:00:00Z', me),
+        review('2026-11-06T11:00:00Z', me),
+      ],
+      me,
+    )
+    expect(samples).toEqual([
+      {
+        requestedAt: Date.parse('2026-11-06T10:00:00Z'),
+        reviewedAt: Date.parse('2026-11-06T11:00:00Z'),
+      },
+    ])
   })
 })
 
@@ -174,6 +192,29 @@ describe('refreshActivity', () => {
     await refreshActivity(ctx, api, app, now + hour)
     expect(Object.keys(calls[0]!.variables)).toContain('openNow0')
     expect(calls[0]!.variables.openNow0).toContain('created:<=2026-11-01T23:59:59+01:00')
+  })
+
+  it('waits between fetches of a past day that is not final yet', async () => {
+    const { ctx, app } = await makeCtx()
+    const { api, calls } = fakeApi((_, variables) =>
+      Object.fromEntries(Object.keys(variables).map((key) => [key, { issueCount: 1 }])),
+    )
+    const lateNight = Date.parse('2026-11-16T23:50:00+01:00')
+    await refreshActivity(ctx, api, app, lateNight)
+
+    calls.length = 0
+    await refreshActivity(ctx, api, app, lateNight + 20 * 60_000)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.variables.opened0).toContain(dayRange('2026-11-17'))
+    expect(calls[0]!.variables.opened1).toBeUndefined()
+
+    calls.length = 0
+    await refreshActivity(ctx, api, app, lateNight + 25 * 60_000)
+    expect(calls).toHaveLength(0)
+
+    await refreshActivity(ctx, api, app, lateNight + 40 * 60_000)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.variables.opened0).toContain(dayRange('2026-11-16'))
   })
 })
 

@@ -52,8 +52,8 @@ export async function refreshActivity(ctx: Ctx, api: GithubApi, repo: Repo, now:
   const due = days.filter((day) => {
     const row = known.get(day)
     if (!row || row.openPrs === null) return true
-    if (day === today) return now - row.fetchedAt >= refreshEvery
-    return !isFinal(day, row.fetchedAt)
+    if (now - row.fetchedAt < refreshEvery) return false
+    return day === today || !isFinal(day, row.fetchedAt)
   })
   for (let start = 0; start < due.length; start += daysPerQuery) {
     const chunk = due.slice(start, start + daysPerQuery)
@@ -120,7 +120,8 @@ export function latencySamples(items: TimelineItem[], login: string) {
   for (const { item, at } of timed) {
     if (item.__typename === 'PullRequestReview') {
       if (!same(item.author?.login, login) || pending.size === 0) continue
-      samples.push({ requestedAt: Math.min(...pending.values()), reviewedAt: at })
+      const requestedAt = pending.get('me') ?? Math.min(...pending.values())
+      samples.push({ requestedAt, reviewedAt: at })
       pending.clear()
       continue
     }
