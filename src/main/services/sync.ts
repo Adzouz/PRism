@@ -493,6 +493,7 @@ export type SyncHooks = {
   login: () => Promise<string | null>
   enabled: () => boolean
   events?: (events: PrEvent[]) => void
+  synced?: () => void
 }
 
 const fullEvery = 5 * 60_000
@@ -583,6 +584,7 @@ export function createSyncService(ctx: Ctx, api: GithubApi, hooks: SyncHooks) {
       hooks.changed()
     }
     autoArchiveDone(ctx)
+    hooks.synced?.()
     if (full) lastFullAt = now
     if (lightCheck) lastLightAt = now
     publish({ running: false, lastSyncAt: Date.now(), lastError: failed })

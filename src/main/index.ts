@@ -16,10 +16,12 @@ import { claudeAdapter } from './agents/claude'
 import { cachedGithubStatus, isOnboarded } from './services/config'
 import type { Ctx } from './services/context'
 import { createActions } from './services/actions'
+import { createWorktreeCleanup } from './services/cleanup'
 import { createGithubApi } from './services/gh-api'
 import { stopWatching, watchLinkedSkills } from './services/library'
 import { getNotificationSettings, setNotificationSettings } from './services/notices'
 import { createRunner, type AgentRunner } from './services/runner'
+import { getRun } from './services/runs'
 import { createSyncService } from './services/sync'
 
 let runner: AgentRunner | null = null
@@ -129,12 +131,18 @@ void app.whenReady().then(() => {
     emit('prs:changed', null)
     desk.refresh()
   }
+  const cleanup = createWorktreeCleanup(ctx, {
+    runsChanged: (runIds) => {
+      for (const runId of runIds) emit('runs:changed', getRun(ctx, runId))
+    },
+  })
   const sync = createSyncService(ctx, api, {
     status: (status) => emit('sync:status', status),
     changed: prsChanged,
     login: async () => (await cachedGithubStatus()).login,
     enabled: () => isOnboarded(ctx),
     events: (events) => desk.prEvents(events),
+    synced: () => void cleanup.run(),
   })
 
   runner = createRunner({

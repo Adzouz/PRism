@@ -291,7 +291,7 @@ Tabs:
 - Unlimited parallel runs, one worktree each.
 - Lifecycle: `queued → preparing → running ⇄ needs_you → done | failed | cancelled`.
 - Session ids are persisted, so a run resumes after a Needs-you answer or an app restart.
-- **Worktrees:** `<repo worktree folder>/pr-<number>`. Fork PRs get a remote per fork. Existing worktrees of the branch (from any tool, via `git worktree list`) are reused. Cleanup is offered on archive.
+- **Worktrees:** `<repo worktree folder>/pr-<number>`. Fork PRs get a remote per fork. Existing worktrees of the branch (from any tool, via `git worktree list`) are reused. PRism removes its own worktrees once the pull request is merged or closed, unless they hold uncommitted changes or commits that are not on GitHub.
 - **Address runs:** rebase onto the PR's real base first (stacked PRs included).
 - **Mirador bridge** (optional, auto-detected): reports review/addressing steps through the `mirador` CLI.
 - **Notifications:** needs you (answer from the notification), run done or failed, new review request, CI red on my PR. The dock badge shows the Needs-you count: agent questions plus runs ready to post. The menu bar shows the Needs-you list, the cards where it's your turn (not counted) and running agents.
