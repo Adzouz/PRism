@@ -135,6 +135,16 @@ function toRun(ctx: Ctx, row: RunRow): Run {
     costUsd: row.costUsd,
     error: row.error,
     ask: row.status === 'needs_you' ? pendingAsk(ctx, row.id) : null,
+    gate:
+      ctx.db
+        .select({
+          postedAt: postGates.postedAt,
+          skippedAt: postGates.skippedAt,
+          mode: postGates.mode,
+        })
+        .from(postGates)
+        .where(eq(postGates.runId, row.id))
+        .get() ?? null,
   }
 }
 

@@ -214,7 +214,17 @@ function Changes({
   )
 }
 
-function FollowUp({ run, onClose }: { run: Run; onClose: () => void }) {
+export function FollowUp({
+  run,
+  onClose,
+  onSent,
+  placeholder = 'Ask the agent to check or change something in this run…',
+}: {
+  run: Run
+  onClose: () => void
+  onSent?: () => void
+  placeholder?: string
+}) {
   const [text, setText] = useState('')
   const followUp = useFollowUp()
   const form = useRef<HTMLFormElement>(null)
@@ -224,7 +234,15 @@ function FollowUp({ run, onClose }: { run: Run; onClose: () => void }) {
   const send = (event?: FormEvent) => {
     event?.preventDefault()
     if (!text.trim() || followUp.isPending) return
-    followUp.mutate({ runId: run.id, message: text.trim() }, { onSuccess: () => setText('') })
+    followUp.mutate(
+      { runId: run.id, message: text.trim() },
+      {
+        onSuccess: () => {
+          setText('')
+          onSent?.()
+        },
+      },
+    )
   }
   return (
     <form ref={form} onSubmit={send} className="space-y-1.5">
@@ -239,7 +257,7 @@ function FollowUp({ run, onClose }: { run: Run; onClose: () => void }) {
           rows={2}
           autoFocus
           aria-label="Follow-up message"
-          placeholder="Ask the agent to check or change something in this run…"
+          placeholder={placeholder}
           className="min-h-9 flex-1 resize-none rounded-lg border bg-background px-2.5 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
         />
         <Button
@@ -267,7 +285,7 @@ function NextActions({ run, canAsk, onPost }: { run: Run; canAsk: boolean; onPos
         {toPost && (
           <Button onClick={onPost}>
             <ArrowRight />
-            Continue to Post
+            Continue to Actions
           </Button>
         )}
         {canAsk && !asking && (

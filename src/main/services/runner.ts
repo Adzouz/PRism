@@ -21,7 +21,7 @@ import {
   resumeAfterRestart,
 } from '../agents/prompt'
 import type { AgentAdapter, AgentEvent, PrismTools } from '../agents/types'
-import { prs } from '../db/schema'
+import { postGates, prs } from '../db/schema'
 import { run as runCommand, userEnv, userPath, which } from '../system/exec'
 import { agentShell, probeShell } from '../system/shell'
 import { openInEditor, openInTerminal, resumeCommand, runInTerminal } from './apps'
@@ -218,10 +218,22 @@ export function createRunner(deps: RunnerDeps) {
     return cached
   }
 
+  const reviewPosted = (runId: number) =>
+    ctx.db
+      .select({ postedAt: postGates.postedAt })
+      .from(postGates)
+      .where(eq(postGates.runId, runId))
+      .get()?.postedAt != null
+
   function prismTools(runId: number): PrismTools {
     const prId = getRunRow(ctx, runId).prId
     return {
       reportFindings: async (report, items) => {
+        if (reviewPosted(runId)) {
+          throw new Error(
+            'Nothing was recorded: this review is already posted on GitHub, so its findings cannot change. Answer in your reply instead. New commits get a re-review.',
+          )
+        }
         const map = await prDiff(runId)
         const off = map
           ? items.filter((item) => item.line !== null && !isCommentable(map, item))

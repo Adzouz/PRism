@@ -421,6 +421,13 @@ export const run = z.object({
   costUsd: z.number(),
   error: z.string().nullable(),
   ask: ask.nullable(),
+  gate: z
+    .object({
+      postedAt: z.number().nullable(),
+      skippedAt: z.number().nullable(),
+      mode: postMode.nullable(),
+    })
+    .nullable(),
 })
 export type Run = z.infer<typeof run>
 

@@ -8,6 +8,7 @@ import {
   GitCommitHorizontal,
   Inbox,
   Loader2,
+  MessageSquare,
   Pencil,
   RefreshCw,
   RotateCcw,
@@ -50,7 +51,7 @@ import { cn } from '@/lib/utils'
 import { age, useBoardStore, useNow } from '../board/model'
 import { NextStepButton } from '../board/next-step'
 import { Loading, Markdown, verdictLabel } from '../runs/parts'
-import { Heading, severityOrder, severityTone, ThreadContext } from '../runs/runs-panel'
+import { FollowUp, Heading, severityOrder, severityTone, ThreadContext } from '../runs/runs-panel'
 
 type Verdict = PostGate['event']
 
@@ -589,31 +590,65 @@ function Closed({ gate, pr }: { gate: PostGate; pr: BoardPr }) {
   )
 }
 
+function StepTitle({ run, now }: { run: Run; now: number }) {
+  const outcome = outcomeOf(run)
+  return (
+    <>
+      <span className="font-medium">{stageLabels[run.stage]}</span>
+      {run.report && run.stage !== 'draft-replies' && (
+        <span className="text-muted-foreground">· {verdictLabel[run.report.verdict]}</span>
+      )}
+      <span className={cn('text-xs', outcomeText[outcome.tone])}>{outcome.label}</span>
+      <span className="text-xs text-muted-foreground">· {age(outcome.at, now)}</span>
+    </>
+  )
+}
+
 function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
   const { data: gate, error, isLoading, refetch, isFetching } = useGate(run.id)
   const post = usePost()
   const skip = useSkipPost()
+  const openPr = useBoardStore((state) => state.openPr)
+  const now = useNow()
+  const [asking, setAsking] = useState(false)
   if (isLoading) return <Loading>Checking what is ready to post…</Loading>
   if (!gate) return <ErrorText error={error} />
   const closed = gate.postedAt !== null || gate.skippedAt !== null
+  const canAsk =
+    run.status === 'done' && run.sessionId !== null && run.worktreePath !== null && !gate.live
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2 text-sm">
-        <span className="font-medium">{stageLabels[run.stage]}</span>
-        {run.report && run.stage !== 'draft-replies' && (
-          <span className="text-muted-foreground">· {verdictLabel[run.report.verdict]}</span>
-        )}
-        {!closed && (
-          <Button
-            size="icon"
-            variant="ghost"
-            className="ml-auto size-7"
-            aria-label="Check again"
-            disabled={isFetching}
-            onClick={() => void refetch()}
-          >
-            <RefreshCw className={cn(isFetching && 'animate-spin')} />
-          </Button>
+      <div className="space-y-3">
+        <div className="flex min-h-7 flex-wrap items-center gap-x-2 text-sm">
+          <StepTitle run={run} now={now} />
+          <div className="ml-auto flex items-center gap-1">
+            {canAsk && !asking && (
+              <Button size="sm" variant="ghost" onClick={() => setAsking(true)}>
+                <MessageSquare />
+                Ask agent anything
+              </Button>
+            )}
+            {!closed && (
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-7"
+                aria-label="Check again"
+                disabled={isFetching}
+                onClick={() => void refetch()}
+              >
+                <RefreshCw className={cn(isFetching && 'animate-spin')} />
+              </Button>
+            )}
+          </div>
+        </div>
+        {canAsk && asking && (
+          <FollowUp
+            run={run}
+            placeholder="Ask about this step, or ask the agent to check something…"
+            onClose={() => setAsking(false)}
+            onSent={() => openPr(pr.id, 'runs', run.id)}
+          />
         )}
       </div>
       {closed ? (
@@ -636,7 +671,7 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
               <Markdown text={run.changes.summary} />
             </section>
           )}
-          <div className="sticky bottom-0 -mx-6 space-y-2 border-t bg-background px-6 py-3">
+          <div className="sticky bottom-0 -mr-6 -ml-13 space-y-2 border-t bg-background py-3 pr-6 pl-13">
             <div className="flex items-center gap-2">
               <Button disabled={!gate.ready || post.isPending} onClick={() => post.mutate(run.id)}>
                 {post.isPending ? <Loader2 className="animate-spin" /> : <Send />}
@@ -666,8 +701,52 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
   )
 }
 
+type Tone = 'open' | 'done' | 'muted' | 'live'
+
+const outcomeText: Record<Tone, string> = {
+  open: 'text-primary',
+  done: 'text-success',
+  muted: 'text-muted-foreground',
+  live: 'text-warning',
+}
+
+const outcomeDot: Record<Tone, string> = {
+  open: 'border-primary bg-primary/30',
+  done: 'border-success bg-success/30',
+  muted: 'border-muted-foreground/50',
+  live: 'animate-pulse border-warning bg-warning/30',
+}
+
+const postedLabel = { review: 'Submitted', address: 'Addressed', replies: 'Replies posted' }
+
+function outcomeOf(run: Run): { label: string; tone: Tone; at: number } {
+  if (run.status === 'needs_you')
+    return { label: 'Waiting for you', tone: 'live', at: run.createdAt }
+  if (run.status !== 'done') {
+    const active = run.status === 'queued' || run.status === 'preparing' || run.status === 'running'
+    return active
+      ? { label: 'Agent working', tone: 'live', at: run.startedAt ?? run.createdAt }
+      : { label: 'Follow-up stopped', tone: 'muted', at: run.endedAt ?? run.createdAt }
+  }
+  const kind = gateKindOf[run.stage]
+  if (run.gate?.postedAt) {
+    const label =
+      kind === 'review' && run.gate.mode === 'draft'
+        ? 'Staged as pending review'
+        : kind
+          ? postedLabel[kind]
+          : 'Posted'
+    return { label, tone: 'done', at: run.gate.postedAt }
+  }
+  if (run.gate?.skippedAt) return { label: 'Skipped', tone: 'muted', at: run.gate.skippedAt }
+  if (run.dismissedAt) return { label: 'Dismissed', tone: 'muted', at: run.dismissedAt }
+  return { label: 'Ready to post', tone: 'open', at: run.endedAt ?? run.createdAt }
+}
+
 export const gateRuns = (runs: Run[]) =>
-  runs.filter((run) => run.status === 'done' && gateKindOf[run.stage] !== undefined)
+  runs.filter(
+    (run) => gateKindOf[run.stage] !== undefined && (run.status === 'done' || run.gate !== null),
+  )
 
 export function PostPanel({ pr }: { pr: BoardPr }) {
   const { data: runs, isLoading, error } = usePrRuns(pr.id)
@@ -676,41 +755,49 @@ export function PostPanel({ pr }: { pr: BoardPr }) {
   const now = useNow()
   if (isLoading) return <Loading>Loading runs…</Loading>
   if (!runs) return <ErrorText error={error} />
-  const candidates = gateRuns(runs)
+  const steps = gateRuns(runs)
   const run =
-    candidates.find((item) => item.id === openRunId) ??
-    candidates.find((item) => item.dismissedAt === null) ??
-    candidates[0] ??
+    steps.find((item) => item.id === openRunId) ??
+    steps.find((item) => item.dismissedAt === null) ??
+    steps[0] ??
     null
   if (!run) {
     return (
       <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
         <Inbox className="size-6" />
-        Nothing to post yet. Finished review, address and draft-replies runs show up here.
+        Nothing here yet. Finished review, address and draft-replies runs show up here, newest
+        first.
       </div>
     )
   }
   return (
-    <div className="space-y-5">
-      {candidates.length > 1 && (
-        <div role="group" aria-label="Run to post" className="flex flex-wrap gap-1">
-          {candidates.map((item) => (
+    <ol aria-label="Steps, newest first" className="space-y-3">
+      {steps.map((item, index) => (
+        <li key={item.id} className="relative pl-7">
+          {index < steps.length - 1 && (
+            <span aria-hidden className="absolute top-5 -bottom-5 left-[7px] w-px bg-border" />
+          )}
+          <span
+            aria-hidden
+            className={cn(
+              'absolute top-2 left-0.5 size-3 rounded-full border-2 bg-background',
+              outcomeDot[outcomeOf(item).tone],
+            )}
+          />
+          {item.id === run.id ? (
+            <Gate key={item.id} run={item} pr={pr} />
+          ) : (
             <button
-              key={item.id}
               type="button"
-              aria-pressed={item.id === run.id}
+              aria-expanded={false}
               onClick={() => selectRun(item.id)}
-              className={cn(
-                'rounded-md px-2 py-1 text-xs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring',
-                item.id === run.id && 'bg-secondary font-medium text-foreground shadow-sm',
-              )}
+              className="-mx-2 flex min-h-7 w-[calc(100%+1rem)] flex-wrap items-center gap-x-2 rounded-md px-2 text-left text-sm outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
             >
-              {stageLabels[item.stage]} · {age(item.createdAt, now)}
+              <StepTitle run={item} now={now} />
             </button>
-          ))}
-        </div>
-      )}
-      <Gate key={run.id} run={run} pr={pr} />
-    </div>
+          )}
+        </li>
+      ))}
+    </ol>
   )
 }
