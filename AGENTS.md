@@ -133,6 +133,7 @@ Agents run by PRism, and agents working on this repo, never commit, push, or pos
 - Subscribe to board events (`prs:changed`, `sync:status`) in `RootLayout`, not `AppLayout`: onboarding sits outside `AppLayout`.
 - Electron drag regions (`drag` utility) ignore z-index: anything clickable that overlays one (drawers, dialogs) needs `no-drag`, or clicks on it start a window drag.
 - dnd-kit's default auto-scroll threshold jerks the wide board sideways; keep `threshold.x` around `0.08`.
+- The board's horizontal scroller clips anything drawn outside a column, so column highlights stay inside it (the drop ring is `ring-inset`).
 - A card's draggable body (`role="button"`, keyboard drag, accessible name) is separate from its run strip and answer form, which stop pointer and key events. Keep interactive controls out of the body. Column visibility is frozen while a drag is in progress.
 - Manual stage moves are refused while the card has a live run, in the UI and in `setPrStage`.
 - GitHub GraphQL returns `data` with `errors` on partial failures. Use `graphqlPartial` when null nodes matter (e.g. `nodes(ids:)`), and only drop a PR on `NOT_FOUND`.
