@@ -16,6 +16,9 @@ import {
   findingPatch,
   gatePatch,
   installedApps,
+  notificationSettings,
+  openTarget,
+  type OpenTarget,
   postGate,
   postMode,
   reviewThread,
@@ -382,6 +385,22 @@ export const ipcContract = {
     input: z.object({ id, postMode: postMode.nullable() }),
     output: repo,
   },
+  'settings:getNotifications': {
+    input: z.void(),
+    output: notificationSettings,
+  },
+  'settings:setNotifications': {
+    input: notificationSettings.partial(),
+    output: notificationSettings,
+  },
+  'notifications:test': {
+    input: z.void(),
+    output: z.boolean(),
+  },
+  'app:pendingOpen': {
+    input: z.void(),
+    output: openTarget.nullable(),
+  },
 } satisfies Record<IpcChannel, { input: z.ZodType; output: z.ZodType }>
 
 export type IpcContract = typeof ipcContract
@@ -396,6 +415,7 @@ export interface IpcEventPayloads {
   'sync:status': SyncStatus
   'runs:changed': Run
   'runs:event': RunEvent
+  'app:openPr': OpenTarget
 }
 
 export type IpcEventPayload<E extends IpcEvent> = IpcEventPayloads[E]

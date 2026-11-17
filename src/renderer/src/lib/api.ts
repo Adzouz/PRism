@@ -7,6 +7,7 @@ import type {
   FindingPatch,
   GatePatch,
   InstalledApps,
+  NotificationSettings,
   PostGate,
   PostMode,
   Repo,
@@ -67,6 +68,7 @@ export const keys = {
   gate: (runId: number) => ['gates', runId] as const,
   postMode: ['settings', 'postMode'] as const,
   dashboard: (repoId: number | null) => ['dashboard', repoId] as const,
+  notifications: ['settings', 'notifications'] as const,
 }
 
 export const useGithubStatus = () =>
@@ -392,5 +394,32 @@ export function useSetRepoPostMode() {
     },
   })
 }
+
+export const useNotificationSettings = () =>
+  useQuery({ queryKey: keys.notifications, queryFn: () => invoke('settings:getNotifications') })
+
+export function useSetNotificationSettings() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (patch: Partial<NotificationSettings>) =>
+      invoke('settings:setNotifications', patch),
+    onMutate: async (patch) => {
+      await client.cancelQueries({ queryKey: keys.notifications })
+      const previous = client.getQueryData<NotificationSettings>(keys.notifications)
+      client.setQueryData<NotificationSettings>(
+        keys.notifications,
+        (current) => current && { ...current, ...patch },
+      )
+      return { previous }
+    },
+    onError: (_error, _patch, context) => {
+      if (context?.previous) client.setQueryData(keys.notifications, context.previous)
+    },
+    onSuccess: (settings) => client.setQueryData(keys.notifications, settings),
+  })
+}
+
+export const useTestNotification = () =>
+  useMutation({ mutationFn: () => invoke('notifications:test') })
 
 export { runStageFor } from '@shared/domain'

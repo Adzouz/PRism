@@ -1,6 +1,6 @@
 import { and, eq, isNotNull, isNull, lt, ne } from 'drizzle-orm'
 import type { CiState, PrLabel, Repo, SyncStatus } from '@shared/domain'
-import { prFlags, prs, snapshots } from '../db/schema'
+import { prFlags, prs, repos, snapshots } from '../db/schema'
 import type { Ctx } from './context'
 import type { GithubApi } from './gh-api'
 import {
@@ -157,6 +157,22 @@ export function hasTakeoverCommits(pr: GqlPr, login: string) {
 type Row = typeof prs.$inferSelect
 type FlagRow = typeof prFlags.$inferSelect
 
+export type PrEvent = { kind: 'reviewRequested' | 'ciFailed'; prId: number; headOid: string }
+
+export function prEvents(prev: Row | undefined, row: Row, repoSynced: boolean): PrEvent[] {
+  if (row.state !== 'OPEN' || (!prev && !repoSynced)) return []
+  const event = (kind: PrEvent['kind']) => ({ kind, prId: row.id, headOid: row.headOid })
+  const events: PrEvent[] = []
+  if (row.myRole === 'reviewer' && row.reviewRequested && !prev?.reviewRequested) {
+    events.push(event('reviewRequested'))
+  }
+  const newFailure = !prev || prev.ciState !== 'failure' || prev.headOid !== row.headOid
+  if (row.myRole !== 'reviewer' && row.ciState === 'failure' && newFailure) {
+    events.push(event('ciFailed'))
+  }
+  return events
+}
+
 export function applyPr(
   ctx: Ctx,
   repo: Repo,
@@ -264,7 +280,7 @@ export function applyPr(
       .where(eq(prFlags.prId, row.id))
       .run()
   }
-  return { row, facts, flags }
+  return { row, facts, flags, prev }
 }
 
 function shouldTrack(flags: FlagRow | undefined, facts: PrFacts, hasRuns: boolean) {
@@ -340,6 +356,12 @@ export async function syncRepo(
   options: { lightCheck?: boolean; now?: number } = {},
 ) {
   const now = options.now ?? Date.now()
+  const lastSync = ctx.db
+    .select({ at: repos.lastSyncedAt })
+    .from(repos)
+    .where(eq(repos.id, repo.id))
+    .get()
+  const repoSynced = (lastSync?.at ?? null) !== null
   const r = `repo:${repoSlug(repo)} is:pr is:open`
   const data = await api.graphql<Record<'req' | 'rev' | 'auth' | 'inv', Search>>(searchQuery, {
     login,
@@ -400,8 +422,9 @@ export async function syncRepo(
 
   const entries = [...found.values()]
   const cis = await mapLimit(entries, 4, ({ pr }) => ciOf(api, repo, pr))
+  const events: PrEvent[] = []
   for (const [index, { pr, takeover, refreshed }] of entries.entries()) {
-    const { row, facts, flags } = applyPr(ctx, repo, pr, {
+    const { row, facts, flags, prev } = applyPr(ctx, repo, pr, {
       login,
       inRequestSearch: requested.has(pr.id),
       refreshed: refreshed ?? false,
@@ -411,8 +434,11 @@ export async function syncRepo(
     })
     if (!shouldTrack(flags, facts, keepsPrTracked(ctx, row.id))) {
       ctx.db.delete(prs).where(eq(prs.id, row.id)).run()
+    } else {
+      events.push(...prEvents(prev, row, repoSynced))
     }
   }
+  ctx.db.update(repos).set({ lastSyncedAt: now }).where(eq(repos.id, repo.id)).run()
 
   await writeSnapshot(ctx, api, repo, now).catch((error: unknown) => {
     console.warn(`Snapshot failed for ${repoSlug(repo)}:`, error)
@@ -430,6 +456,7 @@ export async function syncRepo(
   return {
     reviews: rows.filter((row) => row.role === 'reviewer').length,
     mine: rows.filter((row) => row.role !== 'reviewer').length,
+    events,
   }
 }
 
@@ -465,6 +492,7 @@ export type SyncHooks = {
   changed: () => void
   login: () => Promise<string | null>
   enabled: () => boolean
+  events?: (events: PrEvent[]) => void
 }
 
 const fullEvery = 5 * 60_000
@@ -544,9 +572,10 @@ export function createSyncService(ctx: Ctx, api: GithubApi, hooks: SyncHooks) {
           setRepo(repo.id, { state: 'skipped' })
           continue
         }
-        const counts = await syncRepo(ctx, api, repo, login, { lightCheck, now })
+        const { events, ...counts } = await syncRepo(ctx, api, repo, login, { lightCheck, now })
         probe?.commit()
         setRepo(repo.id, { state: 'done', ...counts })
+        if (events.length > 0) hooks.events?.(events)
       } catch (error) {
         failed = error instanceof Error ? error.message : String(error)
         setRepo(repo.id, { state: 'error', error: failed })

@@ -11,6 +11,8 @@ files:
 extraResources:
   - from: resources/skills
     to: skills
+  - from: resources/tray
+    to: tray
 asarUnpack:
   - '**/*.node'
 mac:

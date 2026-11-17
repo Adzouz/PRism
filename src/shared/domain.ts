@@ -316,6 +316,12 @@ export const findingSide = z.enum(['LEFT', 'RIGHT'])
 export const findingStatus = z.enum(['open', 'resolved', 'still_open', 'disputed', 'obsolete'])
 export const verdict = z.enum(['approve', 'comment', 'request_changes'])
 
+export const verdictLabels: Record<z.infer<typeof verdict>, string> = {
+  approve: 'Approve',
+  comment: 'Comment',
+  request_changes: 'Request changes',
+}
+
 export const reportedFinding = z.object({
   path: z.string().min(1),
   line: z.number().int().positive().nullable(),
@@ -546,6 +552,35 @@ export type BoardPr = z.infer<typeof boardPr>
 export const runStageLabel = (value: Stage, pr: Pick<BoardPr, 'reviewed'>) =>
   value === 'review' && pr.reviewed ? 'Full review' : stageLabels[value]
 
+export const readyToPost = (pr: Pick<BoardPr, 'run' | 'stage'>) =>
+  pr.run?.status === 'done' &&
+  !pr.run.gateClosed &&
+  (pr.stage === 'reviewing' || pr.stage === 'addressing')
+
+const needsMeStages = (tab: BoardTab) =>
+  new Set(boardColumns[tab].filter((column) => column.needsMe).map((column) => column.stage))
+
+export function isNeedsMe(pr: BoardPr) {
+  return (
+    pr.run?.status === 'needs_you' ||
+    (pr.state === 'OPEN' && (needsMeStages(pr.tab).has(pr.stage) || readyToPost(pr)))
+  )
+}
+
+export const agentNeedsYou = (pr: BoardPr) =>
+  pr.archivedAt === null && !pr.hidden && (pr.run?.status === 'needs_you' || readyToPost(pr))
+
+export const drawerTab = z.enum(['overview', 'runs', 'post'])
+export type DrawerTab = z.infer<typeof drawerTab>
+
+export const openTarget = z.object({
+  prId: z.number(),
+  page: boardTab,
+  tab: drawerTab,
+  runId: z.number().nullable(),
+})
+export type OpenTarget = z.infer<typeof openTarget>
+
 export function reviewStageFor(pr: Pick<BoardPr, 'reviewed' | 'myReviewState'>): Stage {
   return pr.reviewed || pr.myReviewState ? 're-review' : 'review'
 }
@@ -685,6 +720,27 @@ export type Dashboard = z.infer<typeof dashboard>
 
 export const boardSettings = z.object({ autoArchiveDone: z.boolean() })
 export type BoardSettings = z.infer<typeof boardSettings>
+
+export const notificationSettings = z.object({
+  needsYou: z.boolean(),
+  runFinished: z.boolean(),
+  reviewRequested: z.boolean(),
+  ciFailed: z.boolean(),
+  dockBadge: z.boolean(),
+  menuBar: z.boolean(),
+})
+export type NotificationSettings = z.infer<typeof notificationSettings>
+
+export const defaultNotificationSettings: NotificationSettings = {
+  needsYou: true,
+  runFinished: true,
+  reviewRequested: true,
+  ciFailed: true,
+  dockBadge: true,
+  menuBar: true,
+}
+
+export type NoticeKind = 'needsYou' | 'runFinished' | 'reviewRequested' | 'ciFailed'
 
 export const gateKind = z.enum(['review', 'address', 'replies'])
 export type GateKind = z.infer<typeof gateKind>

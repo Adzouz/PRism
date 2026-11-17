@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import {
   createHashHistory,
   createRootRoute,
@@ -6,10 +7,12 @@ import {
   Navigate,
   Outlet,
 } from '@tanstack/react-router'
+import type { OpenTarget } from '@shared/domain'
 import { AppSidebar } from '@/components/app-sidebar'
 import { PrDrawer } from '@/features/board/drawer'
+import { useBoardStore } from '@/features/board/model'
 import { OnboardingPage } from '@/features/onboarding/onboarding'
-import { useBoardEvents, useConfigStatus } from '@/lib/api'
+import { invoke, useBoardEvents, useConfigStatus } from '@/lib/api'
 import { useSyncDarkClass } from '@/lib/theme'
 import {
   ArchivePage,
@@ -20,9 +23,23 @@ import {
   SettingsPage,
 } from '@/routes/pages'
 
+function openTarget(target: OpenTarget) {
+  void router.navigate({ to: target.page === 'mine' ? '/my-prs' : '/reviews' })
+  useBoardStore.getState().openPr(target.prId, target.tab, target.runId)
+}
+
+function useOpenRequests() {
+  useEffect(() => {
+    const off = window.prism.on('app:openPr', openTarget)
+    void invoke('app:pendingOpen').then((target) => target && openTarget(target))
+    return off
+  }, [])
+}
+
 function RootLayout() {
   useSyncDarkClass()
   useBoardEvents()
+  useOpenRequests()
   return <Outlet />
 }
 

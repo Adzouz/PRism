@@ -5,7 +5,7 @@ import Database from 'better-sqlite3'
 import { eq } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from './client'
-import { prFlags, prs, repos } from './schema'
+import { prFlags, prs } from './schema'
 
 const migrations = resolve(__dirname, '../../../drizzle')
 
@@ -54,15 +54,16 @@ describe('migration 0011_waiting_review', () => {
     dir = mkdtempSync(join(tmpdir(), 'prism-migrations-'))
     const file = join(dir, 'prism.db')
     const before = openDb(file, migrationsUpTo(dir, '0010_strong_rachel_grey'))
-    const [repo] = before
-      .insert(repos)
-      .values({ owner: 'acme', name: 'widgets', addedAt: 0 })
-      .returning()
-      .all()
+    const raw = new Database(file)
+    const repo = raw
+      .prepare(
+        `INSERT INTO repos (owner, name, added_at) VALUES ('acme', 'widgets', 0) RETURNING id`,
+      )
+      .get() as { id: number }
     const roles = ['reviewer', 'author', 'takeover'] as const
     const rows = roles.flatMap((myRole, index) =>
       ['to-review', 'changes-requested'].map((derivedStage, offset) => ({
-        repoId: repo!.id,
+        repoId: repo.id,
         nodeId: `PR_${index}_${offset}`,
         number: index * 10 + offset + 1,
         title: 'Add widgets',
@@ -87,7 +88,6 @@ describe('migration 0011_waiting_review', () => {
         syncedAt: 0,
       })),
     )
-    const raw = new Database(file)
     const insertPr = raw.prepare(
       `INSERT INTO prs (${Object.keys(columns).join(', ')}) VALUES (${Object.keys(columns)
         .map((key) => `@${key}`)

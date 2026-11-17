@@ -76,6 +76,10 @@ export function onboardingHandlers(
   | 'settings:getTheme'
   | 'settings:setTheme'
   | 'theme:isDark'
+  | 'settings:getNotifications'
+  | 'settings:setNotifications'
+  | 'notifications:test'
+  | 'app:pendingOpen'
   | BoardChannel
   | RunChannel
   | GateChannel
