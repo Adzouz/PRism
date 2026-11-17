@@ -150,6 +150,7 @@ Agents run by PRism, and agents working on this repo, never commit, push, or pos
 - Never let the SDK read project config from a pull request checkout: a PR can ship `.claude/settings.json` hooks that run as soon as a session starts. Pass `projectConfigRoot` (the user's clone).
 - SDK result messages carry session totals (`total_cost_usd`, `modelUsage`) that continue across `resume`. Store the latest value; summing segments double-counts.
 - Test agent runs with a fake `AgentAdapter` and a fake `prepare` (see `runner.test.ts`); `worktrees.test.ts` uses real temp git repos.
+- `vitest.setup.mts` drops git settings the test run inherits (`GIT_CONFIG_*`, `GIT_DIR` and the like), so the git push tests also pass inside a PRism agent run, whose push block rewrites every push, and inside git hooks.
 
 ## Status
 
