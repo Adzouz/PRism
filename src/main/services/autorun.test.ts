@@ -4,7 +4,7 @@ import { describe, expect, it, vi, type Mock } from 'vitest'
 import type { Run, RunStatus, Stage } from '@shared/domain'
 import { openDb } from '../db/client'
 import { prFlags, prs, repos, runs } from '../db/schema'
-import { autoRunNote, autoRunQueue, createAutoRun } from './autorun'
+import { autoRunNote, autoRunQueue, autoRunTries, createAutoRun } from './autorun'
 import type { Ctx } from './context'
 import { getPr } from './prs'
 import { getRun } from './runs'
@@ -177,8 +177,43 @@ describe('auto-run', () => {
       [broken, 'review'],
       [fine, 'review'],
     ])
-    expect(autoRunQueue(ctx)).toEqual([])
+    expect(autoRunQueue(ctx)).toEqual([{ prId: broken, at: 1_000, tries: 1 }])
     expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('retries a request whose run could not start yet', () => {
+    const { ctx, addPr, start, requested } = setup()
+    const prId = addPr()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    start.mockImplementationOnce(() => {
+      throw new Error('The previous run is still stopping. Try again in a moment.')
+    })
+    const autoRun = createAutoRun(ctx, { start })
+    autoRun.handle([requested(prId)], 1_000)
+    expect(autoRunQueue(ctx)).toEqual([{ prId, at: 1_000, tries: 1 }])
+    autoRun.drain()
+    expect(started(start)).toEqual([
+      [prId, 'review'],
+      [prId, 'review'],
+    ])
+    expect(autoRunQueue(ctx)).toEqual([])
+    warn.mockRestore()
+  })
+
+  it('gives up on a request after a few failed starts', () => {
+    const { ctx, addPr, start, requested } = setup()
+    const prId = addPr()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    start.mockImplementation(() => {
+      throw new Error('No skill is bound to the review stage')
+    })
+    const autoRun = createAutoRun(ctx, { start })
+    autoRun.handle([requested(prId)], 1_000)
+    for (let sync = 0; sync < 5; sync += 1) autoRun.drain()
+    expect(start).toHaveBeenCalledTimes(autoRunTries)
+    expect(warn).toHaveBeenCalledTimes(autoRunTries)
+    expect(autoRunQueue(ctx)).toEqual([])
     warn.mockRestore()
   })
 })

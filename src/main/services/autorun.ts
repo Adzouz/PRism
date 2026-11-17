@@ -10,10 +10,13 @@ import type { PrEvent } from './sync'
 
 export const autoRunLimit = 2
 export const autoRunNote = 'Started automatically: your review was requested.'
+export const autoRunTries = 3
 
 const busyStatuses: readonly RunStatus[] = ['queued', 'preparing', 'running']
 const queueKey = 'autoRunQueue'
-const queueSchema = z.array(z.object({ prId: z.number(), at: z.number() }))
+const queueSchema = z.array(
+  z.object({ prId: z.number(), at: z.number(), tries: z.number().optional() }),
+)
 type Entry = z.infer<typeof queueSchema>[number]
 
 export const autoRunQueue = (ctx: Ctx) => getSetting(ctx.db, queueKey, queueSchema, [])
@@ -84,6 +87,8 @@ export function createAutoRun(
         active += 1
       } catch (error) {
         console.warn(`Auto-run did not start on pull request ${entry.prId}:`, error)
+        const tries = (entry.tries ?? 0) + 1
+        if (tries < autoRunTries) waiting.push({ ...entry, tries })
       }
     }
     setSetting(ctx.db, queueKey, waiting)
