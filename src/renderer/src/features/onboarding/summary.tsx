@@ -78,7 +78,7 @@ function RepoSummary({ repo, onEdit }: { repo: Repo; onEdit: (target: EditTarget
             '—'
           )}
         </Row>
-        <Row label="Auto-run">{repo.autoRun ? 'On (read-only stages)' : 'Off'}</Row>
+        <Row label="Auto-run">{repo.autoRun ? 'On (review requests to you)' : 'Off'}</Row>
         {repo.ignoredChecks.length > 0 && (
           <Row label="Expected-red checks">{repo.ignoredChecks.join(', ')}</Row>
         )}

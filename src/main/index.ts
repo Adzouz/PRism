@@ -16,6 +16,7 @@ import { claudeAdapter } from './agents/claude'
 import { cachedGithubStatus, isOnboarded } from './services/config'
 import type { Ctx } from './services/context'
 import { createActions } from './services/actions'
+import { createAutoRun } from './services/autorun'
 import { createWorktreeCleanup } from './services/cleanup'
 import { createGithubApi } from './services/gh-api'
 import { stopWatching, watchLinkedSkills } from './services/library'
@@ -136,13 +137,25 @@ void app.whenReady().then(() => {
       for (const runId of runIds) emit('runs:changed', getRun(ctx, runId))
     },
   })
+  const autoRun = createAutoRun(ctx, {
+    start: (input) => {
+      if (!runner) throw new Error('The agent runner is not ready')
+      return runner.start(input)
+    },
+  })
   const sync = createSyncService(ctx, api, {
     status: (status) => emit('sync:status', status),
     changed: prsChanged,
     login: async () => (await cachedGithubStatus()).login,
     enabled: () => isOnboarded(ctx),
-    events: (events) => desk.prEvents(events),
-    synced: () => void cleanup.run(),
+    events: (events) => {
+      desk.prEvents(events)
+      autoRun.handle(events)
+    },
+    synced: () => {
+      void cleanup.run()
+      autoRun.drain()
+    },
   })
 
   runner = createRunner({

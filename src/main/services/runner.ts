@@ -573,7 +573,7 @@ export function createRunner(deps: RunnerDeps) {
   }
 
   return {
-    start(input: { prId: number; stage: Stage; threadIds?: string[] }) {
+    start(input: { prId: number; stage: Stage; threadIds?: string[]; note?: string }) {
       const row = ctx.db.select().from(prs).where(eq(prs.id, input.prId)).get()
       if (!row) throw new Error(`Pull request ${input.prId} not found`)
       if (activeRunFor(ctx, input.prId))
@@ -597,6 +597,7 @@ export function createRunner(deps: RunnerDeps) {
         threadIds: threadStages.includes(input.stage) ? input.threadIds : undefined,
       })
       event(run.id, 'status', { status: 'queued' })
+      if (input.note) event(run.id, 'note', { text: input.note })
       emit.run(run)
       emit.prsChanged()
       void execute(run.id, null)

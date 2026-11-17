@@ -314,6 +314,18 @@ describe('agent runner', () => {
     expect(waiting).toEqual([true])
   })
 
+  it('notes why a run started when the caller gives a reason', async () => {
+    const { ctx, ids } = await setup()
+    const { runner, events } = makeRunner(ctx, async (input) => {
+      await input.tools.reportFindings({ verdict: 'approve', summary: 'Fine.', dimensions: [] }, [])
+      return ok('s1')
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review', note: 'Started automatically.' })
+    await until(() => getRun(ctx, run.id).status === 'done')
+    const notes = events.filter((item) => item.runId === run.id && item.kind === 'note')
+    expect(notes[0]?.payload).toEqual({ text: 'Started automatically.' })
+  })
+
   it('nudges once for a missing report, then fails', async () => {
     const { ctx, ids } = await setup()
     const { runner, adapter } = makeRunner(ctx, async () => ok('s'))

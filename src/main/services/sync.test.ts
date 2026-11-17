@@ -600,8 +600,29 @@ describe('sync events', () => {
     const { events } = await syncRepo(ctx, api, repo, me)
     const ids = new Map(listPrs(ctx).map((pr) => [pr.number, pr.id]))
     expect(events).toEqual([
-      { kind: 'reviewRequested', prId: ids.get(known.number), headOid: 'head1' },
-      { kind: 'reviewRequested', prId: ids.get(fresh.number), headOid: 'head1' },
+      { kind: 'reviewRequested', prId: ids.get(known.number), headOid: 'head1', direct: false },
+      { kind: 'reviewRequested', prId: ids.get(fresh.number), headOid: 'head1', direct: false },
+    ])
+    expect((await syncRepo(ctx, api, repo, me)).events).toEqual([])
+  })
+
+  it('says when a review request names me, also when a team request becomes one', async () => {
+    const { ctx, repo } = await strictCtx()
+    const team = { requestedReviewer: { __typename: 'Team', slug: 'core' } }
+    const named = { requestedReviewer: { __typename: 'User', login: me } }
+    let pr = makePr({ reviewRequests: { nodes: [team] } })
+    let fixture: Fixture = {}
+    const { api } = fakeApi(() => fixture)
+    await syncRepo(ctx, api, repo, me)
+
+    fixture = { req: [pr] }
+    expect((await syncRepo(ctx, api, repo, me)).events).toMatchObject([
+      { kind: 'reviewRequested', direct: false },
+    ])
+    pr = { ...pr, reviewRequests: { nodes: [team, named] } }
+    fixture = { req: [pr] }
+    expect((await syncRepo(ctx, api, repo, me)).events).toMatchObject([
+      { kind: 'reviewRequested', direct: true },
     ])
     expect((await syncRepo(ctx, api, repo, me)).events).toEqual([])
   })

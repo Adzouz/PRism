@@ -223,7 +223,12 @@ describe('runNotice', () => {
 })
 
 describe('prNotice', () => {
-  const event = { kind: 'reviewRequested' as const, prId: 1, headOid: 'abcdef123456' }
+  const event = {
+    kind: 'reviewRequested' as const,
+    prId: 1,
+    headOid: 'abcdef123456',
+    direct: true,
+  }
 
   it('announces review requests', () => {
     expect(prNotice(event, boardPr())).toEqual({
