@@ -225,9 +225,10 @@ function OptionsSection({ repo }: { repo: Repo }) {
     <Panel title="5. Options" description="Optional. You can change these later in Settings.">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <Label htmlFor={`auto-run-${repo.id}`}>Auto-run read-only stages</Label>
+          <Label htmlFor={`auto-run-${repo.id}`}>Auto-run reviews</Label>
           <p className="text-xs text-muted-foreground">
-            Start reviews and test plans as soon as a PR lands in To review.
+            When someone requests your review by name, start a review, or a re-review if you
+            reviewed before. New commits and team requests never start one. Two at a time at most.
           </p>
         </div>
         <Switch

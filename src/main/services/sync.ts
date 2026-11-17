@@ -157,18 +157,27 @@ export function hasTakeoverCommits(pr: GqlPr, login: string) {
 type Row = typeof prs.$inferSelect
 type FlagRow = typeof prFlags.$inferSelect
 
-export type PrEvent = { kind: 'reviewRequested' | 'ciFailed'; prId: number; headOid: string }
+export type PrEvent =
+  | { kind: 'reviewRequested'; prId: number; headOid: string; direct: boolean }
+  | { kind: 'ciFailed'; prId: number; headOid: string }
 
-export function prEvents(prev: Row | undefined, row: Row, repoSynced: boolean): PrEvent[] {
+export function prEvents(
+  prev: Row | undefined,
+  row: Row,
+  repoSynced: boolean,
+  direct: boolean,
+): PrEvent[] {
   if (row.state !== 'OPEN' || (!prev && !repoSynced)) return []
-  const event = (kind: PrEvent['kind']) => ({ kind, prId: row.id, headOid: row.headOid })
+  const at = { prId: row.id, headOid: row.headOid }
   const events: PrEvent[] = []
-  if (row.myRole === 'reviewer' && row.reviewRequested && !prev?.reviewRequested) {
-    events.push(event('reviewRequested'))
+  const teamOnlyBefore = !!prev?.reviewRequested && prev.requestedTeam !== null
+  const newRequest = !prev?.reviewRequested || (direct && teamOnlyBefore)
+  if (row.myRole === 'reviewer' && row.reviewRequested && newRequest) {
+    events.push({ kind: 'reviewRequested', ...at, direct })
   }
   const newFailure = !prev || prev.ciState !== 'failure' || prev.headOid !== row.headOid
   if (row.myRole !== 'reviewer' && row.ciState === 'failure' && newFailure) {
-    events.push(event('ciFailed'))
+    events.push({ kind: 'ciFailed', ...at })
   }
   return events
 }
@@ -280,7 +289,7 @@ export function applyPr(
       .where(eq(prFlags.prId, row.id))
       .run()
   }
-  return { row, facts, flags, prev }
+  return { row, facts, flags, prev, direct }
 }
 
 function shouldTrack(flags: FlagRow | undefined, facts: PrFacts, hasRuns: boolean) {
@@ -424,7 +433,7 @@ export async function syncRepo(
   const cis = await mapLimit(entries, 4, ({ pr }) => ciOf(api, repo, pr))
   const events: PrEvent[] = []
   for (const [index, { pr, takeover, refreshed }] of entries.entries()) {
-    const { row, facts, flags, prev } = applyPr(ctx, repo, pr, {
+    const { row, facts, flags, prev, direct } = applyPr(ctx, repo, pr, {
       login,
       inRequestSearch: requested.has(pr.id),
       refreshed: refreshed ?? false,
@@ -435,7 +444,7 @@ export async function syncRepo(
     if (!shouldTrack(flags, facts, keepsPrTracked(ctx, row.id))) {
       ctx.db.delete(prs).where(eq(prs.id, row.id)).run()
     } else {
-      events.push(...prEvents(prev, row, repoSynced))
+      events.push(...prEvents(prev, row, repoSynced, direct))
     }
   }
   ctx.db.update(repos).set({ lastSyncedAt: now }).where(eq(repos.id, repo.id)).run()
