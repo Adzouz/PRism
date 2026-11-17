@@ -193,11 +193,32 @@ describe('auto-run', () => {
     autoRun.handle([requested(prId)], 1_000)
     expect(autoRunQueue(ctx)).toEqual([{ prId, at: 1_000, tries: 1 }])
     autoRun.drain()
+    autoRun.drain()
     expect(started(start)).toEqual([
       [prId, 'review'],
       [prId, 'review'],
     ])
     expect(autoRunQueue(ctx)).toEqual([])
+    warn.mockRestore()
+  })
+
+  it('spends at most one try per sync', () => {
+    const { ctx, addPr, start, requested } = setup()
+    const prId = addPr()
+    const other = addPr()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    start.mockImplementationOnce(() => {
+      throw new Error('The previous run is still stopping. Try again in a moment.')
+    })
+    const autoRun = createAutoRun(ctx, { start })
+    autoRun.handle([requested(prId)], 1_000)
+    autoRun.handle([requested(other)], 1_000)
+    autoRun.drain()
+    expect(started(start)).toEqual([
+      [prId, 'review'],
+      [other, 'review'],
+    ])
+    expect(autoRunQueue(ctx)).toEqual([{ prId, at: 1_000, tries: 1 }])
     warn.mockRestore()
   })
 

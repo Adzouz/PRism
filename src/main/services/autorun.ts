@@ -70,13 +70,15 @@ export function createAutoRun(
     }
   }
 
+  const failedThisSync = new Set<number>()
+
   function drainQueue() {
     const queue = autoRunQueue(ctx)
     if (queue.length === 0) return
     let active = busy()
     const waiting: Entry[] = []
     for (const entry of queue) {
-      if (active >= limit) {
+      if (active >= limit || failedThisSync.has(entry.prId)) {
         waiting.push(entry)
         continue
       }
@@ -88,6 +90,7 @@ export function createAutoRun(
       } catch (error) {
         console.warn(`Auto-run did not start on pull request ${entry.prId}:`, error)
         const tries = (entry.tries ?? 0) + 1
+        failedThisSync.add(entry.prId)
         if (tries < autoRunTries) waiting.push({ ...entry, tries })
       }
     }
@@ -114,7 +117,10 @@ export function createAutoRun(
         drainQueue()
       })
     },
-    drain: () => safely(drainQueue),
+    drain: () => {
+      safely(drainQueue)
+      failedThisSync.clear()
+    },
   }
 }
 
