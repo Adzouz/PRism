@@ -26,14 +26,14 @@ Status: phases 0–6 done, phase 8 started with notifications, the Dock badge an
 | Routing / data | TanStack Router, TanStack Query over typed IPC | Cache + live invalidation pushed from main |
 | State | Zustand (UI only) | |
 | Kanban | dnd-kit | Accessible drag & drop, keyboard support |
-| Charts | shadcn charts (Recharts) | |
-| Diff | `@pierre/diffs` or `react-diff-view` + Shiki | Findings anchored on diff lines |
-| Markdown | react-markdown + remark-gfm + Shiki | Skill reports |
+| Charts | Hand-written SVG | Tiles, daily bars and one trend line don't need a chart library |
+| Diff | Planned: `@pierre/diffs` or `react-diff-view` + Shiki | Findings anchored on diff lines |
+| Markdown | react-markdown + remark-gfm; DOMPurify for GitHub's HTML | Skill reports; PR descriptions |
 | DB | SQLite (better-sqlite3) + Drizzle | |
 | GitHub | GraphQL/REST with the token from `gh auth token` | No new OAuth app |
 | Agents | `@anthropic-ai/claude-agent-sdk`; CLI adapters for `codex exec --json`, `gemini -p --output-format stream-json`, `cursor-agent -p --output-format stream-json` | |
 | Packaging | electron-builder, hardened runtime, notarytool, electron-updater on GitHub Releases | |
-| Tests | Vitest (main + core logic), Playwright for Electron (smoke) | |
+| Tests | Vitest (main + core logic), Playwright `_electron` for visual checks | |
 
 ### Theme tokens
 
@@ -170,7 +170,8 @@ Every stage has a global default. Each repo can override per stage. Every bindin
       - drop / write a custom file.
       Every stage must be validated (✓) by you.
    6. **Options:** auto-run (read-only stages), expected-red CI checks to ignore, labels that mean "QA pending".
-4. **Initial scan:** PRs requesting your review (direct + team), PRs you authored, PRs you took over (you pushed commits to someone else's PR). Progress per repo, then the board opens. Daily snapshot #1 is written.
+4. **Notifications** (optional): **Turn on notifications** sends a test, so the macOS permission prompt shows while you are looking. macOS asks only once per app; after a refusal only System Settings can turn them on, so Settings → Notifications has an **Open System Settings** button.
+5. **Initial scan:** PRs requesting your review (direct + team), PRs you authored, PRs you took over (you pushed commits to someone else's PR). Progress per repo, then the board opens. Daily snapshot #1 is written.
 
 ---
 
@@ -241,11 +242,11 @@ Cost/time win: a typical re-review reads a few hundred lines instead of the whol
 
 ## 8. Post gate (after every review or address run)
 
-When a run ends, the card moves to **Verdict ready** / **Ready to post** and a **Post to PR?** panel opens. It shows a live checklist, and the post button unlocks only when every check passes:
+When a run ends, its card stays in Reviewing or Addressing, marked ready to post, and the drawer's **Post** tab shows a live checklist. The post button unlocks only when every check passes:
 
 **After a review**
 - [ ] Findings validated (include/exclude/edit each)
-- [ ] Review status chosen (Approve / Comment / Request changes, pre-filled from the verdict)
+- [ ] Review status chosen (Approve / Comment / Request changes, pre-filled from the verdict). GitHub refuses Approve and Request changes on your own pull request, so there it is Comment and the picker is hidden
 - [ ] Mode: **Submit now** or **Stage as pending draft**. The default is **Stage as pending draft**, set in Settings, and each repository can override it.
 
 **After addressing comments**
@@ -257,22 +258,20 @@ When a run ends, the card moves to **Verdict ready** / **Ready to post** and a *
 
 **Behaviour**
 - Unmet checks show what's missing with the button that fixes it.
-- The panel re-opens (notification + Needs-you badge) whenever state changes or the app regains focus, until the comments are **posted** or you click **Skip posting comment**.
+- The checklist is recomputed live (GitHub head, pending review, worktree), and the gate stays open, counted in the Dock badge and the menu bar, until the comments are **posted** or you click **Skip posting**.
 - Skip is stored per run, and the card moves to the next derived column.
 - After posting, PRism links each GitHub comment id back to its finding in the ledger.
+- A pending review you already have gets the new comments instead of a second review. Everything posted ends with one AI tag line: when PRism adds to a pending review, the draft's tag moves to the end instead of repeating.
 
 ---
 
 ## 9. PR drawer
 
 Tabs:
-- **Overview:** description, linked issues, labels, CI (ignoring the repo's expected-red checks).
-- **Runs:** live transcript, tokens/cost, resume.
-- **Findings:** grouped by severity, anchored on the diff, plus the ledger history.
-- **Changes:** worktree diff.
-- **Report:** full markdown.
+- **Overview:** checks (ignoring the repo's expected-red checks), reviewers, linked issues, labels, description.
+- **Runs:** each run's live transcript and report (verdict, findings, changes or draft replies), tokens/cost; answer a question, send a follow-up, dismiss. Footer: open the worktree in your editor, or resume the agent session in your terminal.
 - **Post:** the post gate.
-- Footer: open the worktree in your editor / terminal, or resume the agent session in a terminal.
+- Planned: a **Findings** tab anchored on the diff with the ledger history, and a **Changes** tab with the worktree diff.
 
 ---
 
@@ -294,28 +293,39 @@ Tabs:
 - **Worktrees:** `<repo worktree folder>/pr-<number>`. Fork PRs get a remote per fork. Existing worktrees of the branch (from any tool, via `git worktree list`) are reused. PRism removes its own worktrees once the pull request is merged or closed, unless they hold uncommitted changes or commits that are not on GitHub.
 - **Address runs:** rebase onto the PR's real base first (stacked PRs included).
 - **Mirador bridge** (optional, auto-detected): reports review/addressing steps through the `mirador` CLI.
-- **Notifications:** needs you (answer from the notification), run done or failed, new review request, CI red on my PR. The dock badge shows the Needs-you count: agent questions plus runs ready to post. The menu bar shows the Needs-you list, the cards where it's your turn (not counted) and running agents.
+- **Notifications:** needs you (answer from the notification), run done or failed, new review request, CI red on my PR. The dock badge shows the Needs-you count: agent questions plus runs ready to post. The menu bar shows the Needs-you list, the cards where it's your turn (not counted) and running agents. macOS asks for permission once per app: onboarding triggers the prompt, and Settings links to System Settings.
 
 ---
 
 ## 12. Data model (SQLite, in `~/Library/Application Support/PRism`)
 
+`src/main/db/schema.ts` is the source of truth; migrations live in `drizzle/`.
+
 ```
-repos(id, owner, name, local_path, worktree_root, auto_run, ignored_checks_json, added_at)
-skill_sources(id, url_or_path, local_path, manifest_json, identity, last_synced_at)
+repos(id, owner, name, local_path, worktree_root, skill_source_id, auto_run, ignored_checks_json,
+      qa_labels_json, post_mode[submit|draft]?, added_at, last_synced_at)
+skill_sources(id, kind[git|local|builtin], name, url_or_path, local_path, manifest_json, identity,
+              setup_at, last_synced_at)
 skills(id, source_id?, name, description, mode[copy|link|custom|linked_file], path, content_hash)
-stage_bindings(scope[global|repo], repo_id?, stage, skill_id, validated_at)
-prs(id, repo_id, number, title, author, is_draft, head_ref, head_oid, base_ref, base_oid,
-    state, review_decision, ci_state, labels_json, additions, deletions, updated_at,
-    my_role[reviewer|author|takeover], derived_stage, synced_at)
-pr_flags(pr_id, starred, hidden, archived_at, manual_stage, manual_stage_basis_hash)
-runs(id, pr_id, stage, skill_id, agent, model, session_id, worktree_path, status,
-     reviewed_head_oid, reviewed_base_oid, started_at, ended_at, tokens_in, tokens_out, cost_usd, error)
+stage_bindings(id, scope[global|repo], repo_id?, stage, skill_id, validated_at)
+prs(id, repo_id, node_id, number, title, url, author, author_avatar, is_draft, state, head_ref, head_oid,
+    base_ref, base_oid, review_decision, ci_state, labels_json, additions, deletions, changed_files,
+    unresolved_threads, review_requested, requested_team, my_review_state, my_review_oid, my_review_at,
+    changes_requested_at, my_role[reviewer|author|takeover], derived_stage, stage_since,
+    created_at, updated_at, closed_at, synced_at)
+pr_flags(pr_id, starred, hidden, archived_at, restored_at, manual_stage, manual_stage_basis,
+         approved_oid, approved_at)
+runs(id, pr_id, stage, skill_id, skill_name, agent, model, session_id, worktree_path, status, progress,
+     reviewed_head_oid, reviewed_base_oid, report_json, changes_json, replies_json, threads_json,
+     findings_json, push_remote, push_ref, created_at, started_at, ended_at, dismissed_at,
+     tokens_in, tokens_out, cost_usd, error)
 run_events(id, run_id, ts, kind, payload_json)
-findings(id, pr_id, run_id, anchor_path, anchor_line, hunk_hash, severity, nit_decision,
-         title, body, suggestion, included, edited_body, status, gh_comment_id)
-post_gates(run_id, kind[review|address], checklist_json, mode, posted_at, skipped_at)
-asks(id, run_id, prompt, schema_json, answer_json, answered_at)
+findings(id, pr_id, run_id, anchor_path, anchor_line, side, hunk_hash, severity, nit_decision,
+         title, body, suggestion, prior_finding_id, included, edited_body, status, gh_comment_id)
+post_gates(run_id, kind[review|address|replies], mode, event, body, commit_message, committed_oid,
+           pushed_oid, replies_json, gh_review_id, gh_review_url, posted_body, posted_head_oid,
+           confirmed_at, posted_at, skipped_at)
+asks(id, run_id, prompt, schema_json, answer_json, created_at, answered_at)
 snapshots(repo_id, day, open_prs, open_issues, awaiting_me, my_open, taken_at)
 activity(repo_id, day, opened, merged, closed, open_prs, fetched_at)
 review_latency(repo_id, pr_node_id, requested_at, reviewed_at)
@@ -350,6 +360,7 @@ Plus:
 - Developer ID Application cert, hardened runtime. No App Sandbox, because the app spawns `git`/`gh`/agents.
 - Notarization via `notarytool`, with credentials from GitHub Actions secrets.
 - Universal DMG on GitHub Releases, with electron-updater (public repo, so no token needed).
+- Today: `pnpm install:app` builds an ad-hoc signed arm64 app into `/Applications` for your own Mac. The DMG waits on a Developer ID Application certificate, which only the Apple developer team's Account Holder can create, and on notarization credentials.
 
 ---
 
@@ -372,4 +383,4 @@ Plus:
 ## 16. Open questions
 
 1. ~~Default review post mode~~: answered in §8 (pending draft by default, per-repo override).
-2. `mattpocock/skills` default: confirm its layout fits stage hints (checked at phase 1), else ship a tiny built-in starter set as the zero-config fallback.
+2. ~~`mattpocock/skills` default~~: answered. Onboarding proposes it, and offers **Use built-in starter** (`resources/skills/`) as the zero-config fallback.
