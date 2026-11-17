@@ -31,6 +31,7 @@ import {
   type Run,
 } from '@shared/domain'
 import { ErrorText } from '@/components/page'
+import { Timeline, toneText, type TimelineTone } from '@/components/timeline'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input, Textarea } from '@/components/ui/input'
@@ -598,7 +599,7 @@ function StepTitle({ run, now }: { run: Run; now: number }) {
       {run.report && run.stage !== 'draft-replies' && (
         <span className="text-muted-foreground">· {verdictLabel[run.report.verdict]}</span>
       )}
-      <span className={cn('text-xs', outcomeText[outcome.tone])}>{outcome.label}</span>
+      <span className={cn('text-xs', toneText[outcome.tone])}>{outcome.label}</span>
       <span className="text-xs text-muted-foreground">· {age(outcome.at, now)}</span>
     </>
   )
@@ -692,25 +693,9 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
   )
 }
 
-type Tone = 'open' | 'done' | 'muted' | 'live'
-
-const outcomeText: Record<Tone, string> = {
-  open: 'text-primary',
-  done: 'text-success',
-  muted: 'text-muted-foreground',
-  live: 'text-warning',
-}
-
-const outcomeDot: Record<Tone, string> = {
-  open: 'border-primary bg-primary/30',
-  done: 'border-success bg-success/30',
-  muted: 'border-muted-foreground/50',
-  live: 'animate-pulse border-warning bg-warning/30',
-}
-
 const postedLabel = { review: 'Submitted', address: 'Addressed', replies: 'Replies posted' }
 
-function outcomeOf(run: Run): { label: string; tone: Tone; at: number } {
+function outcomeOf(run: Run): { label: string; tone: TimelineTone; at: number } {
   if (run.status === 'needs_you')
     return { label: 'Waiting for you', tone: 'live', at: run.createdAt }
   if (run.status !== 'done') {
@@ -762,33 +747,17 @@ export function PostPanel({ pr }: { pr: BoardPr }) {
     )
   }
   return (
-    <ol aria-label="Steps, newest first" className="space-y-3">
-      {steps.map((item, index) => (
-        <li key={item.id} className="relative pl-7">
-          {index < steps.length - 1 && (
-            <span aria-hidden className="absolute top-5 -bottom-5 left-[7px] w-px bg-border" />
-          )}
-          <span
-            aria-hidden
-            className={cn(
-              'absolute top-2 left-0.5 size-3 rounded-full border-2 bg-background',
-              outcomeDot[outcomeOf(item).tone],
-            )}
-          />
-          {item.id === run.id ? (
-            <Gate key={item.id} run={item} pr={pr} />
-          ) : (
-            <button
-              type="button"
-              aria-expanded={false}
-              onClick={() => selectRun(item.id)}
-              className="-mx-2 flex min-h-7 w-[calc(100%+1rem)] flex-wrap items-center gap-x-2 rounded-md px-2 text-left text-sm outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <StepTitle run={item} now={now} />
-            </button>
-          )}
-        </li>
-      ))}
-    </ol>
+    <Timeline
+      label="Steps, newest first"
+      items={steps.map((item) => ({
+        id: item.id,
+        tone: outcomeOf(item).tone,
+        title: <StepTitle run={item} now={now} />,
+      }))}
+      selectedId={run.id}
+      onSelect={selectRun}
+    >
+      <Gate key={run.id} run={run} pr={pr} />
+    </Timeline>
   )
 }

@@ -32,6 +32,7 @@ import {
   type Stage,
 } from '@shared/domain'
 import { ErrorText } from '@/components/page'
+import { Timeline, toneText, type TimelineTone } from '@/components/timeline'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -58,6 +59,7 @@ import {
   Loading,
   Markdown,
   RunStatusBadge,
+  statusLabel,
   verdictLabel,
   verdictTone,
 } from './parts'
@@ -326,7 +328,7 @@ function RunDetail({
   const done = terminal(run)
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      <div className="flex min-h-7 flex-wrap items-center gap-2 text-sm">
         <RunStatusBadge status={run.status} />
         <span className="font-medium">{stageLabels[run.stage]}</span>
         {run.skillName && <span className="text-muted-foreground">· {run.skillName}</span>}
@@ -470,42 +472,27 @@ function RunDetail({
   )
 }
 
-function RunPicker({
-  runs,
-  current,
-  onSelect,
-}: {
-  runs: Run[]
-  current: Run | null
-  onSelect: (runId: number) => void
-}) {
-  const now = useNow()
+function runTone(run: Run): TimelineTone {
+  if (isLive(run.status) || run.status === 'needs_you') return 'live'
+  if (run.status === 'failed') return 'failed'
+  if (run.status === 'cancelled' || run.dismissedAt !== null) return 'muted'
+  return 'done'
+}
+
+function RunTitle({ run, now }: { run: Run; now: number }) {
   return (
-    <div className="border-t pt-4">
-      <div
-        role="group"
-        aria-label="Run history"
-        className="-m-0.5 flex max-h-20 flex-wrap gap-1 overflow-y-auto p-0.5"
-      >
-        {runs.map((item) => {
-          const selected = item.id === current?.id
-          return (
-            <button
-              key={item.id}
-              type="button"
-              aria-pressed={selected}
-              onClick={() => onSelect(item.id)}
-              className={cn(
-                'rounded-md px-2 py-1 text-xs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring',
-                selected && 'bg-secondary font-medium text-foreground shadow-sm',
-              )}
-            >
-              {stageLabels[item.stage]} · {age(item.createdAt, now)}
-            </button>
-          )
-        })}
-      </div>
-    </div>
+    <>
+      <span className="font-medium">{stageLabels[run.stage]}</span>
+      {run.report && run.stage !== 'draft-replies' && (
+        <span className="text-muted-foreground">· {verdictLabel[run.report.verdict]}</span>
+      )}
+      <span className={cn('text-xs', toneText[runTone(run)])}>
+        {run.status === 'done' && run.dismissedAt !== null ? 'Dismissed' : statusLabel[run.status]}
+      </span>
+      <span className="text-xs text-muted-foreground">
+        · {age(run.endedAt ?? run.startedAt ?? run.createdAt, now)}
+      </span>
+    </>
   )
 }
 
@@ -545,6 +532,7 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
   const start = useStartRun()
   const openRunId = useBoardStore((state) => state.openRunId)
   const selectRun = useBoardStore((state) => state.selectRun)
+  const now = useNow()
   const [pickedStage, setStage] = useState<Stage | null>(null)
   const stage = pickedStage ?? runStageFor(pr)
   const [chosenThreads, setChosenThreads] = useState<Set<string> | null>(null)
@@ -602,18 +590,30 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
           <ErrorText error={start.error} />
         </div>
       )}
-      {runs && runs.length > 1 && <RunPicker runs={runs} current={current} onSelect={selectRun} />}
       {isLoading ? (
         <Loading>Loading runs…</Loading>
       ) : error && !runs ? (
         <ErrorText error={error} />
-      ) : current ? (
-        <RunDetail
-          key={current.id}
-          run={current}
-          canFollowUp={!active}
-          stale={pr.run?.id === current.id && pr.run.stale}
-        />
+      ) : runs && current ? (
+        <div className={cn(isOpen && 'border-t pt-4')}>
+          <Timeline
+            label="Runs, newest first"
+            items={runs.map((item) => ({
+              id: item.id,
+              tone: runTone(item),
+              title: <RunTitle run={item} now={now} />,
+            }))}
+            selectedId={current.id}
+            onSelect={selectRun}
+          >
+            <RunDetail
+              key={current.id}
+              run={current}
+              canFollowUp={!active}
+              stale={pr.run?.id === current.id && pr.run.stale}
+            />
+          </Timeline>
+        </div>
       ) : (
         <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
           <Bot className="size-6" />

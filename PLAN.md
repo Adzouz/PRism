@@ -269,7 +269,7 @@ When a run ends, its card stays in Reviewing or Addressing, marked ready to post
 
 Tabs:
 - **Overview:** checks (ignoring the repo's expected-red checks), reviewers, linked issues, labels, description.
-- **Runs:** each run's live transcript and report (verdict, findings, changes or draft replies), tokens/cost; answer a question, send a follow-up, dismiss. Footer: open the worktree in your editor, or resume the agent session in your terminal.
+- **Runs:** the runs as a timeline, newest first, the selected one expanded with its live transcript and report (verdict, findings, changes or draft replies), tokens/cost; answer a question, send a follow-up, dismiss. Footer: open the worktree in your editor, or resume the agent session in your terminal.
 - **Actions:** the post gates as a timeline, newest first: each step shows its outcome (ready to post, submitted, staged, skipped), the selected one expands to its checklist, and Ask agent anything opens that run in the Runs tab with the message box focused, to continue its session.
 - Planned: a **Findings** tab anchored on the diff with the ledger history, and a **Changes** tab with the worktree diff.
 
