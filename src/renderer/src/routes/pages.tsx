@@ -19,6 +19,7 @@ import { RepoSetup } from '@/features/onboarding/repo-setup'
 import { ResetConfiguration } from '@/features/onboarding/reset'
 import { StepAgent } from '@/features/onboarding/step-agent'
 import { StepGithub } from '@/features/onboarding/step-github'
+import { OpenNotificationSettings } from '@/features/onboarding/step-notifications'
 import { StepRepos } from '@/features/onboarding/step-repos'
 import {
   invoke,
@@ -269,14 +270,22 @@ function NotificationOptions() {
         </div>
       ))}
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-        <p className="text-sm text-muted-foreground">
-          Banners show while PRism is in the background; macOS asks to allow them the first time.
-          Hidden pull requests stay quiet.
+        <p className="max-w-md text-sm text-muted-foreground">
+          Banners show while PRism is in the background. Hidden pull requests stay quiet. Nothing
+          shows up? Turn PRism on in System Settings → Notifications.
         </p>
-        <Button size="sm" variant="outline" disabled={test.isPending} onClick={() => test.mutate()}>
-          <BellRing />
-          Send a test
-        </Button>
+        <div className="flex items-center gap-2">
+          <OpenNotificationSettings />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={test.isPending}
+            onClick={() => test.mutate()}
+          >
+            <BellRing />
+            Send a test
+          </Button>
+        </div>
       </div>
       <ErrorText error={save.error ?? test.error} />
       {test.data === false && (

@@ -178,6 +178,7 @@ void app.whenReady().then(() => {
       return next
     },
     'notifications:test': () => desk.test(),
+    'notifications:openSettings': () => desk.openSystemSettings(),
     'app:pendingOpen': () => {
       const target = pendingOpen
       pendingOpen = null

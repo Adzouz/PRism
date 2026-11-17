@@ -81,6 +81,7 @@ export function onboardingHandlers(
   | 'settings:getNotifications'
   | 'settings:setNotifications'
   | 'notifications:test'
+  | 'notifications:openSettings'
   | 'app:pendingOpen'
   | BoardChannel
   | RunChannel
