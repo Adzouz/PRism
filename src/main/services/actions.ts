@@ -198,6 +198,9 @@ export function reviewBody(summary: string, outside: Finding[]) {
 
 export const replyBody = withAiTag
 
+export const withPendingBody = (pending: string, body: string) =>
+  [withoutAiSignature(pending).trim(), body].filter(Boolean).join('\n\n')
+
 type CheckInput = {
   kind: GateKind
   mode: PostMode
@@ -715,7 +718,7 @@ export function createActions(deps: ActionDeps) {
         }
         linkFinding(ctx, item.id, comment.id)
       }
-      const merged = [pending.body.trim(), body].filter(Boolean).join('\n\n')
+      const merged = withPendingBody(pending.body, body)
       postedBody = merged
       review =
         gate.mode === 'submit'
@@ -824,7 +827,7 @@ export function createActions(deps: ActionDeps) {
               input: {
                 pullRequestReviewId: pending.id,
                 event,
-                body: [pending.body.trim(), body].filter(Boolean).join('\n\n'),
+                body: withPendingBody(pending.body, body),
               },
             })
           ).submitPullRequestReview.pullRequestReview

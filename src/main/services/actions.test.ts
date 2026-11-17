@@ -387,7 +387,7 @@ describe('review gate', () => {
     const fake = fakeApi({
       headRefOid: 'head1',
       viewerDidAuthor: false,
-      pending: { id: 'PRR_0', body: 'My notes.', url: 'https://x/pending' },
+      pending: { id: 'PRR_0', body: `My notes.\n\n${aiTag}`, url: 'https://x/pending' },
     })
     const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => {} } })
     const gate = await actions.update({ runId, confirmed: true })
@@ -400,8 +400,10 @@ describe('review gate', () => {
       path: 'src/a.ts',
       line: 2,
     })
-    expect(fake.named('UpdateReview')[0]!.input.body).toMatch(/^My notes\.\n\nTwo issues\./)
-    expect((await actions.get(runId)).postedBody).toBe(fake.named('UpdateReview')[0]!.input.body)
+    const staged = String(fake.named('UpdateReview')[0]!.input.body)
+    expect(staged).toMatch(/^My notes\.\n\nTwo issues\./)
+    expect(staged.split(aiTag)).toHaveLength(2)
+    expect((await actions.get(runId)).postedBody).toBe(staged)
     expect(listFindings(ctx, runId)[0]!.posted).toBe(true)
   })
 
@@ -730,6 +732,22 @@ describe('review loop', () => {
     expect((await actions.approve(pr.id)).own).toBe(true)
     expect(fake.named('AddReview')[0]!.input).toMatchObject({ event: 'COMMENT' })
     expect(listPrs(ctx)[0]!.stage).toBe('approved')
+  })
+
+  it('approves on top of my pending review with one AI tag', async () => {
+    const { ctx, pr } = await setup()
+    const fake = fakeApi({
+      ...live('head1'),
+      pending: { id: 'PRR_0', body: `Looks good.\n\n${aiTag}`, url: 'https://x/pending' },
+    })
+    const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => {} } })
+    await actions.approve(pr.id)
+    expect(fake.named('AddReview')).toHaveLength(0)
+    expect(fake.named('SubmitReview')[0]!.input).toEqual({
+      pullRequestReviewId: 'PRR_0',
+      event: 'APPROVE',
+      body: `Looks good.\n\n✅ GO\n\n${aiTag}`,
+    })
   })
 
   it('hands an addressed pull request back to reviewers and keeps the posted mode', async () => {
