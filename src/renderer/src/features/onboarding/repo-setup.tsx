@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input, Label } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { invoke, keys, useAction, useBindings } from '@/lib/api'
+import { invoke, keys, useAction, useBindings, useMiradorStatus } from '@/lib/api'
 import { SourcePicker } from './source-picker'
 import { StageBindings } from './stage-bindings'
 
@@ -204,15 +204,25 @@ const splitList = (value: string) =>
 function OptionsSection({ repo }: { repo: Repo }) {
   const [checks, setChecks] = useState<string | null>(null)
   const [labels, setLabels] = useState<string | null>(null)
+  const mirador = useMiradorStatus()
   const save = useRepoAction(
-    (options: { autoRun: boolean; ignoredChecks: string[]; qaLabels: string[] }) =>
-      invoke('repos:setOptions', { id: repo.id, ...options }),
+    (options: {
+      autoRun: boolean
+      mirador: boolean
+      ignoredChecks: string[]
+      qaLabels: string[]
+    }) => invoke('repos:setOptions', { id: repo.id, ...options }),
   )
   const checksValue = checks ?? repo.ignoredChecks.join(', ')
   const labelsValue = labels ?? repo.qaLabels.join(', ')
-  const persist = (autoRun = repo.autoRun) =>
+  const persist = (switches: Partial<Pick<Repo, 'autoRun' | 'mirador'>> = {}) =>
     save.mutate(
-      { autoRun, ignoredChecks: splitList(checksValue), qaLabels: splitList(labelsValue) },
+      {
+        autoRun: switches.autoRun ?? repo.autoRun,
+        mirador: switches.mirador ?? repo.mirador,
+        ignoredChecks: splitList(checksValue),
+        qaLabels: splitList(labelsValue),
+      },
       {
         onSuccess: () => {
           setChecks(null)
@@ -234,9 +244,26 @@ function OptionsSection({ repo }: { repo: Repo }) {
         <Switch
           id={`auto-run-${repo.id}`}
           checked={repo.autoRun}
-          onCheckedChange={(value) => persist(value)}
+          onCheckedChange={(value) => persist({ autoRun: value })}
         />
       </div>
+      {(mirador.data?.available || repo.mirador) && (
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <Label htmlFor={`mirador-${repo.id}`}>Report to Mirador</Label>
+            <p className="text-xs text-muted-foreground">
+              Mirador tracks one repository: turn this on for that one. PRism marks a pull request
+              Reviewing or Addressing in Mirador when its run starts, and notes the verdict when you
+              post a review.
+            </p>
+          </div>
+          <Switch
+            id={`mirador-${repo.id}`}
+            checked={repo.mirador}
+            onCheckedChange={(value) => persist({ mirador: value })}
+          />
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor={`checks-${repo.id}`}>CI checks expected to fail</Label>

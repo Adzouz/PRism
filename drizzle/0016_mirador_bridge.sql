@@ -1,0 +1,1 @@
+ALTER TABLE `repos` ADD `mirador` integer DEFAULT false NOT NULL;

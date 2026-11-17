@@ -81,6 +81,7 @@ export const ipcChannels = [
   'settings:setNotifications',
   'notifications:test',
   'notifications:openSettings',
+  'mirador:status',
   'app:pendingOpen',
 ] as const
 

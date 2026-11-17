@@ -37,6 +37,7 @@ export const repos = sqliteTable(
       onDelete: 'set null',
     }),
     autoRun: integer('auto_run', { mode: 'boolean' }).notNull().default(false),
+    mirador: integer('mirador', { mode: 'boolean' }).notNull().default(false),
     ignoredChecksJson: text('ignored_checks_json').notNull().default('[]'),
     qaLabelsJson: text('qa_labels_json').notNull().default('[]'),
     postMode: text('post_mode', { enum: ['submit', 'draft'] }),

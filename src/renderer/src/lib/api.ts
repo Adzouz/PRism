@@ -69,6 +69,7 @@ export const keys = {
   postMode: ['settings', 'postMode'] as const,
   dashboard: (repoId: number | null) => ['dashboard', repoId] as const,
   notifications: ['settings', 'notifications'] as const,
+  mirador: ['mirador'] as const,
 }
 
 export const useGithubStatus = () =>
@@ -424,5 +425,8 @@ export const useTestNotification = () =>
 
 export const useOpenNotificationSettings = () =>
   useMutation({ mutationFn: () => invoke('notifications:openSettings') })
+
+export const useMiradorStatus = () =>
+  useQuery({ queryKey: keys.mirador, queryFn: () => invoke('mirador:status') })
 
 export { runStageFor } from '@shared/domain'

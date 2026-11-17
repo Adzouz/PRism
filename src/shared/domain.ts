@@ -100,6 +100,7 @@ export const repo = z.object({
   worktreeRoot: z.string().nullable(),
   skillSourceId: z.number().nullable(),
   autoRun: z.boolean(),
+  mirador: z.boolean(),
   ignoredChecks: z.array(z.string()),
   qaLabels: z.array(z.string()),
   postMode: postMode.nullable(),
@@ -108,6 +109,7 @@ export type Repo = z.infer<typeof repo>
 
 export const repoOptions = z.object({
   autoRun: z.boolean(),
+  mirador: z.boolean(),
   ignoredChecks: z.array(z.string()),
   qaLabels: z.array(z.string()),
 })

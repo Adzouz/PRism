@@ -57,7 +57,7 @@ const defaultGit: GitExec = (cwd, args, env = {}) =>
 export type ActionDeps = {
   ctx: Ctx
   api: GithubApi
-  emit: { prsChanged: () => void }
+  emit: { prsChanged: () => void; posted?: (runId: number) => void }
   git?: GitExec
   sleep?: (ms: number) => Promise<void>
   verifyAttempts?: number
@@ -783,6 +783,7 @@ export function createActions(deps: ActionDeps) {
       })
       clearManualStage(ctx, loaded.run.prId)
       emit.prsChanged()
+      if (loaded.kind === 'review') emit.posted?.(runId)
       return build(runId)
     })
   }

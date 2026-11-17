@@ -20,6 +20,7 @@ import { createAutoRun } from './services/autorun'
 import { createWorktreeCleanup } from './services/cleanup'
 import { createGithubApi } from './services/gh-api'
 import { stopWatching, watchLinkedSkills } from './services/library'
+import { createMiradorBridge } from './services/mirador'
 import { getNotificationSettings, setNotificationSettings } from './services/notices'
 import { createRunner, type AgentRunner } from './services/runner'
 import { getRun } from './services/runs'
@@ -158,6 +159,7 @@ void app.whenReady().then(() => {
     },
   })
 
+  const mirador = createMiradorBridge(ctx)
   runner = createRunner({
     ctx,
     api,
@@ -169,6 +171,7 @@ void app.whenReady().then(() => {
       },
       event: (event) => emit('runs:event', event),
       prsChanged,
+      started: (run) => void mirador.runStarted(run),
     },
   })
 
@@ -180,6 +183,7 @@ void app.whenReady().then(() => {
         prsChanged()
         sync.tick()
       },
+      posted: (runId) => void mirador.reviewPosted(runId),
     },
   })
 
@@ -200,6 +204,7 @@ void app.whenReady().then(() => {
     },
     'notifications:test': () => desk.test(),
     'notifications:openSettings': () => desk.openSystemSettings(),
+    'mirador:status': () => mirador.status(),
     'app:pendingOpen': () => {
       const target = pendingOpen
       pendingOpen = null
