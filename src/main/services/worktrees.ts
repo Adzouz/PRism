@@ -137,19 +137,71 @@ async function installGuard(clone: string, path: string, hooksDir: string) {
 
 const cloneLocks = new Map<string, Promise<unknown>>()
 
+function withCloneLock<T>(clone: string, task: () => Promise<T>): Promise<T> {
+  const previous = cloneLocks.get(clone) ?? Promise.resolve()
+  const next = previous.catch(() => {}).then(task)
+  cloneLocks.set(clone, next)
+  void next
+    .finally(() => {
+      if (cloneLocks.get(clone) === next) cloneLocks.delete(clone)
+    })
+    .catch(() => {})
+  return next
+}
+
 export function prepareWorktree(
   options: { clone: string; root: string; hooksDir: string; log: Log },
   pr: PrCheckout,
 ): Promise<Worktree> {
-  const previous = cloneLocks.get(options.clone) ?? Promise.resolve()
-  const next = previous.catch(() => {}).then(() => prepareLocked(options, pr))
-  cloneLocks.set(options.clone, next)
-  void next
-    .finally(() => {
-      if (cloneLocks.get(options.clone) === next) cloneLocks.delete(options.clone)
-    })
-    .catch(() => {})
-  return next
+  return withCloneLock(options.clone, () => prepareLocked(options, pr))
+}
+
+export type WorktreeRemoval =
+  | { status: 'missing' }
+  | { status: 'removed'; path: string }
+  | { status: 'kept'; path: string; reason: string }
+
+export function removePrWorktree(
+  options: { clone: string; root: string },
+  pr: { number: number; headOid: string },
+): Promise<WorktreeRemoval> {
+  return withCloneLock(options.clone, () => removeLocked(options, pr))
+}
+
+async function removeLocked(
+  { clone, root }: { clone: string; root: string },
+  pr: { number: number; headOid: string },
+): Promise<WorktreeRemoval> {
+  const folder = join(root, `pr-${pr.number}`)
+  if (!(await exists(folder))) return { status: 'missing' }
+  const real = await realpath(folder)
+  const [, ...entries] = parseWorktreeList(await git(clone, ['worktree', 'list', '--porcelain']))
+  const entry = entries.find((item) => item.path === real || item.path === folder)
+  if (!entry) return { status: 'kept', path: folder, reason: `not a worktree of ${clone}` }
+  const changes = await tryGit(entry.path, ['status', '--porcelain'])
+  if (changes !== '') {
+    const reason = changes === null ? 'could not read its status' : 'uncommitted changes'
+    return { status: 'kept', path: entry.path, reason }
+  }
+  const unpublished = await tryGit(entry.path, [
+    'rev-list',
+    '--count',
+    'HEAD',
+    '--not',
+    '--remotes',
+    '--glob=refs/prism/*',
+  ])
+  const inPrHead =
+    pr.headOid !== '' &&
+    (await tryGit(entry.path, ['merge-base', '--is-ancestor', 'HEAD', pr.headOid])) !== null
+  if (unpublished !== '0' && !inPrHead) {
+    return { status: 'kept', path: entry.path, reason: 'commits that are not on GitHub' }
+  }
+  await git(clone, ['worktree', 'remove', entry.path])
+  for (const ref of [`refs/prism/pr-${pr.number}`, `refs/prism/pr-${pr.number}-checkout`]) {
+    await tryGit(clone, ['update-ref', '-d', ref])
+  }
+  return { status: 'removed', path: entry.path }
 }
 
 async function prepareLocked(

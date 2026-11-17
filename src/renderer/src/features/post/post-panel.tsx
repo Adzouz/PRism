@@ -293,8 +293,13 @@ function ReviewSection({ gate, run }: { gate: PostGate; run: Run }) {
         {gate.modeFromRepo && (
           <p className="text-xs text-muted-foreground">Default for this repository</p>
         )}
+        {gate.mode === 'submit' && ownPr && (
+          <p className="text-xs text-muted-foreground">
+            Submits as a Comment, the only status GitHub allows on your own pull request.
+          </p>
+        )}
       </section>
-      {gate.mode === 'submit' && (
+      {gate.mode === 'submit' && !ownPr && (
         <section className="space-y-2">
           <Heading>Review status</Heading>
           <ToggleGroup
@@ -315,11 +320,6 @@ function ReviewSection({ gate, run }: { gate: PostGate; run: Run }) {
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
-          {ownPr && (
-            <p className="text-xs text-muted-foreground">
-              GitHub only lets you comment on your own pull request.
-            </p>
-          )}
         </section>
       )}
       <section className="space-y-2">

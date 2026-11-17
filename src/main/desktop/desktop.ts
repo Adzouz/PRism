@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, Menu, nativeImage, Notification, Tray } from 'electron'
+import { app, BrowserWindow, Menu, nativeImage, Notification, shell, Tray } from 'electron'
 import type { OpenTarget, Run, RunStatus } from '@shared/domain'
 import type { Ctx } from '../services/context'
 import {
@@ -26,6 +26,7 @@ export type DesktopDeps = {
 
 const dedupeWindow = 30 * 60_000
 const keptNotifications = 50
+const systemSettingsUrl = 'x-apple.systempreferences:com.apple.Notifications-Settings.extension'
 
 const menuHeaders = () =>
   process.platform === 'darwin' && Number(process.getSystemVersion().split('.')[0]) >= 14
@@ -208,6 +209,8 @@ export function createDesktop(deps: DesktopDeps) {
         true,
       )
     },
+
+    openSystemSettings: () => shell.openExternal(systemSettingsUrl),
 
     dispose() {
       disposed = true

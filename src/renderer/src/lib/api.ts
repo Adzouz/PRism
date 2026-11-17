@@ -422,4 +422,7 @@ export function useSetNotificationSettings() {
 export const useTestNotification = () =>
   useMutation({ mutationFn: () => invoke('notifications:test') })
 
+export const useOpenNotificationSettings = () =>
+  useMutation({ mutationFn: () => invoke('notifications:openSettings') })
+
 export { runStageFor } from '@shared/domain'

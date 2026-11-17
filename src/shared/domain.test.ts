@@ -107,4 +107,8 @@ describe('withAiTag', () => {
     expect(withAiTag(body)).toBe(`${body}\n\n${aiTag}`)
     expect(withAiTag('Drafted by AI, reviewed.')).toBe(`Drafted by AI, reviewed.\n\n${aiTag}`)
   })
+
+  it('keeps a single tag on a body that is only the tag', () => {
+    expect(withAiTag(`${aiTag}\n`)).toBe(aiTag)
+  })
 })

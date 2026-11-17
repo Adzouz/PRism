@@ -853,6 +853,7 @@ const isAiSignature = (line: string) => {
 }
 
 export function withoutAiSignature(body: string) {
+  if (body.trim() === aiTag) return ''
   const lines = body.trimEnd().split('\n')
   while (lines.length > 2 && lines.at(-2)!.trim() === '' && isAiSignature(lines.at(-1)!)) {
     lines.pop()

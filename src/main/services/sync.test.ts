@@ -632,22 +632,25 @@ describe('sync events', () => {
     expect((await syncRepo(ctx, late.api, repo, me)).events).toEqual([])
   })
 
-  it('passes events to the sync hooks', async () => {
+  it('passes events to the sync hooks and says when each sync is done', async () => {
     const { ctx } = await strictCtx()
     let fixture: Fixture = {}
     const { api } = fakeApi(() => fixture)
     const received: PrEvent[] = []
+    let synced = 0
     const sync = createSyncService(ctx, api, {
       status: () => {},
       changed: () => {},
       login: async () => me,
       enabled: () => true,
       events: (events) => received.push(...events),
+      synced: () => synced++,
     })
     await sync.syncNow(true)
     fixture = { req: [makePr()] }
     await sync.syncNow(true)
     expect(kinds(received)).toEqual(['reviewRequested'])
+    expect(synced).toBe(2)
   })
 })
 

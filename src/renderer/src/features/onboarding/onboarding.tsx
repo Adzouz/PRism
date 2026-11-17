@@ -18,6 +18,7 @@ import { InitialScan } from './initial-scan'
 import { RepoSetup } from './repo-setup'
 import { StepAgent } from './step-agent'
 import { StepGithub } from './step-github'
+import { StepNotifications } from './step-notifications'
 import { StepRepos } from './step-repos'
 import { Summary, type EditTarget } from './summary'
 
@@ -26,8 +27,11 @@ const steps = [
   { id: 'agent', label: 'Agent', title: 'Pick your agent' },
   { id: 'repos', label: 'Repositories', title: 'Add repositories' },
   { id: 'setup', label: 'Repository setup', title: 'Set up each repository' },
+  { id: 'notifications', label: 'Notifications', title: 'Turn on notifications' },
   { id: 'finish', label: 'Review', title: 'Review your setup' },
 ] as const
+
+const optionalSteps = new Set<string>(['notifications'])
 
 type StepId = (typeof steps)[number]['id']
 
@@ -75,6 +79,7 @@ export function OnboardingPage() {
   const [step, setStep] = useState<StepId>('github')
   const [repoTab, setRepoTab] = useState<number | null>(null)
   const [scanning, setScanning] = useState(false)
+  const [notified, setNotified] = useState(false)
   const edit = (target: EditTarget) => {
     if (target.repoId) setRepoTab(target.repoId)
     setStep(target.step)
@@ -91,6 +96,7 @@ export function OnboardingPage() {
     agent: Boolean(agent),
     repos: repos.length > 0,
     setup: repos.length > 0 && !status?.issues.some((issue) => issue.repoId !== null),
+    notifications: notified,
     finish: Boolean(status?.valid && status.onboarded),
   }
 
@@ -149,6 +155,9 @@ export function OnboardingPage() {
           {!scanning && step === 'agent' && <StepAgent />}
           {!scanning && step === 'repos' && <StepRepos />}
           {!scanning && step === 'setup' && <RepoTabs selected={repoTab} onSelect={setRepoTab} />}
+          {!scanning && step === 'notifications' && (
+            <StepNotifications onAsked={() => setNotified(true)} />
+          )}
           {!scanning && step === 'finish' && <Summary onEdit={edit} />}
           <ErrorText error={complete.error} />
         </div>
@@ -166,7 +175,10 @@ export function OnboardingPage() {
           Back
         </Button>
         {next ? (
-          <Button disabled={!doneByStep[step]} onClick={() => setStep(next.id)}>
+          <Button
+            disabled={!doneByStep[step] && !optionalSteps.has(step)}
+            onClick={() => setStep(next.id)}
+          >
             Continue
             <ArrowRight />
           </Button>

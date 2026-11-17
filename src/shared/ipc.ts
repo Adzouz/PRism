@@ -397,6 +397,10 @@ export const ipcContract = {
     input: z.void(),
     output: z.boolean(),
   },
+  'notifications:openSettings': {
+    input: z.void(),
+    output: z.void(),
+  },
   'app:pendingOpen': {
     input: z.void(),
     output: openTarget.nullable(),

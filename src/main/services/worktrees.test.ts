@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +9,7 @@ import {
   parseWorktreeList,
   prepareWorktree,
   remoteUrls,
+  removePrWorktree,
   unblockedPushRemotes,
   type PrCheckout,
 } from './worktrees'
@@ -288,5 +290,78 @@ describe('worktrees', () => {
     )
     expect(results.map((result) => result.headOid)).toEqual([head, head, head])
     expect(new Set(results.map((result) => result.path)).size).toBe(3)
+  })
+})
+
+describe('removePrWorktree', () => {
+  it('removes a clean worktree with its ignored files and PRism refs, and keeps the branch', async () => {
+    const { base, clone, head, options } = await setup()
+    const worktree = await prepareWorktree(options, pr({ headOid: head }))
+    await writeFile(join(clone, '.git/info/exclude'), 'node_modules/\n')
+    await mkdir(join(worktree.path, 'node_modules/pkg'), { recursive: true })
+    await writeFile(join(worktree.path, 'node_modules/pkg/index.js'), 'module.exports = 1')
+    expect(git(clone, 'for-each-ref', 'refs/prism')).not.toBe('')
+
+    const removed = await removePrWorktree(options, { number: 7, headOid: head })
+
+    expect(removed).toEqual({ status: 'removed', path: join(base, 'wts/pr-7') })
+    expect(existsSync(worktree.path)).toBe(false)
+    expect(git(clone, 'worktree', 'list')).not.toContain('pr-7')
+    expect(git(clone, 'for-each-ref', 'refs/prism')).toBe('')
+    expect(git(clone, 'rev-parse', 'feature')).toBe(head)
+    expect(await removePrWorktree(options, { number: 7, headOid: head })).toEqual({
+      status: 'missing',
+    })
+  })
+
+  it('keeps a worktree with changes or commits that are not on GitHub', async () => {
+    const { head, options } = await setup()
+    const worktree = await prepareWorktree(options, pr({ headOid: head }))
+    const closed = { number: 7, headOid: head }
+
+    await writeFile(join(worktree.path, 'a.txt'), 'changed')
+    expect(await removePrWorktree(options, closed)).toEqual({
+      status: 'kept',
+      path: worktree.path,
+      reason: 'uncommitted changes',
+    })
+    git(worktree.path, 'checkout', '--', 'a.txt')
+    await writeFile(join(worktree.path, 'notes.txt'), 'new file')
+    expect(await removePrWorktree(options, closed)).toMatchObject({ reason: 'uncommitted changes' })
+    const local = await commit(worktree.path, 'notes.txt', 'new file')
+    expect(await removePrWorktree(options, closed)).toMatchObject({
+      status: 'kept',
+      reason: 'commits that are not on GitHub',
+    })
+    expect(existsSync(worktree.path)).toBe(true)
+
+    expect(await removePrWorktree(options, { number: 7, headOid: local })).toMatchObject({
+      status: 'removed',
+    })
+  })
+
+  it('leaves a folder that is not a worktree of the clone', async () => {
+    const { options } = await setup()
+    const folder = join(options.root, 'pr-9')
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, 'keep.txt'), 'mine')
+    expect(await removePrWorktree(options, { number: 9, headOid: '' })).toMatchObject({
+      status: 'kept',
+      path: folder,
+    })
+    expect(existsSync(join(folder, 'keep.txt'))).toBe(true)
+  })
+
+  it('removes a worktree created under a symlinked root', async () => {
+    const { base, head, options } = await setup()
+    await mkdir(options.root, { recursive: true })
+    const link = join(base, 'link')
+    await symlink(options.root, link)
+    const linked = { ...options, root: link }
+    const worktree = await prepareWorktree(linked, pr({ headOid: head }))
+    expect(await removePrWorktree(linked, { number: 7, headOid: head })).toEqual({
+      status: 'removed',
+      path: worktree.path,
+    })
   })
 })
