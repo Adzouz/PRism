@@ -14,6 +14,7 @@ Status: early development. See [Status](AGENTS.md#status) for what works today a
 - **Agent runs:** drag a card into Reviewing (or Addressing), or pick a stage in the drawer (review, re-review, test plan, address comments, draft replies), to run the bound skill with Claude in a dedicated git worktree per pull request. Address and draft-replies runs work on the review threads you pick. Runs go in parallel, stream a live transcript, report a verdict, findings, changes or draft replies, and pause in a Needs you column with an inline answer form when the agent has a question. Re-reviews cover only what changed since the last review (PRism works it out, including after a force-push) and never repeat an open finding; a Full review reads everything again. Sessions resume after an answer or an app restart, take follow-up messages, and open in your terminal (`claude --resume`) or editor.
 - **Post gate:** a Post tab for every finished review, address or draft-replies run, with a live checklist. Include, exclude or edit findings, pick the review status (pre-filled from the verdict) and submit now or stage a pending draft (pending draft by default, overridable per repository in Settings). Address runs commit and push from the gate, and PRism checks the new head on GitHub before posting the replies you tick. Everything PRism posts ends with an AI tag line, and nothing is posted until you click.
 - **Dashboard:** open pull requests, open issues, pull requests awaiting your review and your own open ones, each with the change since yesterday; pull requests opened, merged and closed per day (from GitHub search, so it fills from day one); the open pull requests at the end of each day over 30 days, from GitHub search too; your median review latency over 7 and 30 days; agents waiting for an answer and the ones running. Filter by repository.
+- **Notifications and menu bar:** native notifications when an agent asks a question (answer it right from the notification), a run finishes or fails, someone requests your review, or checks fail on your pull request. A Dock badge and a menu bar item count the agent questions and runs ready to post; the menu lists them, then the pull requests where it's your turn (to review, re-review, approve or address) and the agents running. Each kind can be turned off in Settings; hidden pull requests stay quiet.
 - **Guardrails:** agents work in their pull request's worktree. A command guard, a read-only `gh` shim, a push block and a prompt contract keep them from committing, pushing or posting, and project settings come from your own clone, never from the pull request. These layers stop accidents and naive prompt injection; they are not a sandbox.
 
 ## Requirements
@@ -56,7 +57,7 @@ src/
   shared/       Domain types and the zod-validated IPC contract
   main/agents/  Agent adapters, PRism MCP tools, guardrails
 drizzle/        SQL migrations
-resources/      Built-in starter skills
+resources/      Built-in starter skills, menu bar icon
 scripts/        Denylist check, local install
 ```
 

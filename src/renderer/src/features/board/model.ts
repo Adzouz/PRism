@@ -1,7 +1,16 @@
 import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { boardColumns, type BoardPr, type BoardStage, type BoardTab } from '@shared/domain'
+import {
+  boardColumns,
+  isNeedsMe,
+  type BoardPr,
+  type BoardStage,
+  type BoardTab,
+  type DrawerTab,
+} from '@shared/domain'
+
+export { isNeedsMe, readyToPost } from '@shared/domain'
 
 export type Density = 'comfortable' | 'compact'
 
@@ -20,8 +29,6 @@ const emptyFilters: Filters = {
   showHidden: false,
   search: '',
 }
-
-export type DrawerTab = 'overview' | 'runs' | 'post'
 
 type BoardStore = {
   filters: Record<BoardTab, Filters>
@@ -87,21 +94,6 @@ export const useBoardStore = create<BoardStore>()(
     },
   ),
 )
-
-const needsMeStages = (tab: BoardTab) =>
-  new Set(boardColumns[tab].filter((column) => column.needsMe).map((column) => column.stage))
-
-export const readyToPost = (pr: BoardPr) =>
-  pr.run?.status === 'done' &&
-  !pr.run.gateClosed &&
-  (pr.stage === 'reviewing' || pr.stage === 'addressing')
-
-export function isNeedsMe(pr: BoardPr) {
-  return (
-    pr.run?.status === 'needs_you' ||
-    (pr.state === 'OPEN' && (needsMeStages(pr.tab).has(pr.stage) || readyToPost(pr)))
-  )
-}
 
 export const hasLiveRun = (pr: BoardPr) =>
   pr.run !== null && ['queued', 'preparing', 'running', 'needs_you'].includes(pr.run.status)

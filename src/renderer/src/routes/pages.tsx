@@ -1,10 +1,10 @@
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowUpRight, ChevronDown, RotateCcw } from 'lucide-react'
-import { postModeLabels, type PostMode, type Repo } from '@shared/domain'
+import { ArrowUpRight, BellRing, ChevronDown, RotateCcw } from 'lucide-react'
+import { postModeLabels, type NotificationSettings, type PostMode, type Repo } from '@shared/domain'
 import { GithubIcon } from '@/components/github-icon'
-import { Page, Section } from '@/components/page'
+import { ErrorText, Page, Section } from '@/components/page'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ThemeSwitch } from '@/components/theme-switch'
@@ -26,11 +26,14 @@ import {
   useAction,
   useBoardSettings,
   useConfigStatus,
+  useNotificationSettings,
   usePostMode,
   useRepos,
+  useSetNotificationSettings,
   useSetPostMode,
   useSetRepoPostMode,
   useSkillsChanged,
+  useTestNotification,
 } from '@/lib/api'
 import { useRepoFocus } from '@/lib/repo-focus'
 import { cn } from '@/lib/utils'
@@ -201,6 +204,90 @@ function BoardOptions() {
   )
 }
 
+const notificationRows: {
+  key: keyof NotificationSettings
+  title: string
+  description: string
+}[][] = [
+  [
+    {
+      key: 'needsYou',
+      title: 'Agent questions',
+      description: 'An agent waits for your answer. Reply right from the notification.',
+    },
+    {
+      key: 'runFinished',
+      title: 'Finished runs',
+      description: 'A run is done and ready to post, or it failed.',
+    },
+    {
+      key: 'reviewRequested',
+      title: 'Review requests',
+      description: 'Someone asks for your review.',
+    },
+    {
+      key: 'ciFailed',
+      title: 'Failing checks',
+      description: 'A check fails on one of your pull requests.',
+    },
+  ],
+  [
+    {
+      key: 'dockBadge',
+      title: 'Dock badge',
+      description: 'Counts agent questions and runs ready to post.',
+    },
+    {
+      key: 'menuBar',
+      title: 'Menu bar',
+      description: 'What needs you and the agents running, one click away.',
+    },
+  ],
+]
+
+function NotificationOptions() {
+  const { data: settings } = useNotificationSettings()
+  const save = useSetNotificationSettings()
+  const test = useTestNotification()
+  return (
+    <div className="max-w-2xl space-y-3">
+      {notificationRows.map((rows) => (
+        <div key={rows[0]!.key} className="divide-y rounded-2xl bg-surface">
+          {rows.map((row) => (
+            <label key={row.key} className="flex items-center justify-between gap-4 px-5 py-4">
+              <div>
+                <p className="text-base font-medium">{row.title}</p>
+                <p className="text-sm text-muted-foreground">{row.description}</p>
+              </div>
+              <Switch
+                checked={settings?.[row.key] ?? true}
+                disabled={!settings}
+                onCheckedChange={(checked) => save.mutate({ [row.key]: checked })}
+              />
+            </label>
+          ))}
+        </div>
+      ))}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+        <p className="text-sm text-muted-foreground">
+          Banners show while PRism is in the background; macOS asks to allow them the first time.
+          Hidden pull requests stay quiet.
+        </p>
+        <Button size="sm" variant="outline" disabled={test.isPending} onClick={() => test.mutate()}>
+          <BellRing />
+          Send a test
+        </Button>
+      </div>
+      <ErrorText error={save.error ?? test.error} />
+      {test.data === false && (
+        <p role="alert" className="text-sm text-destructive">
+          This Mac does not support notifications from PRism.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export function SettingsPage() {
   const { data: info } = useQuery({
     queryKey: ['app', 'info'],
@@ -289,6 +376,9 @@ export function SettingsPage() {
       </Section>
       <Section title="Posting">
         <PostingOptions />
+      </Section>
+      <Section title="Notifications">
+        <NotificationOptions />
       </Section>
       <Section title="Appearance">
         <div className="flex max-w-2xl items-center justify-between gap-4 rounded-2xl bg-surface p-5">

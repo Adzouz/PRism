@@ -1,0 +1,1 @@
+ALTER TABLE `repos` ADD `last_synced_at` integer;

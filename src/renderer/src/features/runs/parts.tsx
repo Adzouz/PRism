@@ -10,7 +10,7 @@ import {
   MessageCircleQuestion,
   Send,
 } from 'lucide-react'
-import type { Ask, ReviewReport, RunStatus } from '@shared/domain'
+import { verdictLabels, type Ask, type ReviewReport, type RunStatus } from '@shared/domain'
 import { ErrorText } from '@/components/page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -61,11 +61,7 @@ export function RunStatusBadge({ status }: { status: RunStatus }) {
   )
 }
 
-export const verdictLabel: Record<ReviewReport['verdict'], string> = {
-  approve: 'Approve',
-  comment: 'Comment',
-  request_changes: 'Request changes',
-}
+export const verdictLabel = verdictLabels
 
 export const verdictTone: Record<ReviewReport['verdict'], 'success' | 'default' | 'destructive'> = {
   approve: 'success',

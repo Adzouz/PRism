@@ -77,6 +77,10 @@ export const ipcChannels = [
   'settings:getPostMode',
   'settings:setPostMode',
   'repos:setPostMode',
+  'settings:getNotifications',
+  'settings:setNotifications',
+  'notifications:test',
+  'app:pendingOpen',
 ] as const
 
 export type IpcChannel = (typeof ipcChannels)[number]
@@ -93,6 +97,7 @@ export const ipcEvents = [
   'sync:status',
   'runs:changed',
   'runs:event',
+  'app:openPr',
 ] as const
 
 export type IpcEvent = (typeof ipcEvents)[number]

@@ -41,6 +41,7 @@ export const repos = sqliteTable(
     qaLabelsJson: text('qa_labels_json').notNull().default('[]'),
     postMode: text('post_mode', { enum: ['submit', 'draft'] }),
     addedAt: integer('added_at').notNull(),
+    lastSyncedAt: integer('last_synced_at'),
   },
   (t) => [uniqueIndex('repos_owner_name').on(t.owner, t.name)],
 )

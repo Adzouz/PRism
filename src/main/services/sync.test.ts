@@ -2,6 +2,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { eq } from 'drizzle-orm'
 import { openDb } from '../db/client'
 import { activity, repos, snapshots } from '../db/schema'
 import type { Ctx } from './context'
@@ -18,6 +19,7 @@ import {
   myReviewOf,
   syncRepo,
   type GqlPr,
+  type PrEvent,
 } from './sync'
 
 const migrations = resolve(__dirname, '../../../drizzle')
@@ -246,7 +248,7 @@ describe('syncRepo', () => {
 
     const counts = await syncRepo(ctx, api, repo, me)
 
-    expect(counts).toEqual({ reviews: 1, mine: 2 })
+    expect(counts).toEqual({ reviews: 1, mine: 2, events: [] })
     const board = listPrs(ctx)
     expect(board).toHaveLength(3)
     const byNumber = new Map(board.map((pr) => [pr.number, pr]))
@@ -511,7 +513,11 @@ describe('review and check edge cases', () => {
   it('does not fail the repo sync when the snapshot fails', async () => {
     const { ctx, repo } = await makeCtx()
     const { api } = fakeApi(() => ({ req: [makePr()], countsFail: true }))
-    await expect(syncRepo(ctx, api, repo, me)).resolves.toEqual({ reviews: 1, mine: 0 })
+    await expect(syncRepo(ctx, api, repo, me)).resolves.toEqual({
+      reviews: 1,
+      mine: 0,
+      events: [],
+    })
   })
 
   it('resolves pending CI when only ignored checks are pending', async () => {
@@ -538,6 +544,110 @@ describe('review and check edge cases', () => {
     }) as typeof api.graphql
     await syncRepo(ctx, api, repo, me)
     expect(listPrs(ctx)[0]?.ciState).toBe('success')
+  })
+})
+
+describe('sync events', () => {
+  const failing = {
+    commits: {
+      nodes: [
+        {
+          commit: {
+            statusCheckRollup: {
+              contexts: {
+                checkRunCountsByState: [{ state: 'FAILURE', count: 1 }],
+                statusContextCountsByState: [],
+              },
+            },
+          },
+        },
+      ],
+    },
+  }
+
+  async function strictCtx() {
+    const { ctx, repo } = await makeCtx()
+    ctx.db.update(repos).set({ ignoredChecksJson: '[]' }).where(eq(repos.id, repo.id)).run()
+    return { ctx, repo: getRepo(ctx, repo.id) }
+  }
+
+  const kinds = (events: PrEvent[]) => events.map((event) => event.kind)
+
+  it('stays quiet on the first sync of a repository', async () => {
+    const { ctx, repo } = await strictCtx()
+    const mine = makePr({ author: { login: me, avatarUrl: '' }, ...failing })
+    const { api } = fakeApi(() => ({ req: [makePr()], auth: [mine] }))
+    expect((await syncRepo(ctx, api, repo, me)).events).toEqual([])
+    expect(ctx.db.select().from(repos).get()?.lastSyncedAt).not.toBeNull()
+  })
+
+  it('reports new review requests once', async () => {
+    const { ctx, repo } = await strictCtx()
+    const known = makePr({
+      reviews: {
+        nodes: [
+          { state: 'COMMENTED', submittedAt: '2026-11-03T10:00:00Z', commit: { oid: 'head1' } },
+        ],
+      },
+    })
+    let fixture: Fixture = { rev: [known] }
+    const { api } = fakeApi(() => fixture)
+    await syncRepo(ctx, api, repo, me)
+    expect(listPrs(ctx)).toMatchObject([{ number: known.number, reviewRequested: false }])
+
+    const fresh = makePr()
+    fixture = { req: [known, fresh] }
+    const { events } = await syncRepo(ctx, api, repo, me)
+    const ids = new Map(listPrs(ctx).map((pr) => [pr.number, pr.id]))
+    expect(events).toEqual([
+      { kind: 'reviewRequested', prId: ids.get(known.number), headOid: 'head1' },
+      { kind: 'reviewRequested', prId: ids.get(fresh.number), headOid: 'head1' },
+    ])
+    expect((await syncRepo(ctx, api, repo, me)).events).toEqual([])
+  })
+
+  it('reports failing checks on my pull requests once per head', async () => {
+    const { ctx, repo } = await strictCtx()
+    let mine = makePr({ author: { login: me, avatarUrl: '' } })
+    const theirs = makePr({ ...failing })
+    const { api } = fakeApi(() => ({ auth: [mine], rev: [theirs] }))
+    await syncRepo(ctx, api, repo, me)
+
+    mine = { ...mine, ...failing }
+    expect(kinds((await syncRepo(ctx, api, repo, me)).events)).toEqual(['ciFailed'])
+    expect((await syncRepo(ctx, api, repo, me)).events).toEqual([])
+
+    mine = { ...mine, headRefOid: 'head2' }
+    expect((await syncRepo(ctx, api, repo, me)).events).toMatchObject([
+      { kind: 'ciFailed', headOid: 'head2' },
+    ])
+  })
+
+  it('reports nothing for closed pull requests', async () => {
+    const { ctx, repo } = await strictCtx()
+    const { api } = fakeApi(() => ({ rev: [] }))
+    await syncRepo(ctx, api, repo, me)
+    const closed = makePr({ state: 'CLOSED', closedAt: '2026-11-03T10:00:00Z' })
+    const late = fakeApi(() => ({ req: [closed] }))
+    expect((await syncRepo(ctx, late.api, repo, me)).events).toEqual([])
+  })
+
+  it('passes events to the sync hooks', async () => {
+    const { ctx } = await strictCtx()
+    let fixture: Fixture = {}
+    const { api } = fakeApi(() => fixture)
+    const received: PrEvent[] = []
+    const sync = createSyncService(ctx, api, {
+      status: () => {},
+      changed: () => {},
+      login: async () => me,
+      enabled: () => true,
+      events: (events) => received.push(...events),
+    })
+    await sync.syncNow(true)
+    fixture = { req: [makePr()] }
+    await sync.syncNow(true)
+    expect(kinds(received)).toEqual(['reviewRequested'])
   })
 })
 
