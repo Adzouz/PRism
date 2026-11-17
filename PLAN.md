@@ -242,7 +242,7 @@ Cost/time win: a typical re-review reads a few hundred lines instead of the whol
 
 ## 8. Post gate (after every review or address run)
 
-When a run ends, its card stays in Reviewing or Addressing, marked ready to post, and the drawer's **Actions** tab shows a live checklist. The tab lists every gate of the pull request as a timeline, newest first, with **Ask agent anything** on the selected one. The post button unlocks only when every check passes:
+When a run ends, its card stays in Reviewing or Addressing, marked ready to post, and the drawer's **Actions** tab shows a live checklist. The tab lists every gate of the pull request as a timeline, newest first, with **Ask agent anything** on the selected one, which jumps to that run in the Runs tab. The post button unlocks only when every check passes:
 
 **After a review**
 - [ ] Findings validated (include/exclude/edit each)
@@ -270,7 +270,7 @@ When a run ends, its card stays in Reviewing or Addressing, marked ready to post
 Tabs:
 - **Overview:** checks (ignoring the repo's expected-red checks), reviewers, linked issues, labels, description.
 - **Runs:** each run's live transcript and report (verdict, findings, changes or draft replies), tokens/cost; answer a question, send a follow-up, dismiss. Footer: open the worktree in your editor, or resume the agent session in your terminal.
-- **Actions:** the post gates as a timeline, newest first: each step shows its outcome (ready to post, submitted, staged, skipped), the selected one expands to its checklist, and Ask agent anything continues the run's session.
+- **Actions:** the post gates as a timeline, newest first: each step shows its outcome (ready to post, submitted, staged, skipped), the selected one expands to its checklist, and Ask agent anything opens that run in the Runs tab with the message box focused, to continue its session.
 - Planned: a **Findings** tab anchored on the diff with the ledger history, and a **Changes** tab with the worktree diff.
 
 ---

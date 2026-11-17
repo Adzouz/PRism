@@ -45,6 +45,7 @@ import {
   usePrRuns,
   usePrThreads,
   useResumeInTerminal,
+  useRunEvents,
   useRunFindings,
   useStartRun,
 } from '@/lib/api'
@@ -214,17 +215,7 @@ function Changes({
   )
 }
 
-export function FollowUp({
-  run,
-  onClose,
-  onSent,
-  placeholder = 'Ask the agent to check or change something in this run…',
-}: {
-  run: Run
-  onClose: () => void
-  onSent?: () => void
-  placeholder?: string
-}) {
+function FollowUp({ run, onClose }: { run: Run; onClose: () => void }) {
   const [text, setText] = useState('')
   const followUp = useFollowUp()
   const form = useRef<HTMLFormElement>(null)
@@ -234,15 +225,7 @@ export function FollowUp({
   const send = (event?: FormEvent) => {
     event?.preventDefault()
     if (!text.trim() || followUp.isPending) return
-    followUp.mutate(
-      { runId: run.id, message: text.trim() },
-      {
-        onSuccess: () => {
-          setText('')
-          onSent?.()
-        },
-      },
-    )
+    followUp.mutate({ runId: run.id, message: text.trim() }, { onSuccess: () => setText('') })
   }
   return (
     <form ref={form} onSubmit={send} className="space-y-1.5">
@@ -257,7 +240,7 @@ export function FollowUp({
           rows={2}
           autoFocus
           aria-label="Follow-up message"
-          placeholder={placeholder}
+          placeholder="Ask the agent to check or change something in this run…"
           className="min-h-9 flex-1 resize-none rounded-lg border bg-background px-2.5 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
         />
         <Button
@@ -276,7 +259,15 @@ export function FollowUp({
 }
 
 function NextActions({ run, canAsk, onPost }: { run: Run; canAsk: boolean; onPost: () => void }) {
+  const askRunId = useBoardStore((state) => state.askRunId)
+  const clearAsk = useBoardStore((state) => state.clearAsk)
+  const transcript = useRunEvents(run.id)
   const [asking, setAsking] = useState(false)
+  const open = asking || askRunId === run.id
+  const close = () => {
+    setAsking(false)
+    if (askRunId === run.id) clearAsk()
+  }
   const toPost = run.status === 'done' && gateKindOf[run.stage] !== undefined
   if (!toPost && !canAsk) return null
   return (
@@ -288,14 +279,14 @@ function NextActions({ run, canAsk, onPost }: { run: Run; canAsk: boolean; onPos
             Continue to Actions
           </Button>
         )}
-        {canAsk && !asking && (
+        {canAsk && !open && (
           <Button variant="outline" onClick={() => setAsking(true)}>
             <MessageSquare />
             Ask agent anything
           </Button>
         )}
       </div>
-      {canAsk && asking && <FollowUp run={run} onClose={() => setAsking(false)} />}
+      {canAsk && open && !transcript.isLoading && <FollowUp run={run} onClose={close} />}
     </section>
   )
 }

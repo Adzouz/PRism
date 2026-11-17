@@ -36,12 +36,15 @@ type BoardStore = {
   openPrId: number | null
   drawerTab: DrawerTab
   openRunId: number | null
+  askRunId: number | null
   dropConfirmed: Partial<Record<BoardStage, boolean>>
   setFilters: (tab: BoardTab, patch: Partial<Filters>) => void
   setDensity: (density: Density) => void
   openPr: (id: number | null, tab?: DrawerTab, runId?: number | null) => void
   setDrawerTab: (tab: DrawerTab) => void
   selectRun: (runId: number | null) => void
+  askAgent: (prId: number, runId: number) => void
+  clearAsk: () => void
   confirmDrop: (column: BoardStage) => void
 }
 
@@ -66,6 +69,7 @@ export const useBoardStore = create<BoardStore>()(
       openPrId: null,
       drawerTab: 'overview',
       openRunId: null,
+      askRunId: null,
       dropConfirmed: {},
       setFilters: (tab, patch) =>
         set((state) => ({
@@ -73,9 +77,12 @@ export const useBoardStore = create<BoardStore>()(
         })),
       setDensity: (density) => set({ density }),
       openPr: (openPrId, drawerTab = 'overview', openRunId = null) =>
-        set({ openPrId, drawerTab, openRunId }),
+        set({ openPrId, drawerTab, openRunId, askRunId: null }),
       setDrawerTab: (drawerTab) => set({ drawerTab }),
       selectRun: (openRunId) => set({ openRunId }),
+      askAgent: (openPrId, openRunId) =>
+        set({ openPrId, drawerTab: 'runs', openRunId, askRunId: openRunId }),
+      clearAsk: () => set({ askRunId: null }),
       confirmDrop: (column) =>
         set((state) => ({ dropConfirmed: { ...state.dropConfirmed, [column]: true } })),
     }),

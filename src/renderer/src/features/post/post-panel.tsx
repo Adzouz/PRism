@@ -51,7 +51,7 @@ import { cn } from '@/lib/utils'
 import { age, useBoardStore, useNow } from '../board/model'
 import { NextStepButton } from '../board/next-step'
 import { Loading, Markdown, verdictLabel } from '../runs/parts'
-import { FollowUp, Heading, severityOrder, severityTone, ThreadContext } from '../runs/runs-panel'
+import { Heading, severityOrder, severityTone, ThreadContext } from '../runs/runs-panel'
 
 type Verdict = PostGate['event']
 
@@ -608,9 +608,8 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
   const { data: gate, error, isLoading, refetch, isFetching } = useGate(run.id)
   const post = usePost()
   const skip = useSkipPost()
-  const openPr = useBoardStore((state) => state.openPr)
+  const askAgent = useBoardStore((state) => state.askAgent)
   const now = useNow()
-  const [asking, setAsking] = useState(false)
   if (isLoading) return <Loading>Checking what is ready to post…</Loading>
   if (!gate) return <ErrorText error={error} />
   const closed = gate.postedAt !== null || gate.skippedAt !== null
@@ -622,8 +621,8 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
         <div className="flex min-h-7 flex-wrap items-center gap-x-2 text-sm">
           <StepTitle run={run} now={now} />
           <div className="ml-auto flex items-center gap-1">
-            {canAsk && !asking && (
-              <Button size="sm" variant="ghost" onClick={() => setAsking(true)}>
+            {canAsk && (
+              <Button size="sm" variant="ghost" onClick={() => askAgent(pr.id, run.id)}>
                 <MessageSquare />
                 Ask agent anything
               </Button>
@@ -642,14 +641,6 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
             )}
           </div>
         </div>
-        {canAsk && asking && (
-          <FollowUp
-            run={run}
-            placeholder="Ask about this step, or ask the agent to check something…"
-            onClose={() => setAsking(false)}
-            onSent={() => openPr(pr.id, 'runs', run.id)}
-          />
-        )}
       </div>
       {closed ? (
         <Closed gate={gate} pr={pr} />
