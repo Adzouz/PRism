@@ -6,7 +6,7 @@ import { openDb } from '../db/client'
 import { findings, prs, repos } from '../db/schema'
 import type { RunResult } from '../system/exec'
 import type { Ctx } from './context'
-import { createMiradorBridge, miradorNote } from './mirador'
+import { createMiradorBridge, isMiradorHelp, miradorNote } from './mirador'
 import { createRun, saveReview, type NewFinding } from './runs'
 
 const migrations = resolve(__dirname, '../../../drizzle')
@@ -98,6 +98,19 @@ describe('miradorNote', () => {
     )
     expect(miradorNote('request_changes', [nit])).toBe('NO GO — Rename')
     expect(miradorNote('request_changes', [])).toBe('NO GO')
+  })
+})
+
+describe('isMiradorHelp', () => {
+  it('recognizes the Mirador CLI by the commands PRism uses', () => {
+    const help = [
+      'mirador — update Mirador from the terminal or from an AI agent.',
+      '  mirador start [--kind fix|feature|chore|review|community] [--pr N]',
+      '  mirador status <status> [ref]  Set a status',
+      '  mirador note <text> [--ref R]  Add a one-line note.',
+    ].join('\n')
+    expect(isMiradorHelp(help)).toBe(true)
+    expect(isMiradorHelp('Usage: mirador [options] <manifest>')).toBe(false)
   })
 })
 

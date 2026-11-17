@@ -29,13 +29,24 @@ export function miradorNote(
   return word
 }
 
+const usedCommands = ['mirador start', 'mirador status', 'mirador note']
+
+export const isMiradorHelp = (help: string) =>
+  usedCommands.every((command) => help.includes(command))
+
 export function createMiradorBridge(
   ctx: Ctx,
   deps: { exec?: Exec; available?: () => Promise<boolean> } = {},
 ) {
   const exec: Exec =
     deps.exec ?? ((args) => runCommand('mirador', args, { cwd: ctx.userData, timeout: 30_000 }))
-  const available = deps.available ?? (async () => (await which('mirador')) !== null)
+  const available =
+    deps.available ??
+    (async () => {
+      if (!(await which('mirador'))) return false
+      const help = await runCommand('mirador', ['help'], { cwd: ctx.userData, timeout: 10_000 })
+      return help.code === 0 && isMiradorHelp(help.stdout)
+    })
   const warned = new Set<string>()
 
   function target(prId: number) {
