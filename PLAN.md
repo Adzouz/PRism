@@ -198,7 +198,7 @@ Action columns run something when a card is dropped on them; state columns show 
 
 Posting a gate moves the card: review → To approve (GO) or Changes requested (GO WITH NITS, NO GO), or straight to Approved when submitted as Approve; address and replies on My PRs → Waiting review (back to the reviewers). Skipping a gate moves it the same way.
 
-**Next step:** the drawer header, and the summary of a posted or skipped gate, show a split button for cards in state columns. Its main action moves the loop forward (To review / Waiting review / To re-review → review or re-review run, Changes requested → address on My PRs or To re-review on Reviews, To approve → approve); its menu lists every other run, Approve, and every other state column.
+**Next step:** the drawer header, and the summary of a posted or skipped gate, show a split button for cards in state columns. Its main action moves the loop forward (To review / Waiting review / To re-review → review or re-review run, Changes requested → address on My PRs or To re-review on Reviews, To approve → approve); its menu lists every other run, Approve, and every other state column. On My PRs, a card in To approve that still has unresolved comments (the nits of a GO WITH NITS) also shows **Address N comments** next to **Post GO**.
 
 **Card:** repo chip, `#num`, title, author avatar, stage age, CI dot, labels, size, verdict badge, unresolved threads, star, live spinner, Needs-you glow.
 

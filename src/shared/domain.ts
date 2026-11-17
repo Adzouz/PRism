@@ -608,7 +608,10 @@ export function runStageFor(
 export type NextStep =
   { kind: 'run'; stage: Stage } | { kind: 'move'; stage: BoardStage } | { kind: 'approve' }
 
-type NextStepPr = Pick<BoardPr, 'tab' | 'stage' | 'state' | 'reviewed' | 'myReviewState'>
+type NextStepPr = Pick<
+  BoardPr,
+  'tab' | 'stage' | 'state' | 'reviewed' | 'myReviewState' | 'unresolvedThreads'
+>
 
 function primaryNextStep(pr: NextStepPr): NextStep | null {
   switch (pr.stage) {
@@ -627,13 +630,23 @@ function primaryNextStep(pr: NextStepPr): NextStep | null {
   }
 }
 
+function secondaryNextStep(pr: NextStepPr): NextStep | null {
+  return pr.tab === 'mine' && pr.stage === 'to-approve' && pr.unresolvedThreads > 0
+    ? { kind: 'run', stage: 'address' }
+    : null
+}
+
 const sameStep = (a: NextStep, b: NextStep) =>
   a.kind === b.kind && (a.kind === 'approve' || a.stage === (b as typeof a).stage)
 
-export function nextSteps(pr: NextStepPr): { primary: NextStep | null; others: NextStep[] } | null {
+export function nextSteps(
+  pr: NextStepPr,
+): { primary: NextStep | null; secondary: NextStep | null; others: NextStep[] } | null {
   const column = boardColumns[pr.tab].find((item) => item.stage === pr.stage)
   if (pr.state !== 'OPEN' || !column || column.agent) return null
   const primary = primaryNextStep(pr)
+  const secondary = secondaryNextStep(pr)
+  const shown = [primary, secondary].filter((step): step is NextStep => step !== null)
   const all: NextStep[] = [
     ...runStagesByTab[pr.tab].map((value) => ({ kind: 'run' as const, stage: value })),
     ...(column.approve ? [] : [{ kind: 'approve' as const }]),
@@ -641,7 +654,11 @@ export function nextSteps(pr: NextStepPr): { primary: NextStep | null; others: N
       .filter((item) => !item.agent && !item.approve && item.stage !== pr.stage)
       .map((item) => ({ kind: 'move' as const, stage: item.stage })),
   ]
-  return { primary, others: all.filter((step) => !primary || !sameStep(step, primary)) }
+  return {
+    primary,
+    secondary,
+    others: all.filter((step) => !shown.some((item) => sameStep(step, item))),
+  }
 }
 
 export const checkState = z.enum(['success', 'failure', 'pending', 'neutral', 'skipped'])
