@@ -185,10 +185,12 @@ void app.whenReady().then(() => {
     },
     ...onboardingHandlers(ctx, {
       beforeRepoRemoved: (repoId) => runner?.cancelForRepo(repoId),
+      afterRepoRemoved: () => prsChanged(),
       afterRepoAdded: () => {
         if (isOnboarded(ctx)) void sync.syncNow(true)
       },
       beforeReset: () => runner?.cancelAll(),
+      afterReset: () => prsChanged(),
     }),
     ...boardHandlers(ctx, api, sync, prsChanged),
     ...runHandlers(ctx, api, runner),

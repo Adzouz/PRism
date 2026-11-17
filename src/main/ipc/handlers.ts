@@ -63,8 +63,10 @@ async function pick(options: Electron.OpenDialogOptions) {
 
 export type LifecycleHooks = {
   beforeRepoRemoved?: (repoId: number) => void
+  afterRepoRemoved?: (repoId: number) => void
   afterRepoAdded?: (repoId: number) => void
   beforeReset?: () => void
+  afterReset?: () => void
 }
 
 export function onboardingHandlers(
@@ -108,7 +110,9 @@ export function onboardingHandlers(
     },
     'repos:remove': (id) => {
       hooks.beforeRepoRemoved?.(id)
-      return removeRepo(ctx, id)
+      const result = removeRepo(ctx, id)
+      hooks.afterRepoRemoved?.(id)
+      return result
     },
     'repos:locate': (id) => locateRepo(ctx, id),
     'repos:setPath': ({ id, path }) => setRepoPath(ctx, id, path),
@@ -151,9 +155,11 @@ export function onboardingHandlers(
     },
     'config:status': () => configStatus(ctx),
     'onboarding:complete': () => completeOnboarding(ctx),
-    'config:reset': () => {
+    'config:reset': async () => {
       hooks.beforeReset?.()
-      return resetConfiguration(ctx)
+      const result = await resetConfiguration(ctx)
+      hooks.afterReset?.()
+      return result
     },
   }
 }
