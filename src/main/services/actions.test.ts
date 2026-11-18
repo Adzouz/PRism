@@ -32,6 +32,7 @@ type Live = {
   headRefOid: string | (() => string)
   viewerDidAuthor: boolean
   pending: { id: string; body: string; url: string } | null
+  mergeable?: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
 }
 
 function fakeApi(live: Live) {
@@ -52,6 +53,8 @@ function fakeApi(live: Live) {
         node: {
           headRefOid: head,
           viewerDidAuthor: live.viewerDidAuthor,
+          mergeable: live.mergeable ?? 'MERGEABLE',
+          baseRefName: 'main',
           reviews: { nodes: live.pending ? [live.pending] : [] },
         },
       })
@@ -743,6 +746,21 @@ describe('review loop', () => {
     expect(posted.mock.calls).toEqual([
       [reviewId, { event: 'approve', mode: 'submit', eventForced: false }],
     ])
+  })
+
+  it('leaves Approve out and refuses to approve while the pull request has conflicts', async () => {
+    const { ctx, pr, addRun } = await setup()
+    const runId = addRun('review')
+    saveReview(ctx, runId, { ...report, verdict: 'approve' }, [])
+    const fake = fakeApi({ ...live('head1'), mergeable: 'CONFLICTING' })
+    const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => {} } })
+    const gate = await actions.get(runId)
+    expect(gate.allowedEvents).toEqual(['comment', 'request_changes'])
+    expect(gate.event).toBe('comment')
+    expect(gate.warning).toContain('conflicts with main, so GitHub cannot merge it')
+    await expect(actions.approve(pr.id)).rejects.toThrow(/conflicts with main/)
+    expect(fake.named('AddReview')).toEqual([])
+    expect(listPrs(ctx)[0]!.stage).not.toBe('approved')
   })
 
   it('goes straight to Approved when the review is submitted as Approve', async () => {

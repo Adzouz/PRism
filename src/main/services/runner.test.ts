@@ -839,6 +839,75 @@ describe('agent runner', () => {
     expect(listFindings(ctx, run.id).map((item) => item.line)).toEqual([3])
   })
 
+  it('refuses a GO verdict while the pull request conflicts with its base', async () => {
+    const { ctx, ids } = await setup()
+    const dir = await mkdtemp(join(tmpdir(), 'prism-conflict-'))
+    const sh = (...args: string[]) =>
+      execFileSync('git', ['-C', dir, ...args], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'Octo',
+          GIT_AUTHOR_EMAIL: 'octo@example.com',
+          GIT_COMMITTER_NAME: 'Octo',
+          GIT_COMMITTER_EMAIL: 'octo@example.com',
+          GIT_CONFIG_GLOBAL: '/dev/null',
+        },
+      }).trim()
+    execFileSync('git', ['init', '-q', '-b', 'main', dir])
+    await writeFile(join(dir, 'a.txt'), 'one\n')
+    sh('add', '-A')
+    sh('commit', '-qm', 'base')
+    sh('checkout', '-qb', 'feature')
+    await writeFile(join(dir, 'a.txt'), 'two\n')
+    sh('commit', '-qam', 'feature')
+    const head = sh('rev-parse', 'HEAD')
+    sh('checkout', '-q', 'main')
+    await writeFile(join(dir, 'a.txt'), 'three\n')
+    sh('commit', '-qam', 'main')
+    sh('update-ref', 'refs/remotes/origin/main', 'main')
+    sh('checkout', '-q', 'feature')
+    let prompt = ''
+    const replies: string[] = []
+    const { runner, events } = makeRunner(
+      ctx,
+      async (input) => {
+        prompt = input.prompt
+        for (const verdict of ['approve', 'comment'] as const) {
+          try {
+            replies.push(
+              await input.tools.reportFindings({ verdict, summary: 'Done.', dimensions: [] }, []),
+            )
+          } catch (error) {
+            replies.push(`error: ${(error as Error).message}`)
+          }
+        }
+        return ok('s')
+      },
+      undefined,
+      async () => ({
+        path: dir,
+        branch: 'feature',
+        remote: 'origin',
+        baseRemote: 'origin',
+        created: true,
+        headOid: head,
+        warning: null,
+      }),
+    )
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
+    expect(prompt).toContain('## Merge conflicts')
+    expect(prompt).toContain('conflicts with `origin/main` in `a.txt`')
+    expect(replies[0]).toContain('the verdict cannot be approve')
+    expect(replies[1]).toContain('Recorded the comment verdict')
+    expect(getRun(ctx, run.id).report?.verdict).toBe('comment')
+    const notes = events.filter((item) => item.kind === 'note').map((item) => item.payload.text)
+    expect(notes).toContain(
+      'The pull request conflicts with main in a.txt, so a GO verdict is refused until the conflicts are resolved.',
+    )
+  })
+
   it('keeps a different finding on the same code as an open one', async () => {
     const { ctx, ids } = await setup()
     const dir = await mkdtemp(join(tmpdir(), 'prism-repeat-'))

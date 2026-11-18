@@ -28,7 +28,7 @@ import { openInEditor, openInTerminal, resumeCommand, runInTerminal } from './ap
 import { anchorOf } from './anchors'
 import { getAgentConfig } from './config'
 import type { Ctx } from './context'
-import { computeDelta, describeDelta, type Delta } from './delta'
+import { computeDelta, describeDelta, mergeConflicts, type Delta } from './delta'
 import { isCommentable, parseUnifiedDiff, type DiffMap } from './diff'
 import type { GithubApi } from './gh-api'
 import { effectiveBindings, findSkill, readSkillContent, skillDirOf } from './library'
@@ -218,6 +218,19 @@ export function createRunner(deps: RunnerDeps) {
     return cached
   }
 
+  const conflicts = new Map<number, string[]>()
+
+  async function conflictsOf(runId: number) {
+    const known = conflicts.get(runId)
+    if (known) return known
+    const row = getRunRow(ctx, runId)
+    if (!row.worktreePath || !row.reviewedBaseOid || !row.reviewedHeadOid) return []
+    const files =
+      (await mergeConflicts(row.worktreePath, row.reviewedBaseOid, row.reviewedHeadOid)) ?? []
+    conflicts.set(runId, files)
+    return files
+  }
+
   const reviewPosted = (runId: number) =>
     ctx.db
       .select({ postedAt: postGates.postedAt })
@@ -233,6 +246,15 @@ export function createRunner(deps: RunnerDeps) {
           throw new Error(
             'Nothing was recorded: this review is already posted on GitHub, so its findings cannot change. Answer in your reply instead. New commits get a re-review.',
           )
+        }
+        const stage = getRunRow(ctx, runId).stage
+        if (report.verdict === 'approve' && (stage === 'review' || stage === 're-review')) {
+          const files = await conflictsOf(runId)
+          if (files.length > 0) {
+            throw new Error(
+              `Nothing was recorded: the pull request conflicts with its base in ${files.map((file) => `\`${file}\``).join(', ')}, so GitHub cannot merge it and the verdict cannot be approve. Report the conflicts as a finding (line null on a conflicting file) with a comment or request_changes verdict, then call prism_report_findings again with every finding.`,
+            )
+          }
         }
         const map = await prDiff(runId)
         const off = map
@@ -412,6 +434,19 @@ export function createRunner(deps: RunnerDeps) {
       })
       event(runId, 'note', { text: describeDelta(delta) })
     }
+    const conflicted = reviewing
+      ? await mergeConflicts(
+          worktree.path,
+          `${worktree.baseRemote}/${pr.baseRef}`,
+          worktree.headOid,
+        )
+      : null
+    if (conflicted) conflicts.set(runId, conflicted)
+    if (conflicted?.length) {
+      event(runId, 'note', {
+        text: `The pull request conflicts with ${pr.baseRef} in ${conflicted.join(', ')}, so a GO verdict is refused until the conflicts are resolved.`,
+      })
+    }
     update(runId, {
       worktreePath: worktree.path,
       reviewedHeadOid: worktree.headOid,
@@ -440,6 +475,7 @@ export function createRunner(deps: RunnerDeps) {
         worktreeWarning: worktree.warning,
         priorFindings: reviewing ? priorFindings(run.prId) : [],
         delta,
+        conflicts: conflicted ?? [],
         threads,
         findings: addressed,
       }),
