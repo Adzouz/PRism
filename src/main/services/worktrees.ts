@@ -264,10 +264,20 @@ async function prepareLocked(
     }
   } else {
     if (await exists(target)) throw new Error(`${target} exists but is not a worktree of ${clone}`)
-    const hasBranch =
-      branch !== null &&
-      (await tryGit(clone, ['rev-parse', '--verify', `refs/heads/${branch}`])) !== null
-    const detached = branch === null || main?.branch === branch
+    const local =
+      branch === null
+        ? null
+        : await tryGit(clone, ['rev-parse', '--verify', `refs/heads/${branch}`])
+    const hasBranch = local !== null
+    const offHead =
+      local !== null &&
+      (await tryGit(clone, ['merge-base', '--is-ancestor', local, `${startRef}^{commit}`])) === null
+    if (offHead) {
+      log(
+        `Local ${branch} (${local.slice(0, 7)}) is not part of the pull request head; using a detached worktree and leaving the branch as is`,
+      )
+    }
+    const detached = branch === null || main?.branch === branch || offHead
     const force = all.some((entry) => entry.prunable && matches(entry)) ? ['-f'] : []
     const args =
       detached || branch === null
@@ -277,7 +287,7 @@ async function prepareLocked(
           : ['worktree', 'add', ...force, '-b', branch, target, startRef]
     await git(clone, args)
     await installGuard(clone, target, options.hooksDir)
-    if (branch !== null && detached) {
+    if (branch !== null && detached && !offHead) {
       log(`${branch} is checked out in ${clone}; using a detached worktree`)
     }
     if (branch !== null && !hasBranch && !detached && startRef === branchRef) {

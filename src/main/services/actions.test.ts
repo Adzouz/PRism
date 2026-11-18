@@ -31,6 +31,7 @@ type Live = {
   headRefOid: string | (() => string)
   viewerDidAuthor: boolean
   pending: { id: string; body: string; url: string } | null
+  compare?: string
 }
 
 function fakeApi(live: Live) {
@@ -101,6 +102,10 @@ function fakeApi(live: Live) {
     },
     async get<T>(path: string) {
       calls.push({ name: 'GET', input: { path } })
+      if (path.endsWith('?per_page=1')) {
+        if (!live.compare) throw new Error('Not Found')
+        return { status: live.compare } as T
+      }
       return { files: [{ filename: 'src/a.ts', patch }] } as T
     },
     probe: async () => ({ unchanged: false, commit: () => {} }),
@@ -407,6 +412,42 @@ describe('review gate', () => {
     expect(listFindings(ctx, runId)[0]!.posted).toBe(true)
   })
 
+  it('posts on the current head with findings in the body once the reviewed commit left the pull request', async () => {
+    const { ctx, addRun } = await setup()
+    const runId = addRun('review')
+    saveReview(ctx, runId, report, [finding()])
+    const fake = fakeApi({ headRefOid: 'head2', viewerDidAuthor: false, pending: null })
+    const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => {} } })
+    const gate = await actions.update({ runId, confirmed: true })
+    expect(gate.findings.outsideDiff).toBe(1)
+    expect(gate.warning).toMatch(/reviewed commit head1 is no longer on the pull request/)
+    await actions.post(runId)
+    const [call] = fake.named('AddReview')
+    expect(call!.input).not.toHaveProperty('commitOID')
+    expect(call!.input).toMatchObject({ threads: [] })
+    expect(call!.input.body).toContain('`src/a.ts:2` **Off by one**')
+  })
+
+  it('keeps inline comments on the reviewed commit when new commits were added on top', async () => {
+    const { ctx, addRun } = await setup()
+    const runId = addRun('review')
+    saveReview(ctx, runId, report, [finding()])
+    const fake = fakeApi({
+      headRefOid: 'head2',
+      viewerDidAuthor: false,
+      pending: null,
+      compare: 'ahead',
+    })
+    const actions = createActions({ ctx, api: fake.api, emit: { prsChanged: () => {} } })
+    const gate = await actions.update({ runId, confirmed: true })
+    expect(gate.warning).toBeNull()
+    await actions.post(runId)
+    expect(fake.named('AddReview')[0]!.input).toMatchObject({
+      commitOID: 'head1',
+      threads: [{ path: 'src/a.ts', line: 2 }],
+    })
+  })
+
   it('reports GitHub mutation errors and keeps the gate open', async () => {
     const { ctx, addRun } = await setup()
     const runId = addRun('review')
@@ -660,7 +701,10 @@ describe('address gate', () => {
     )
     await writeFile(join(work, 'a.ts'), 'mine\n')
     await actions.commit(runId, 'fix: mine')
-    await expect(actions.push(runId)).rejects.toThrow(/stale info/)
+    expect((await actions.get(runId)).checks.find((check) => check.key === 'push')!.detail).toMatch(
+      /a push would be refused/,
+    )
+    await expect(actions.push(runId)).rejects.toThrow(/no longer at .*nothing was pushed/)
     expect(git(bare, 'log', '-1', '--format=%s', 'refs/heads/feature')).toBe('theirs')
   })
 

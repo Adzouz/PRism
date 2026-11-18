@@ -784,6 +784,7 @@ export const gateWorktree = z.object({
   dirty: z.array(z.string()),
   localHead: z.string().nullable(),
   checkoutHead: z.string().nullable(),
+  leaseHead: z.string().nullable(),
   remoteHead: z.string().nullable(),
   branch: z.string().nullable(),
 })

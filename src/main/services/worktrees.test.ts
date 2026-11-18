@@ -98,6 +98,41 @@ describe('worktrees', () => {
     expect(third.warning).toContain(after.slice(0, 7))
   })
 
+  it('checks out the pull request head when the local branch was left behind by a force-push', async () => {
+    const { base, work, origin, clone, options } = await setup()
+    git(clone, 'branch', '-q', 'feature', 'origin/feature')
+    const stale = git(clone, 'rev-parse', 'feature')
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'e.txt', 'rewritten')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    const logs: string[] = []
+    const result = await prepareWorktree(
+      { ...options, log: (line) => logs.push(line) },
+      pr({ headOid: rewritten }),
+    )
+    expect(result).toMatchObject({
+      path: join(base, 'wts/pr-7'),
+      created: true,
+      headOid: rewritten,
+      warning: null,
+    })
+    expect(git(result.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('HEAD')
+    expect(git(clone, 'rev-parse', 'feature')).toBe(stale)
+    expect(logs.join('\n')).toContain('not part of the pull request head')
+  })
+
+  it('checks out a local branch that is behind the pull request head and fast-forwards it', async () => {
+    const { work, origin, clone, options } = await setup()
+    git(clone, 'branch', '-q', 'feature', 'origin/feature')
+    git(work, 'checkout', '-q', 'feature')
+    const next = await commit(work, 'c.txt', 'three')
+    git(work, 'push', '-q', origin, 'feature')
+    const result = await prepareWorktree(options, pr({ headOid: next }))
+    expect(result).toMatchObject({ created: true, headOid: next, warning: null })
+    expect(git(result.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feature')
+  })
+
   it('follows a force-push when the worktree is clean', async () => {
     const { work, origin, head, options } = await setup()
     const first = await prepareWorktree(options, pr({ headOid: head }))
