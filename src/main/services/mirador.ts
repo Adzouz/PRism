@@ -1,11 +1,17 @@
 import { eq } from 'drizzle-orm'
-import type { Finding, ReviewReport, Run } from '@shared/domain'
+import type { Finding, PostMode, ReviewReport, Run } from '@shared/domain'
 import { prs, repos } from '../db/schema'
 import { run as runCommand, which, type RunResult } from '../system/exec'
 import type { Ctx } from './context'
 import { getRun, listFindings } from './runs'
 
 type Exec = (args: string[]) => Promise<RunResult>
+
+export type PostedReview = {
+  event: ReviewReport['verdict']
+  mode: PostMode
+  eventForced: boolean
+}
 
 const verdictWords: Record<ReviewReport['verdict'], string> = {
   approve: 'GO',
@@ -29,6 +35,8 @@ export function miradorNote(
   return word
 }
 
+const probeRetryMs = 60_000
+
 const usedCommands = ['mirador start', 'mirador status', 'mirador note']
 
 export const isMiradorHelp = (help: string) =>
@@ -40,13 +48,34 @@ export function createMiradorBridge(
 ) {
   const exec: Exec =
     deps.exec ?? ((args) => runCommand('mirador', args, { cwd: ctx.userData, timeout: 30_000 }))
-  const available =
+  const probe =
     deps.available ??
     (async () => {
       if (!(await which('mirador'))) return false
       const help = await runCommand('mirador', ['help'], { cwd: ctx.userData, timeout: 10_000 })
       return help.code === 0 && isMiradorHelp(help.stdout)
     })
+  let found: Promise<boolean> | null = null
+  let missedAt = 0
+  const available = () => {
+    if (found === null && Date.now() - missedAt >= probeRetryMs) {
+      found = probe().then(
+        (ok) => {
+          if (!ok) forget()
+          return ok
+        },
+        () => {
+          forget()
+          return false
+        },
+      )
+    }
+    return found ?? Promise.resolve(false)
+  }
+  function forget() {
+    found = null
+    missedAt = Date.now()
+  }
   const warned = new Set<string>()
 
   function target(prId: number) {
@@ -74,25 +103,33 @@ export function createMiradorBridge(
   return {
     status: async () => ({ available: await available() }),
 
-    runStarted(run: Run) {
-      const pr = target(run.prId)
-      if (!pr) return Promise.resolve()
-      const number = String(pr.number)
-      if (run.stage === 'review' || run.stage === 're-review') {
-        return send(['start', '--kind', 'review', '--pr', number, '--title', pr.title])
+    async runStarted(run: Run) {
+      try {
+        const pr = target(run.prId)
+        if (!pr) return
+        const number = String(pr.number)
+        if (run.stage === 'review' || run.stage === 're-review') {
+          await send(['start', '--kind', 'review', '--pr', number, '--title', pr.title])
+        } else if (run.stage === 'address' && pr.myRole !== 'reviewer') {
+          await send(['status', 'addressing', number])
+        }
+      } catch (error) {
+        console.warn('Mirador bridge failed:', error)
       }
-      if (run.stage === 'address' && pr.myRole !== 'reviewer') {
-        return send(['status', 'addressing', number])
-      }
-      return Promise.resolve()
     },
 
-    reviewPosted(runId: number) {
-      const run = getRun(ctx, runId)
-      const pr = target(run.prId)
-      if (!pr || !run.report) return Promise.resolve()
-      const note = miradorNote(run.report.verdict, listFindings(ctx, runId))
-      return send(['note', note, '--ref', String(pr.number)])
+    async reviewPosted(runId: number, posted: PostedReview) {
+      try {
+        const run = getRun(ctx, runId)
+        const pr = target(run.prId)
+        if (!pr) return
+        const verdict = posted.eventForced && run.report ? run.report.verdict : posted.event
+        const note = miradorNote(verdict, listFindings(ctx, runId))
+        const text = posted.mode === 'draft' ? `draft: ${note}` : note
+        await send(['note', text, '--ref', String(pr.number)])
+      } catch (error) {
+        console.warn('Mirador bridge failed:', error)
+      }
     },
   }
 }

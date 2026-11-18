@@ -183,7 +183,7 @@ void app.whenReady().then(() => {
         prsChanged()
         sync.tick()
       },
-      posted: (runId) => void mirador.reviewPosted(runId),
+      posted: (runId, posted) => void mirador.reviewPosted(runId, posted),
     },
   })
 

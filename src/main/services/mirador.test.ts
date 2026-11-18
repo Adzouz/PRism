@@ -6,7 +6,7 @@ import { openDb } from '../db/client'
 import { findings, prs, repos } from '../db/schema'
 import type { RunResult } from '../system/exec'
 import type { Ctx } from './context'
-import { createMiradorBridge, isMiradorHelp, miradorNote } from './mirador'
+import { createMiradorBridge, isMiradorHelp, miradorNote, type PostedReview } from './mirador'
 import { createRun, saveReview, type NewFinding } from './runs'
 
 const migrations = resolve(__dirname, '../../../drizzle')
@@ -66,11 +66,9 @@ function setup(options: { mirador?: boolean; available?: boolean; code?: number 
       model: 'claude-opus-5-5',
     })
   const exec = vi.fn<Exec>(async () => ({ code: options.code ?? 0, stdout: '', stderr: 'boom' }))
-  const bridge = createMiradorBridge(ctx, {
-    exec,
-    available: async () => options.available ?? true,
-  })
-  return { ctx, addPr, addRun, exec, bridge }
+  const available = vi.fn<() => Promise<boolean>>(async () => options.available ?? true)
+  const bridge = createMiradorBridge(ctx, { exec, available })
+  return { ctx, addPr, addRun, exec, available, bridge }
 }
 
 const finding = (overrides: Partial<NewFinding> = {}): NewFinding => ({
@@ -146,18 +144,89 @@ describe('Mirador bridge', () => {
     expect(missing.exec).not.toHaveBeenCalled()
   })
 
-  it('notes the verdict of a posted review, without excluded findings', async () => {
-    const { ctx, addPr, addRun, exec, bridge } = setup()
-    const run = addRun(addPr('reviewer'), 'review')
+  const submitted = (event: PostedReview['event']): PostedReview => ({
+    event,
+    mode: 'submit',
+    eventForced: false,
+  })
+
+  function postedReview() {
+    const env = setup()
+    const run = env.addRun(env.addPr('reviewer'), 'review')
     saveReview(
-      ctx,
+      env.ctx,
       run.id,
       { verdict: 'request_changes', summary: 'Two issues.', dimensions: [] },
       [finding({ title: 'Wrong path' }), finding({ line: 5, title: 'Null check' })],
     )
+    return { ...env, run }
+  }
+
+  it('notes the status of a posted review, without excluded findings', async () => {
+    const { ctx, run, exec, bridge } = postedReview()
     ctx.db.update(findings).set({ included: false }).where(eq(findings.title, 'Wrong path')).run()
-    await bridge.reviewPosted(run.id)
+    await bridge.reviewPosted(run.id, submitted('request_changes'))
     expect(exec.mock.calls).toEqual([[['note', 'NO GO — Null check', '--ref', '42']]])
+  })
+
+  it('notes the status the user posted, not the agent verdict', async () => {
+    const { ctx, run, exec, bridge } = postedReview()
+    ctx.db.update(findings).set({ included: false }).run()
+    await bridge.reviewPosted(run.id, submitted('approve'))
+    await bridge.reviewPosted(run.id, submitted('comment'))
+    expect(exec.mock.calls).toEqual([
+      [['note', 'GO', '--ref', '42']],
+      [['note', 'GO WITH NITS', '--ref', '42']],
+    ])
+  })
+
+  it('keeps the agent verdict when the status was forced to Comment', async () => {
+    const { run, exec, bridge } = postedReview()
+    await bridge.reviewPosted(run.id, { event: 'comment', mode: 'submit', eventForced: true })
+    expect(exec.mock.calls).toEqual([[['note', 'NO GO — Wrong path', '--ref', '42']]])
+  })
+
+  it('marks a note for a pending draft review', async () => {
+    const { run, exec, bridge } = postedReview()
+    await bridge.reviewPosted(run.id, {
+      event: 'request_changes',
+      mode: 'draft',
+      eventForced: false,
+    })
+    expect(exec.mock.calls).toEqual([[['note', 'draft: NO GO — Wrong path', '--ref', '42']]])
+  })
+
+  it('probes the CLI once while it is found', async () => {
+    const { addPr, addRun, available, bridge } = setup()
+    const prId = addPr('reviewer')
+    await bridge.runStarted(addRun(prId, 'review'))
+    await bridge.runStarted(addRun(prId, 're-review'))
+    await bridge.status()
+    expect(available).toHaveBeenCalledTimes(1)
+  })
+
+  it('probes a missing CLI again only after a minute', async () => {
+    vi.useFakeTimers()
+    try {
+      const { available, bridge } = setup({ available: false })
+      expect(await bridge.status()).toEqual({ available: false })
+      expect(await bridge.status()).toEqual({ available: false })
+      expect(available).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(60_000)
+      await bridge.status()
+      expect(available).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('never throws out of a hook, even on a missing run', async () => {
+    const { bridge } = setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const posted = bridge.reviewPosted(999, submitted('approve'))
+    await expect(posted).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
   })
 
   it('logs a failing command once and never throws', async () => {
