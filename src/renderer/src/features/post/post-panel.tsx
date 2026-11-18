@@ -18,7 +18,6 @@ import {
 import {
   boardColumns,
   findingComment,
-  gateKindOf,
   postModeLabels,
   stageLabels,
   type BoardPr,
@@ -31,7 +30,7 @@ import {
   type Run,
 } from '@shared/domain'
 import { ErrorText } from '@/components/page'
-import { Timeline, toneText, type TimelineTone } from '@/components/timeline'
+import { Timeline, toneText } from '@/components/timeline'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input, Textarea } from '@/components/ui/input'
@@ -52,6 +51,7 @@ import { cn } from '@/lib/utils'
 import { age, useBoardStore, useNow } from '../board/model'
 import { NextStepButton } from '../board/next-step'
 import { Loading, Markdown, verdictLabel } from '../runs/parts'
+import { gateRuns, outcomeOf } from './steps'
 import { Heading, severityOrder, severityTone, ThreadContext } from '../runs/runs-panel'
 
 type Verdict = PostGate['event']
@@ -692,37 +692,6 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
     </div>
   )
 }
-
-const postedLabel = { review: 'Submitted', address: 'Addressed', replies: 'Replies posted' }
-
-function outcomeOf(run: Run): { label: string; tone: TimelineTone; at: number } {
-  if (run.status === 'needs_you')
-    return { label: 'Waiting for you', tone: 'live', at: run.createdAt }
-  if (run.status !== 'done') {
-    const active = run.status === 'queued' || run.status === 'preparing' || run.status === 'running'
-    return active
-      ? { label: 'Agent working', tone: 'live', at: run.startedAt ?? run.createdAt }
-      : { label: 'Follow-up stopped', tone: 'muted', at: run.endedAt ?? run.createdAt }
-  }
-  const kind = gateKindOf[run.stage]
-  if (run.gate?.postedAt) {
-    const label =
-      kind === 'review' && run.gate.mode === 'draft'
-        ? 'Staged as pending review'
-        : kind
-          ? postedLabel[kind]
-          : 'Posted'
-    return { label, tone: 'done', at: run.gate.postedAt }
-  }
-  if (run.gate?.skippedAt) return { label: 'Skipped', tone: 'muted', at: run.gate.skippedAt }
-  if (run.dismissedAt) return { label: 'Dismissed', tone: 'muted', at: run.dismissedAt }
-  return { label: 'Ready to post', tone: 'open', at: run.endedAt ?? run.createdAt }
-}
-
-export const gateRuns = (runs: Run[]) =>
-  runs.filter(
-    (run) => gateKindOf[run.stage] !== undefined && (run.status === 'done' || run.gate !== null),
-  )
 
 export function PostPanel({ pr }: { pr: BoardPr }) {
   const { data: runs, isLoading, error } = usePrRuns(pr.id)

@@ -79,7 +79,11 @@ export const useBoardStore = create<BoardStore>()(
       openPr: (openPrId, drawerTab = 'overview', openRunId = null) =>
         set({ openPrId, drawerTab, openRunId, askRunId: null }),
       setDrawerTab: (drawerTab) => set({ drawerTab }),
-      selectRun: (openRunId) => set({ openRunId }),
+      selectRun: (openRunId) =>
+        set((state) => ({
+          openRunId,
+          askRunId: state.askRunId === openRunId ? state.askRunId : null,
+        })),
       askAgent: (openPrId, openRunId) =>
         set({ openPrId, drawerTab: 'runs', openRunId, askRunId: openRunId }),
       clearAsk: () => set({ askRunId: null }),

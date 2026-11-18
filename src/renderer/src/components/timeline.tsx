@@ -37,7 +37,11 @@ export function Timeline({
   return (
     <ol aria-label={label} className="space-y-3">
       {items.map((item, index) => (
-        <li key={item.id} className="relative pl-7">
+        <li
+          key={item.id}
+          aria-current={item.id === selectedId ? 'step' : undefined}
+          className="relative pl-7"
+        >
           {index < items.length - 1 && (
             <span aria-hidden className="absolute top-5 -bottom-5 left-[7px] w-px bg-border" />
           )}
