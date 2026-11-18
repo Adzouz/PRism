@@ -390,6 +390,40 @@ describe('removePrWorktree', () => {
     })
   })
 
+  it('keeps a worktree left at unpushed commits that did not apply on a force-push', async () => {
+    const { work, origin, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    await commit(first.path, 'b.txt', 'mine')
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'b.txt', 'theirs')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    expect((await prepareWorktree(options, pr({ headOid: rewritten }))).current).toBe(false)
+    expect(await removePrWorktree(options, { number: 7, headOid: rewritten })).toMatchObject({
+      status: 'kept',
+      reason: 'commits that are not on GitHub',
+    })
+  })
+
+  it('keeps the backup of unpushed commits when the worktree is removed without them', async () => {
+    const { work, origin, clone, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    const mine = await commit(first.path, 'mine.txt', 'not pushed')
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'e.txt', 'rewritten')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    await prepareWorktree(options, pr({ headOid: rewritten }))
+    git(first.path, 'reset', '-q', '--hard', rewritten)
+    expect(await removePrWorktree(options, { number: 7, headOid: rewritten })).toMatchObject({
+      status: 'removed',
+    })
+    expect(git(clone, 'for-each-ref', '--format=%(refname)', 'refs/prism')).toBe(
+      'refs/prism/pr-7-unpushed',
+    )
+    expect(git(clone, 'rev-parse', 'refs/prism/pr-7-unpushed')).toBe(mine)
+  })
+
   it('leaves a folder that is not a worktree of the clone', async () => {
     const { options } = await setup()
     const folder = join(options.root, 'pr-9')

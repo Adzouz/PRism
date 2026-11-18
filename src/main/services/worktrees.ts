@@ -169,6 +169,20 @@ export function removePrWorktree(
   return withCloneLock(options.clone, () => removeLocked(options, pr))
 }
 
+async function onGithub(cwd: string, rev: string, prHead: string) {
+  const unpublished = await tryGit(cwd, [
+    'rev-list',
+    '--count',
+    rev,
+    '--not',
+    '--remotes',
+    '--exclude=refs/prism/*-unpushed',
+    '--glob=refs/prism/*',
+  ])
+  if (unpublished === '0') return true
+  return prHead !== '' && (await tryGit(cwd, ['merge-base', '--is-ancestor', rev, prHead])) !== null
+}
+
 async function removeLocked(
   { clone, root }: { clone: string; root: string },
   pr: { number: number; headOid: string },
@@ -184,25 +198,15 @@ async function removeLocked(
     const reason = changes === null ? 'could not read its status' : 'uncommitted changes'
     return { status: 'kept', path: entry.path, reason }
   }
-  const unpublished = await tryGit(entry.path, [
-    'rev-list',
-    '--count',
-    'HEAD',
-    '--not',
-    '--remotes',
-    '--glob=refs/prism/*',
-  ])
-  const inPrHead =
-    pr.headOid !== '' &&
-    (await tryGit(entry.path, ['merge-base', '--is-ancestor', 'HEAD', pr.headOid])) !== null
-  if (unpublished !== '0' && !inPrHead) {
+  if (!(await onGithub(entry.path, 'HEAD', pr.headOid))) {
     return { status: 'kept', path: entry.path, reason: 'commits that are not on GitHub' }
   }
   await git(clone, ['worktree', 'remove', entry.path])
-  for (const suffix of ['', '-checkout', '-unpushed']) {
-    const ref = `refs/prism/pr-${pr.number}${suffix}`
-    await tryGit(clone, ['update-ref', '-d', ref])
-  }
+  const backup = `refs/prism/pr-${pr.number}-unpushed`
+  const refs = [`refs/prism/pr-${pr.number}`, `refs/prism/pr-${pr.number}-checkout`]
+  const kept = await tryGit(clone, ['rev-parse', '--verify', `${backup}^{commit}`])
+  if (kept === null || (await onGithub(clone, backup, pr.headOid))) refs.push(backup)
+  for (const ref of refs) await tryGit(clone, ['update-ref', '-d', ref])
   return { status: 'removed', path: entry.path }
 }
 
