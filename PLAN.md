@@ -198,7 +198,7 @@ Action columns run something when a card is dropped on them; state columns show 
 
 Posting a gate moves the card: review → To approve (GO) or Changes requested (GO WITH NITS, NO GO), or straight to Approved when submitted as Approve; address and replies on My PRs → Waiting review (back to the reviewers). Skipping a gate moves it the same way.
 
-**Next step:** the drawer header, and the summary of a posted or skipped gate, show a split button for cards in state columns. Its main action moves the loop forward (To review / Waiting review / To re-review → review or re-review run, Changes requested → address on My PRs or To re-review on Reviews, To approve → approve); its menu lists every other run, Approve, and every other state column.
+**Next step:** the drawer header, and the summary of a posted or skipped gate, show a split button for cards in state columns. Its main action moves the loop forward (To review / Waiting review / To re-review → review or re-review run, Changes requested → address on My PRs or To re-review on Reviews, To approve → approve); its menu lists every other run, Approve, and every other state column. On My PRs, a card in To approve that still has unresolved comments (the nits of a GO WITH NITS) also shows **Address N comments** next to **Post GO**.
 
 **Card:** repo chip, `#num`, title, author avatar, stage age, CI dot, labels, size, verdict badge, unresolved threads, star, live spinner, Needs-you glow.
 
@@ -242,7 +242,7 @@ Cost/time win: a typical re-review reads a few hundred lines instead of the whol
 
 ## 8. Post gate (after every review or address run)
 
-When a run ends, its card stays in Reviewing or Addressing, marked ready to post, and the drawer's **Post** tab shows a live checklist. The post button unlocks only when every check passes:
+When a run ends, its card stays in Reviewing or Addressing, marked ready to post, and the drawer's **Actions** tab shows a live checklist. The tab lists every gate of the pull request as a timeline, newest first, with **Ask agent anything** on the selected one, which jumps to that run in the Runs tab. The post button unlocks only when every check passes:
 
 **After a review**
 - [ ] Findings validated (include/exclude/edit each)
@@ -269,8 +269,8 @@ When a run ends, its card stays in Reviewing or Addressing, marked ready to post
 
 Tabs:
 - **Overview:** checks (ignoring the repo's expected-red checks), reviewers, linked issues, labels, description.
-- **Runs:** each run's live transcript and report (verdict, findings, changes or draft replies), tokens/cost; answer a question, send a follow-up, dismiss. Footer: open the worktree in your editor, or resume the agent session in your terminal.
-- **Post:** the post gate.
+- **Runs:** the runs as a timeline, newest first, the selected one expanded with its live transcript and report (verdict, findings, changes or draft replies), tokens/cost; answer a question, send a follow-up, dismiss. Footer: open the worktree in your editor, or resume the agent session in your terminal.
+- **Actions:** the post gates as a timeline, newest first: each step shows its outcome (ready to post, submitted, staged, skipped), the selected one expands to its checklist, and Ask agent anything opens that run in the Runs tab with the message box focused, to continue its session.
 - Planned: a **Findings** tab anchored on the diff with the ledger history, and a **Changes** tab with the worktree diff.
 
 ---

@@ -52,6 +52,7 @@ describe('nextSteps', () => {
     state: 'OPEN',
     myReviewState: null,
     reviewed: true,
+    unresolvedThreads: 0,
   } as const
 
   it('suggests the step that moves each state column forward', () => {
@@ -84,6 +85,17 @@ describe('nextSteps', () => {
       false,
     )
     expect(nextSteps({ ...pr, stage: 'approved' })!.others).not.toContainEqual({ kind: 'approve' })
+  })
+
+  it('offers to address the comments next to Post GO on my pull request', () => {
+    const nits = nextSteps({ ...pr, stage: 'to-approve', unresolvedThreads: 2 })!
+    expect(nits.primary).toEqual({ kind: 'approve' })
+    expect(nits.secondary).toEqual({ kind: 'run', stage: 'address' })
+    expect(nits.others).not.toContainEqual({ kind: 'run', stage: 'address' })
+    expect(nextSteps({ ...pr, stage: 'to-approve' })!.secondary).toBeNull()
+    expect(
+      nextSteps({ ...pr, tab: 'reviews', stage: 'to-approve', unresolvedThreads: 2 })!.secondary,
+    ).toBeNull()
   })
 
   it('stays out of agent columns and closed pull requests', () => {

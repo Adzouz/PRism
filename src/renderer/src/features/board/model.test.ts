@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { boardView, columnOf, migrateBoard } from './model'
+import { boardView, columnOf, migrateBoard, useBoardStore } from './model'
 
 const filters = {
   reviews: { repoIds: [], starred: false, needsMe: false, showHidden: false, search: '' },
@@ -59,5 +59,17 @@ describe('columnOf', () => {
     expect(columnOf({ tab: 'mine', stage: 'to-review' })).toBe('waiting-review')
     expect(columnOf({ tab: 'mine', stage: 'changes-requested' })).toBe('changes-requested')
     expect(columnOf({ tab: 'reviews', stage: 'to-review' })).toBe('to-review')
+  })
+})
+
+describe('selectRun', () => {
+  it('drops a pending Ask agent anything when another run is selected', () => {
+    const store = useBoardStore.getState()
+    store.askAgent(1, 10)
+    store.selectRun(10)
+    expect(useBoardStore.getState().askRunId).toBe(10)
+    store.selectRun(11)
+    store.selectRun(10)
+    expect(useBoardStore.getState().askRunId).toBeNull()
   })
 })

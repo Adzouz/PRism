@@ -300,6 +300,10 @@ function Overview({ pr }: { pr: BoardPr }) {
   )
 }
 
+const typing = (target: EventTarget | null) =>
+  target instanceof HTMLElement &&
+  (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+
 export function PrDrawer() {
   const openPrId = useBoardStore((state) => state.openPrId)
   const openPr = useBoardStore((state) => state.openPr)
@@ -313,7 +317,10 @@ export function PrDrawer() {
     <DialogPrimitive.Root open={pr !== null} onOpenChange={(open) => !open && openPr(null)}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="no-drag fixed inset-0 z-40 bg-black/30 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
-        <DialogPrimitive.Content className="no-drag fixed inset-y-3 right-3 z-50 flex w-[min(620px,calc(100vw-48px))] flex-col rounded-2xl border bg-background shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-right-8 data-[state=open]:fade-in-0">
+        <DialogPrimitive.Content
+          onEscapeKeyDown={(event) => typing(event.target) && event.preventDefault()}
+          className="no-drag fixed inset-y-3 right-3 z-50 flex w-[min(620px,calc(100vw-48px))] flex-col rounded-2xl border bg-background shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:slide-in-from-right-8 data-[state=open]:fade-in-0"
+        >
           {pr && (
             <>
               <header className="space-y-3 border-b px-6 pt-6 pb-4">
@@ -391,7 +398,7 @@ export function PrDrawer() {
                     )}
                   </TabsTrigger>
                   <TabsTrigger value="post">
-                    Post
+                    Actions
                     {readyToPost(pr) && (
                       <>
                         <span aria-hidden className="size-1.5 rounded-full bg-primary" />
