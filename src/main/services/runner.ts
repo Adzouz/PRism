@@ -71,6 +71,7 @@ export type RunnerEmit = {
   run: (run: Run) => void
   event: (event: RunEvent) => void
   prsChanged: () => void
+  started?: (run: Run) => void
 }
 
 export type RunnerDeps = {
@@ -600,6 +601,7 @@ export function createRunner(deps: RunnerDeps) {
       if (input.note) event(run.id, 'note', { text: input.note })
       emit.run(run)
       emit.prsChanged()
+      emit.started?.(run)
       void execute(run.id, null)
       return run
     },

@@ -2,7 +2,7 @@
 
 PRism is a macOS app for reviewing GitHub pull requests with AI agents. You watch repositories and get a kanban board of the PRs that involve you. You run review / address-comments skills in parallel and watch each one live. Every action that touches git history or GitHub waits for your go.
 
-Status: phases 0–6 done, phase 8 started with notifications, the Dock badge, the menu bar and auto-run (see [AGENTS.md](AGENTS.md#status)). The repo is public (MIT), so this document, the code and the defaults stay generic: no private repo names, no internal tooling, no personal data.
+Status: phases 0–6 done, phase 8 started with notifications, the Dock badge, the menu bar, auto-run and the Mirador bridge (see [AGENTS.md](AGENTS.md#status)). The repo is public (MIT), so this document, the code and the defaults stay generic: no private repo names, no internal tooling, no personal data.
 
 ---
 
@@ -169,7 +169,7 @@ Every stage has a global default. Each repo can override per stage. Every bindin
       - pick from another source,
       - drop / write a custom file.
       Every stage must be validated (✓) by you.
-   6. **Options:** auto-run (a review when someone requests yours by name), expected-red CI checks to ignore, labels that mean "QA pending".
+   6. **Options:** auto-run (a review when someone requests yours by name), report to Mirador (when its CLI is installed), expected-red CI checks to ignore, labels that mean "QA pending".
 4. **Notifications** (optional): **Turn on notifications** sends a test, so the macOS permission prompt shows while you are looking. macOS asks only once per app; after a refusal only System Settings can turn them on, so Settings → Notifications has an **Open System Settings** button.
 5. **Initial scan:** PRs requesting your review (direct + team), PRs you authored, PRs you took over (you pushed commits to someone else's PR). Progress per repo, then the board opens. Daily snapshot #1 is written.
 
@@ -293,7 +293,7 @@ Tabs:
 - **Worktrees:** `<repo worktree folder>/pr-<number>`. Fork PRs get a remote per fork. Existing worktrees of the branch (from any tool, via `git worktree list`) are reused. PRism removes its own worktrees once the pull request is merged or closed, unless they hold uncommitted changes or commits that are not on GitHub.
 - **Address runs:** rebase onto the PR's real base first (stacked PRs included).
 - **Auto-run** (opt-in per repository): a review request that names you starts a Review, or a Re-review when you reviewed before, two runs at a time at most. New commits never start one: the author asks again when it's ready. Team requests stay manual, since a teammate may take them.
-- **Mirador bridge** (optional, auto-detected): reports review/addressing steps through the `mirador` CLI.
+- **Mirador bridge** ([Mirador](https://github.com/Adzouz/Mirador) is a macOS work tracker; optional: offered only when its `mirador` CLI is installed, then switched on per repository, since Mirador tracks a single repository): marks a pull request Reviewing when a review or re-review run starts and Addressing when an address run starts on your pull request, and adds the verdict as a note (GO / GO WITH NITS / NO GO + one reason) when a review is posted. Mirador's own GitHub sync sets every other status.
 - **Notifications:** needs you (answer from the notification), run done or failed, new review request, CI red on my PR. The dock badge shows the Needs-you count: agent questions plus runs ready to post. The menu bar shows the Needs-you list, the cards where it's your turn (not counted) and running agents. macOS asks for permission once per app: onboarding triggers the prompt, and Settings links to System Settings.
 
 ---
@@ -303,8 +303,8 @@ Tabs:
 `src/main/db/schema.ts` is the source of truth; migrations live in `drizzle/`.
 
 ```
-repos(id, owner, name, local_path, worktree_root, skill_source_id, auto_run, ignored_checks_json,
-      qa_labels_json, post_mode[submit|draft]?, added_at, last_synced_at)
+repos(id, owner, name, local_path, worktree_root, skill_source_id, auto_run, mirador,
+      ignored_checks_json, qa_labels_json, post_mode[submit|draft]?, added_at, last_synced_at)
 skill_sources(id, kind[git|local|builtin], name, url_or_path, local_path, manifest_json, identity,
               setup_at, last_synced_at)
 skills(id, source_id?, name, description, mode[copy|link|custom|linked_file], path, content_hash)

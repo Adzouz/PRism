@@ -3,11 +3,12 @@ import { existsSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { aiTag, type ReviewReport, type Stage } from '@shared/domain'
 import { prePushHookScript } from '../agents/guard'
 import { openDb } from '../db/client'
 import { prFlags, prs, repos, runs } from '../db/schema'
+import type { PostedReview } from './mirador'
 import { createActions, gateChecks, parsePorcelain, reviewBody } from './actions'
 import type { Ctx } from './context'
 import { commentableLines, parseUnifiedDiff } from './diff'
@@ -708,6 +709,40 @@ describe('review loop', () => {
     expect(listPrs(ctx)[0]!.stage).toBe('approved')
     ctx.db.update(prs).set({ headOid: 'head2' }).run()
     expect(listPrs(ctx)[0]!.stage).toBe('re-review')
+  })
+
+  it('tells the posted hook about posted reviews only', async () => {
+    const { ctx, addRun } = await setup('author')
+    const reviewId = addRun('review')
+    saveReview(ctx, reviewId, report, [])
+    const posted = vi.fn<(runId: number, review: PostedReview) => void>()
+    const actions = createActions({
+      ctx,
+      api: fakeApi(live('head1', true)).api,
+      emit: { prsChanged: () => {}, posted },
+    })
+    await actions.update({ runId: reviewId, confirmed: true })
+    await actions.post(reviewId)
+    expect(posted.mock.calls).toEqual([
+      [reviewId, { event: 'comment', mode: 'draft', eventForced: true }],
+    ])
+  })
+
+  it('tells the posted hook the status the user picked', async () => {
+    const { ctx, addRun } = await setup()
+    const reviewId = addRun('review')
+    saveReview(ctx, reviewId, report, [])
+    const posted = vi.fn<(runId: number, review: PostedReview) => void>()
+    const actions = createActions({
+      ctx,
+      api: fakeApi(live('head1')).api,
+      emit: { prsChanged: () => {}, posted },
+    })
+    await actions.update({ runId: reviewId, event: 'approve', mode: 'submit', confirmed: true })
+    await actions.post(reviewId)
+    expect(posted.mock.calls).toEqual([
+      [reviewId, { event: 'approve', mode: 'submit', eventForced: false }],
+    ])
   })
 
   it('goes straight to Approved when the review is submitted as Approve', async () => {

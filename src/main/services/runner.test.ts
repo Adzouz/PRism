@@ -326,6 +326,32 @@ describe('agent runner', () => {
     expect(notes[0]?.payload).toEqual({ text: 'Started automatically.' })
   })
 
+  it('tells the started hook about each new run, once', async () => {
+    const { ctx, ids } = await setup()
+    const started = vi.fn<(run: Run) => void>()
+    const runner = createRunner({
+      ctx,
+      api,
+      adapters: {
+        claude: {
+          run: async (input) => {
+            await input.tools.reportFindings(
+              { verdict: 'approve', summary: 'Fine.', dimensions: [] },
+              [],
+            )
+            return ok('s1')
+          },
+        },
+      },
+      emit: { run: () => {}, event: () => {}, prsChanged: () => {}, started },
+      agentEnv: async () => ({ env: {}, executable: null }),
+      prepare,
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'done')
+    expect(started.mock.calls).toEqual([[run]])
+  })
+
   it('nudges once for a missing report, then fails', async () => {
     const { ctx, ids } = await setup()
     const { runner, adapter } = makeRunner(ctx, async () => ok('s'))
