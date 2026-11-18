@@ -22,6 +22,7 @@ export type Worktree = {
   baseRemote: string
   created: boolean
   headOid: string
+  current: boolean
   warning: string | null
 }
 
@@ -198,10 +199,33 @@ async function removeLocked(
     return { status: 'kept', path: entry.path, reason: 'commits that are not on GitHub' }
   }
   await git(clone, ['worktree', 'remove', entry.path])
-  for (const ref of [`refs/prism/pr-${pr.number}`, `refs/prism/pr-${pr.number}-checkout`]) {
+  for (const suffix of ['', '-checkout', '-unpushed']) {
+    const ref = `refs/prism/pr-${pr.number}${suffix}`
     await tryGit(clone, ['update-ref', '-d', ref])
   }
   return { status: 'removed', path: entry.path }
+}
+
+async function unpushedHead(
+  clone: string,
+  root: string,
+  number: number,
+  previous: string,
+  remoteRef: string,
+) {
+  const folder = await realpath(join(root, `pr-${number}`)).catch(() => null)
+  if (!folder) return null
+  const [, ...entries] = parseWorktreeList(await git(clone, ['worktree', 'list', '--porcelain']))
+  const head = entries.find((entry) => entry.path === folder && !entry.prunable)?.head
+  if (!head || head === previous) return null
+  if ((await tryGit(clone, ['merge-base', '--is-ancestor', previous, head])) === null) return null
+  const range = `${previous}..${head}`
+  const total = await tryGit(clone, ['rev-list', '--count', range])
+  const tips = ((await tryGit(clone, ['reflog', 'show', '--format=%H', remoteRef])) ?? '')
+    .split('\n')
+    .filter(Boolean)
+  const local = await tryGit(clone, ['rev-list', '--count', range, '--not', '--remotes', ...tips])
+  return total !== null && total === local ? head : null
 }
 
 async function prepareLocked(
@@ -219,6 +243,9 @@ async function prepareLocked(
   const oidOf = (ref: string) => tryGit(clone, ['rev-parse', '--verify', `${ref}^{commit}`])
 
   const previous = await oidOf(checkoutRef)
+  const unpushed = previous
+    ? await unpushedHead(clone, root, pr.number, previous, branch === null ? pullRef : branchRef)
+    : null
   await git(clone, ['fetch', base.name, pr.baseRef])
   let startRef: string
   if (branch === null) {
@@ -310,12 +337,45 @@ async function prepareLocked(
     } else if (clean && previous !== null && head === previous) {
       await git(path, ['reset', '--hard', wanted])
       log(`The pull request was force-pushed; moved to ${wanted.slice(0, 7)}`)
+    } else if (
+      clean &&
+      previous !== null &&
+      head === unpushed &&
+      (await tryGit(path, ['merge-base', '--is-ancestor', wanted, head])) === null
+    ) {
+      warning = await moveUnpushed(clone, path, pr.number, previous, head, wanted, log)
     } else {
       warning = `Worktree is at ${head.slice(0, 7)}, the pull request head is ${wanted.slice(0, 7)}${clean ? '' : ' (local changes kept)'}`
       log(warning)
     }
   }
   const headOid = await git(path, ['rev-parse', 'HEAD'])
-  if (headOid === wanted) await git(clone, ['update-ref', checkoutRef, headOid])
-  return { path, branch, remote, baseRemote: base.name, created, headOid, warning }
+  const current =
+    headOid === wanted ||
+    (await tryGit(path, ['merge-base', '--is-ancestor', wanted, headOid])) !== null
+  if (current) await git(clone, ['update-ref', checkoutRef, wanted])
+  return { path, branch, remote, baseRemote: base.name, created, headOid, current, warning }
+}
+
+async function moveUnpushed(
+  clone: string,
+  path: string,
+  number: number,
+  previous: string,
+  head: string,
+  wanted: string,
+  log: Log,
+) {
+  await git(clone, ['update-ref', `refs/prism/pr-${number}-unpushed`, head])
+  const rebased = await tryGit(path, ['rebase', '--onto', wanted, previous])
+  if (rebased !== null) {
+    log(
+      `The pull request moved to ${wanted.slice(0, 7)}; moved the unpushed commits on top of it (they were at ${head.slice(0, 7)})`,
+    )
+    return null
+  }
+  await tryGit(path, ['rebase', '--abort'])
+  const warning = `The pull request moved to ${wanted.slice(0, 7)} and the unpushed commits of this worktree (${head.slice(0, 7)}) do not apply on it. Rebase them in ${path}, or remove the worktree to start from the pull request head.`
+  log(warning)
+  return warning
 }

@@ -139,6 +139,15 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 
 const short = (oid: string | null) => (oid ? oid.slice(0, 7) : 'none')
 
+const restart =
+  'Run Address comments again: it starts from the new head and moves the unpushed commits of the worktree onto it.'
+
+const isGone = (error: unknown) =>
+  typeof error === 'object' &&
+  error !== null &&
+  'status' in error &&
+  (error.status === 404 || error.status === 422)
+
 function parseReplies(json: string | null): GateReply[] | null {
   if (!json) return null
   try {
@@ -267,8 +276,8 @@ function worktreeChecks(worktree: GateWorktree | null): GateCheck[] {
           ? 'Commit first'
           : worktree.remoteHead === null
             ? 'Could not read the head on GitHub'
-            : worktree.leaseHead !== null && worktree.remoteHead !== worktree.leaseHead
-              ? `GitHub moved to ${short(worktree.remoteHead)}, this run expects ${short(worktree.leaseHead)}: a push would be refused. Run Address comments again.`
+            : worktree.remoteInLocal === false
+              ? `GitHub moved to ${short(worktree.remoteHead)}, which this worktree does not have: a push would be refused. ${restart}`
               : `GitHub is at ${short(worktree.remoteHead)}, local is ${short(worktree.localHead)}`,
     },
   ]
@@ -393,9 +402,10 @@ export function createActions(deps: ActionDeps) {
       cached = api
         .get<{ status?: string }>(path)
         .then((result) => result.status === 'ahead' || result.status === 'identical')
-        .catch(() => {
+        .catch((error: unknown) => {
+          if (isGone(error)) return false
           ancestry.delete(path)
-          return false
+          throw error
         })
       ancestry.set(path, cached)
     }
@@ -425,8 +435,12 @@ export function createActions(deps: ActionDeps) {
     return result.stdout.trim()
   }
 
+  async function contains(path: string, oid: string) {
+    return (await git(path, ['merge-base', '--is-ancestor', oid, 'HEAD'])).code === 0
+  }
+
   async function worktreeState(
-    { run, gate }: Loaded,
+    { run }: Loaded,
     remoteHead: string | null,
   ): Promise<GateWorktree | null> {
     const path = run.worktreePath
@@ -441,8 +455,8 @@ export function createActions(deps: ActionDeps) {
       dirty: parsePorcelain(status.stdout),
       localHead: await gitOk(path, ['rev-parse', 'HEAD']),
       checkoutHead: run.reviewedHeadOid,
-      leaseHead: gate.pushedOid ?? run.reviewedHeadOid,
       remoteHead,
+      remoteInLocal: remoteHead === null ? null : await contains(path, remoteHead),
       branch: getRunRow(ctx, run.id).pushRef,
     }
   }
@@ -472,7 +486,16 @@ export function createActions(deps: ActionDeps) {
     const findings = kind === 'review' ? listFindings(ctx, runId) : []
     const included = findings.filter((finding) => finding.included)
     let outsideDiff = 0
-    if (kind === 'review' && !closed && node && !(await reviewedOnPr(loaded, node.headRefOid))) {
+    let onPr = true
+    if (kind === 'review' && !closed && node) {
+      onPr = await reviewedOnPr(loaded, node.headRefOid).catch((error: unknown) => {
+        warnings.push(
+          `Could not check that the reviewed commit is still on the pull request: ${message(error)}`,
+        )
+        return true
+      })
+    }
+    if (!onPr) {
       outsideDiff = included.length
       warnings.push(
         `The reviewed commit ${short(loaded.row.reviewedHeadOid)} is no longer on the pull request (force-pushed or rebased), so findings go in the review body. Re-review to comment on the new code.`,
@@ -664,18 +687,28 @@ export function createActions(deps: ActionDeps) {
       if (!state) throw new Error('The worktree of this run is gone')
       if (state.dirty.length > 0) throw new Error('Commit the changes first')
       const ref = `refs/heads/${row.pushRef}`
-      const expected = loaded.gate.pushedOid ?? row.reviewedHeadOid
-      const lease = expected ? `--force-with-lease=${ref}:${expected}` : null
+      const before = (await liveNode(pr.nodeId)).headRefOid
+      if (!(await contains(state.path, before))) {
+        throw new Error(
+          `GitHub's ${row.pushRef} is at ${short(before)}, which this worktree does not have, so nothing was pushed. ${restart}`,
+        )
+      }
       await withPushNonce((nonce) =>
         gitOk(
           state.path,
-          ['push', '--porcelain', ...(lease ? [lease] : []), row.pushRemote!, `HEAD:${ref}`],
+          [
+            'push',
+            '--porcelain',
+            `--force-with-lease=${ref}:${before}`,
+            row.pushRemote!,
+            `HEAD:${ref}`,
+          ],
           { PRISM_PUSH_NONCE: nonce },
         ),
       ).catch((error: unknown) => {
-        if (!message(error).includes('stale info')) throw error
+        if (!message(error).includes('[rejected]')) throw error
         throw new Error(
-          `GitHub's ${row.pushRef} is no longer at ${short(expected)}, where this run started, so nothing was pushed. Run Address comments again on the new head.`,
+          `GitHub's ${row.pushRef} moved while pushing, so nothing was pushed. ${restart}`,
         )
       })
       let remote: string | null = null
