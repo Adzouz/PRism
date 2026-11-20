@@ -25,7 +25,7 @@ import {
 } from '@shared/domain'
 import { redact, redactText } from '../agents/redact'
 import type { SessionTotals } from '../agents/types'
-import { asks, findings, postGates, prs, runEvents, runs } from '../db/schema'
+import { agentUsage, asks, findings, postGates, prs, runEvents, runs } from '../db/schema'
 import { titleKey } from './anchors'
 import type { Ctx } from './context'
 import { reviewDirection, type LoopFacts } from './pr-stage'
@@ -215,15 +215,41 @@ export function updateRun(ctx: Ctx, id: number, set: Partial<Omit<RunRow, 'id'>>
   return getRun(ctx, id)
 }
 
-export function recordUsage(ctx: Ctx, id: number, totals: SessionTotals, resumed: boolean) {
+export function recordUsage(
+  ctx: Ctx,
+  id: number,
+  totals: SessionTotals,
+  resumed: boolean,
+  now = Date.now(),
+) {
   const row = getRunRow(ctx, id)
   const merge = (before: number, after: number) =>
     resumed ? Math.max(before, after) : before + after
-  return updateRun(ctx, id, {
+  const next = {
     tokensIn: merge(row.tokensIn, totals.tokensIn),
     tokensOut: merge(row.tokensOut, totals.tokensOut),
     costUsd: merge(row.costUsd, totals.costUsd),
-  })
+  }
+  const spent = {
+    tokensIn: next.tokensIn - row.tokensIn,
+    tokensOut: next.tokensOut - row.tokensOut,
+    costUsd: next.costUsd - row.costUsd,
+  }
+  const pr = ctx.db.select({ repoId: prs.repoId }).from(prs).where(eq(prs.id, row.prId)).get()
+  if (pr && (spent.tokensIn > 0 || spent.tokensOut > 0 || spent.costUsd > 0)) {
+    ctx.db
+      .insert(agentUsage)
+      .values({
+        repoId: pr.repoId,
+        runId: id,
+        stage: row.stage,
+        model: row.model,
+        at: now,
+        ...spent,
+      })
+      .run()
+  }
+  return updateRun(ctx, id, next)
 }
 
 export function listRunsForPr(ctx: Ctx, prId: number) {

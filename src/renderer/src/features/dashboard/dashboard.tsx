@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { create } from 'zustand'
 import { ArrowDownRight, ArrowUpRight, Check, ChevronDown, Minus } from 'lucide-react'
 import {
@@ -6,6 +7,7 @@ import {
   type BoardPr,
   type Dashboard,
   type Run,
+  type UsageTotals,
 } from '@shared/domain'
 import { Button } from '@/components/ui/button'
 import {
@@ -19,7 +21,8 @@ import { useDashboard, usePrs, useRepos, useRuns } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { age, useBoardStore, useNow } from '../board/model'
 import { RunStatusBadge, isLive } from '../runs/parts'
-import { ActivityChart, TrendChart } from './charts'
+import { ActivityChart, CostChart, TrendChart } from './charts'
+import { formatCost, formatTokens } from './format'
 
 const useDashboardRepo = create<{ repoId: number | null; set: (repoId: number | null) => void }>()(
   (set) => ({ repoId: null, set: (repoId) => set({ repoId }) }),
@@ -107,27 +110,128 @@ export function formatDuration(seconds: number) {
   return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`
 }
 
-function Latency({ latency }: { latency: Dashboard['latency'] }) {
-  const windows = [
-    { label: 'Last 7 days', value: latency.week },
-    { label: 'Last 30 days', value: latency.month },
-  ]
+function WindowStats({
+  windows,
+}: {
+  windows: { label: string; value: string; note: ReactNode }[]
+}) {
   return (
     <div className="grid grid-cols-2 gap-4">
-      {windows.map(({ label, value }) => (
+      {windows.map(({ label, value, note }) => (
         <div key={label} className="space-y-1">
           <p className="text-sm text-muted-foreground">{label}</p>
-          <p className="text-3xl font-semibold tracking-tight tabular-nums">
-            {value.medianS === null ? '—' : formatDuration(value.medianS)}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {value.count === 0
-              ? 'No reviews'
-              : `${value.count} review${value.count === 1 ? '' : 's'}`}
-          </p>
+          <p className="text-3xl font-semibold tracking-tight tabular-nums">{value}</p>
+          <div className="text-xs text-muted-foreground">{note}</div>
         </div>
       ))}
     </div>
+  )
+}
+
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
+
+function Latency({ latency }: { latency: Dashboard['latency'] }) {
+  const stats = (label: string, value: Dashboard['latency']['week']) => ({
+    label,
+    value: value.medianS === null ? '—' : formatDuration(value.medianS),
+    note: value.count === 0 ? 'No reviews' : plural(value.count, 'review'),
+  })
+  return (
+    <WindowStats
+      windows={[stats('Last 7 days', latency.week), stats('Last 30 days', latency.month)]}
+    />
+  )
+}
+
+function WeekChange({ from, to }: { from: number | null; to: number }) {
+  if (from === null) return <span>Prior 7 days not fetched yet</span>
+  if (from === to) {
+    return (
+      <span className="flex items-center gap-1">
+        <Minus className="size-3.5" /> Same as prior 7 days
+      </span>
+    )
+  }
+  const Icon = to > from ? ArrowUpRight : ArrowDownRight
+  const text =
+    from === 0
+      ? `+${to}`
+      : `${to > from ? '+' : '−'}${Math.round((Math.abs(to - from) / from) * 100)}%`
+  return (
+    <span className="flex items-center gap-1">
+      <Icon className="size-3.5" />
+      <span className="font-medium text-foreground tabular-nums">{text}</span> vs prior 7 days
+    </span>
+  )
+}
+
+function Merged({ merged }: { merged: Dashboard['merged'] }) {
+  const missing = 'Not fetched yet'
+  return (
+    <WindowStats
+      windows={[
+        {
+          label: 'Last 7 days',
+          value: merged.week?.toLocaleString('en') ?? '—',
+          note:
+            merged.week === null ? (
+              missing
+            ) : (
+              <WeekChange from={merged.previousWeek} to={merged.week} />
+            ),
+        },
+        {
+          label: 'Last 30 days',
+          value: merged.month?.toLocaleString('en') ?? '—',
+          note:
+            merged.month === null
+              ? missing
+              : `${(merged.month / 30).toLocaleString('en', { maximumFractionDigits: 1 })} a day`,
+        },
+      ]}
+    />
+  )
+}
+
+function usageNote(totals: UsageTotals) {
+  if (totals.runs === 0) return 'No runs'
+  return `${plural(totals.runs, 'run')} · ${formatTokens(totals.tokensIn + totals.tokensOut)} tokens`
+}
+
+function Usage({ usage }: { usage: Dashboard['usage'] }) {
+  const stats = (label: string, totals: UsageTotals) => ({
+    label,
+    value: formatCost(totals.costUsd),
+    note: usageNote(totals),
+  })
+  return (
+    <WindowStats windows={[stats('Last 7 days', usage.week), stats('Last 30 days', usage.month)]} />
+  )
+}
+
+function ByStage({ stages }: { stages: Dashboard['usage']['byStage'] }) {
+  if (!stages.length) {
+    return <p className="py-4 text-center text-sm text-muted-foreground">No runs yet.</p>
+  }
+  const top = Math.max(...stages.map((entry) => entry.costUsd))
+  return (
+    <ul className="space-y-3">
+      {stages.map((entry) => (
+        <li key={entry.stage} className="space-y-1.5 text-sm">
+          <div className="flex items-baseline gap-2">
+            <span className="flex-1 truncate">{stageLabels[entry.stage]}</span>
+            <span className="font-medium tabular-nums">{formatCost(entry.costUsd)}</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-secondary">
+            <div
+              className="h-full rounded-full bg-primary"
+              style={{ width: `${top > 0 ? Math.max(2, (entry.costUsd / top) * 100) : 0}%` }}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">{usageNote(entry)}</p>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -221,17 +325,43 @@ export function DashboardOverview() {
         <>
           <Tiles tiles={data.tiles} />
           <div className="grid gap-4 xl:grid-cols-3">
-            <div className="xl:col-span-2">
+            <div className="min-w-0 xl:col-span-2">
               <Panel title="Pull requests per day" description="Last 14 days, from GitHub search.">
                 <ActivityChart data={data.activity.slice(-14)} />
               </Panel>
             </div>
-            <Panel
-              title="Review latency"
-              description="Median time from a review request to my review."
-            >
-              <Latency latency={data.latency} />
-            </Panel>
+            <div className="space-y-4">
+              <Panel title="Merged pull requests" description="From GitHub search.">
+                <Merged merged={data.merged} />
+              </Panel>
+              <Panel
+                title="Review latency"
+                description="Median time from a review request to my review."
+              >
+                <Latency latency={data.latency} />
+              </Panel>
+            </div>
+          </div>
+          <div className="grid gap-4 xl:grid-cols-3">
+            <div className="min-w-0 xl:col-span-2">
+              <Panel title="Agent cost per day" description="Last 30 days.">
+                {data.usage.month.runs === 0 ? (
+                  <p className="py-10 text-center text-sm text-muted-foreground">
+                    No agent runs in the last 30 days.
+                  </p>
+                ) : (
+                  <CostChart data={data.usage.daily} />
+                )}
+              </Panel>
+            </div>
+            <div className="space-y-4">
+              <Panel title="Agent usage" description="Reported by the agent, at API prices.">
+                <Usage usage={data.usage} />
+              </Panel>
+              <Panel title="Cost by stage" description="Last 30 days.">
+                <ByStage stages={data.usage.byStage} />
+              </Panel>
+            </div>
           </div>
           <Panel title="Open pull requests" description="At the end of each day, last 30 days.">
             {trendDays < 2 ? (

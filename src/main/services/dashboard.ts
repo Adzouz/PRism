@@ -1,6 +1,13 @@
 import { and, eq, gte, inArray } from 'drizzle-orm'
-import type { Dashboard, DashboardMetric, Repo } from '@shared/domain'
-import { activity, reviewLatency, snapshots } from '../db/schema'
+import {
+  stages,
+  type Dashboard,
+  type DashboardMetric,
+  type Repo,
+  type Stage,
+  type UsageTotals,
+} from '@shared/domain'
+import { activity, agentUsage, reviewLatency, snapshots } from '../db/schema'
 import type { Ctx } from './context'
 import { addDays, dayEnd, dayRange, dayStart, lastDays, localDay } from './days'
 import type { GithubApi } from './gh-api'
@@ -209,6 +216,44 @@ function median(values: number[]) {
   return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2
 }
 
+function windowSum(values: (number | null)[]) {
+  return values.some((value) => value === null) ? null : sum(values as number[])
+}
+
+type UsageRow = typeof agentUsage.$inferSelect
+
+function usageTotals(rows: UsageRow[]): UsageTotals {
+  return {
+    costUsd: rows.reduce((total, row) => total + row.costUsd, 0),
+    tokensIn: rows.reduce((total, row) => total + row.tokensIn, 0),
+    tokensOut: rows.reduce((total, row) => total + row.tokensOut, 0),
+    runs: new Set(rows.map((row) => row.runId)).size,
+  }
+}
+
+const isStage = (value: string): value is Stage => (stages as readonly string[]).includes(value)
+
+function usageOf(rows: UsageRow[], period: string[]) {
+  const dayOf = new Map(rows.map((row) => [row.id, localDay(row.at)]))
+  const within = (days: string[]) => rows.filter((row) => days.includes(dayOf.get(row.id)!))
+  const byStage = new Map<Stage, UsageRow[]>()
+  for (const row of rows) {
+    if (!isStage(row.stage)) continue
+    byStage.set(row.stage, [...(byStage.get(row.stage) ?? []), row])
+  }
+  return {
+    week: usageTotals(within(period.slice(-7))),
+    month: usageTotals(rows),
+    daily: period.map((day) => {
+      const totals = usageTotals(within([day]))
+      return { day, costUsd: totals.costUsd, tokens: totals.tokensIn + totals.tokensOut }
+    }),
+    byStage: [...byStage]
+      .map(([stage, stageRows]) => ({ stage, ...usageTotals(stageRows) }))
+      .sort((a, b) => b.costUsd - a.costUsd),
+  }
+}
+
 export function getDashboard(
   ctx: Ctx,
   input: { repoId: number | null },
@@ -283,11 +328,24 @@ export function getDashboard(
     return { medianS: median(within), count: within.length }
   }
 
+  const merged = activitySeries.map((entry) => entry.merged)
+  const usageRows = ctx.db
+    .select()
+    .from(agentUsage)
+    .where(and(inArray(agentUsage.repoId, repoIds), gte(agentUsage.at, dayStart(period[0]!))))
+    .all()
+
   return {
     today,
     tiles,
     trend,
     activity: activitySeries,
     latency: { week: latency(7), month: latency(30) },
+    merged: {
+      week: windowSum(merged.slice(-7)),
+      previousWeek: windowSum(merged.slice(-14, -7)),
+      month: windowSum(merged),
+    },
+    usage: usageOf(usageRows, period),
   }
 }

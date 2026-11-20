@@ -749,6 +749,13 @@ export const dashboardMetricLabels: Record<DashboardMetric, string> = {
 
 const count = z.number().nullable()
 const latencyWindow = z.object({ medianS: z.number().nullable(), count: z.number() })
+const usageTotals = z.object({
+  costUsd: z.number(),
+  tokensIn: z.number(),
+  tokensOut: z.number(),
+  runs: z.number(),
+})
+export type UsageTotals = z.infer<typeof usageTotals>
 
 export const dashboard = z.object({
   today: z.string(),
@@ -756,6 +763,13 @@ export const dashboard = z.object({
   trend: z.array(z.object({ day: z.string(), openPrs: count })),
   activity: z.array(z.object({ day: z.string(), opened: count, merged: count, closed: count })),
   latency: z.object({ week: latencyWindow, month: latencyWindow }),
+  merged: z.object({ week: count, previousWeek: count, month: count }),
+  usage: z.object({
+    week: usageTotals,
+    month: usageTotals,
+    daily: z.array(z.object({ day: z.string(), costUsd: z.number(), tokens: z.number() })),
+    byStage: z.array(usageTotals.extend({ stage })),
+  }),
 })
 export type Dashboard = z.infer<typeof dashboard>
 

@@ -5,7 +5,7 @@ import Database from 'better-sqlite3'
 import { eq } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDb } from './client'
-import { prFlags, prs } from './schema'
+import { agentUsage, prFlags, prs } from './schema'
 
 const migrations = resolve(__dirname, '../../../drizzle')
 
@@ -126,6 +126,84 @@ describe('migration 0011_waiting_review', () => {
       { role: 'reviewer', derived: 'to-review', manual: 'to-review' },
       { role: 'takeover', derived: 'changes-requested', manual: 'changes-requested' },
       { role: 'takeover', derived: 'waiting-review', manual: 'waiting-review' },
+    ])
+  })
+})
+
+describe('migration 0019_agent_usage', () => {
+  let dir: string
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('copies the usage of existing runs into the ledger', () => {
+    dir = mkdtempSync(join(tmpdir(), 'prism-migrations-'))
+    const file = join(dir, 'prism.db')
+    openDb(file, migrationsUpTo(dir, '0018_pr_mergeable'))
+    const raw = new Database(file)
+    const repo = raw
+      .prepare(
+        `INSERT INTO repos (owner, name, added_at) VALUES ('acme', 'widgets', 0) RETURNING id`,
+      )
+      .get() as { id: number }
+    const pr = raw
+      .prepare(
+        `INSERT INTO prs (${Object.keys(columns).join(', ')}) VALUES (${Object.keys(columns)
+          .map((key) => `@${key}`)
+          .join(', ')}) RETURNING id`,
+      )
+      .get({
+        ...Object.fromEntries(Object.keys(columns).map((key) => [key, 0])),
+        repo_id: repo.id,
+        node_id: 'PR_1',
+        number: 1,
+        title: 'Add widgets',
+        url: 'https://github.com/acme/widgets/pull/1',
+        author: 'octocat',
+        state: 'OPEN',
+        head_ref: 'feature',
+        head_oid: 'a'.repeat(40),
+        base_ref: 'main',
+        base_oid: 'b'.repeat(40),
+        ci_state: 'none',
+        my_role: 'reviewer',
+        derived_stage: 'to-review',
+      }) as { id: number }
+    const insertRun = raw.prepare(
+      `INSERT INTO runs (pr_id, stage, agent, model, status, created_at, ended_at, tokens_in, tokens_out, cost_usd)
+       VALUES (@pr, @stage, 'claude', 'sonnet', 'done', @created, @ended, @tokensIn, @tokensOut, @cost)`,
+    )
+    insertRun.run({
+      pr: pr.id,
+      stage: 'review',
+      created: 10,
+      ended: 20,
+      tokensIn: 1000,
+      tokensOut: 100,
+      cost: 0.5,
+    })
+    insertRun.run({
+      pr: pr.id,
+      stage: 'address',
+      created: 30,
+      ended: null,
+      tokensIn: 0,
+      tokensOut: 0,
+      cost: 0,
+    })
+    raw.close()
+
+    const after = openDb(file, migrations)
+    expect(after.select().from(agentUsage).all()).toEqual([
+      {
+        id: 1,
+        repoId: repo.id,
+        runId: 1,
+        stage: 'review',
+        model: 'sonnet',
+        at: 20,
+        tokensIn: 1000,
+        tokensOut: 100,
+        costUsd: 0.5,
+      },
     ])
   })
 })

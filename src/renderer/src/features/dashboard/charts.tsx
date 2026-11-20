@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Dashboard } from '@shared/domain'
 import { cn } from '@/lib/utils'
+import { formatCost } from './format'
 
 const dayLabel = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short' })
 const longDayLabel = new Intl.DateTimeFormat('en', {
@@ -30,8 +31,8 @@ function useWidth() {
   return [ref, width] as const
 }
 
-function niceMax(value: number) {
-  if (value <= 4) return 4
+function niceMax(value: number, min = 4) {
+  if (value <= min) return min
   const step = 10 ** Math.floor(Math.log10(value))
   const nice = [1, 2, 2.5, 5, 10].find((factor) => factor * step >= value) ?? 10
   return nice * step
@@ -58,15 +59,21 @@ function Swatch({ className }: { className: string }) {
   return <span className={cn('inline-block size-2.5 shrink-0 rounded-[3px]', className)} />
 }
 
-const series = [
-  { key: 'opened', label: 'Opened', fill: 'fill-chart-1', bg: 'bg-chart-1' },
-  { key: 'merged', label: 'Merged', fill: 'fill-chart-2', bg: 'bg-chart-2' },
-  { key: 'closed', label: 'Closed', fill: 'fill-chart-3', bg: 'bg-chart-3' },
-] as const
+const plot = { top: 12, right: 4, bottom: 24, left: 40 }
 
-const plot = { top: 12, right: 4, bottom: 24, left: 32 }
+const formatTick = (tick: number) => (Number.isInteger(tick) ? String(tick) : tick.toFixed(1))
 
-function YAxis({ max, height, width }: { max: number; height: number; width: number }) {
+function YAxis({
+  max,
+  height,
+  width,
+  format = formatTick,
+}: {
+  max: number
+  height: number
+  width: number
+  format?: (tick: number) => string
+}) {
   const inner = height - plot.top - plot.bottom
   return (
     <g className="text-[11px]">
@@ -89,7 +96,7 @@ function YAxis({ max, height, width }: { max: number; height: number; width: num
               textAnchor="end"
               className="fill-muted-foreground tabular-nums"
             >
-              {Number.isInteger(tick) ? tick : tick.toFixed(1)}
+              {format(tick)}
             </text>
           </g>
         )
@@ -98,7 +105,55 @@ function YAxis({ max, height, width }: { max: number; height: number; width: num
   )
 }
 
-export function ActivityChart({ data }: { data: Dashboard['activity'] }) {
+function DayLabel({
+  x,
+  width,
+  height,
+  day,
+}: {
+  x: number
+  width: number
+  height: number
+  day: string
+}) {
+  const half = 20
+  const anchor = x + half > width ? 'end' : 'middle'
+  return (
+    <text
+      x={anchor === 'end' ? width - plot.right : x}
+      y={height - 6}
+      textAnchor={anchor}
+      className="fill-muted-foreground text-[11px]"
+    >
+      {formatDay(day)}
+    </text>
+  )
+}
+
+type DayEntry = { day: string }
+
+type BarSeries<T> = {
+  key: { [K in keyof T]: T[K] extends number | null ? K : never }[keyof T]
+  label: string
+  fill: string
+  bg: string
+}
+
+function BarChart<T extends DayEntry>({
+  data,
+  series,
+  label,
+  min,
+  format = (value) => value.toLocaleString('en'),
+  formatAxis,
+}: {
+  data: T[]
+  series: BarSeries<T>[]
+  label: string
+  min?: number
+  format?: (value: number) => string
+  formatAxis?: (tick: number) => string
+}) {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState<number | null>(null)
   const height = 220
@@ -106,33 +161,42 @@ export function ActivityChart({ data }: { data: Dashboard['activity'] }) {
     w: Math.max(0, width - plot.left - plot.right),
     h: height - plot.top - plot.bottom,
   }
+  const valueOf = (entry: T, key: BarSeries<T>['key']) => entry[key] as number | null
   const max = niceMax(
-    Math.max(0, ...data.flatMap((entry) => series.map(({ key }) => entry[key] ?? 0))),
+    Math.max(0, ...data.flatMap((entry) => series.map(({ key }) => valueOf(entry, key) ?? 0))),
+    min,
   )
+  const gap = 2
   const column = inner.w / Math.max(1, data.length)
-  const bar = Math.max(3, Math.min(12, (column * 0.72 - 4) / 3))
-  const group = bar * 3 + 4
-  const labelEvery = column < 44 ? 2 : 1
+  const widest = series.length === 1 ? 16 : 12
+  const bar = Math.max(
+    3,
+    Math.min(widest, (column * 0.72 - gap * (series.length - 1)) / series.length),
+  )
+  const group = bar * series.length + gap * (series.length - 1)
+  const labelEvery = Math.max(1, Math.ceil(44 / Math.max(1, column)))
   const totals = series.map(({ key }) =>
-    data.reduce((total, entry) => total + (entry[key] ?? 0), 0),
+    data.reduce((total, entry) => total + (valueOf(entry, key) ?? 0), 0),
   )
   const hovered = hover === null ? null : data[hover]
 
   return (
     <div className="relative space-y-4">
-      <ul className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
-        {series.map(({ key, label, bg }, index) => (
-          <li key={key} className="flex items-center gap-2">
-            <Swatch className={bg} />
-            <span className="text-muted-foreground">{label}</span>
-            <span className="font-medium tabular-nums">{totals[index]}</span>
-          </li>
-        ))}
-      </ul>
+      {series.length > 1 && (
+        <ul className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
+          {series.map(({ key, label: name, bg }, index) => (
+            <li key={String(key)} className="flex items-center gap-2">
+              <Swatch className={bg} />
+              <span className="text-muted-foreground">{name}</span>
+              <span className="font-medium tabular-nums">{format(totals[index]!)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div ref={ref} className="relative" onMouseLeave={() => setHover(null)}>
         {width > 0 && (
-          <svg width={width} height={height} role="img" aria-label="Pull requests per day">
-            <YAxis max={max} height={height} width={width} />
+          <svg width={width} height={height} role="img" aria-label={label}>
+            <YAxis max={max} height={height} width={width} format={formatAxis} />
             {data.map((entry, index) => {
               const x0 = plot.left + index * column
               const start = x0 + (column - group) / 2
@@ -149,26 +213,19 @@ export function ActivityChart({ data }: { data: Dashboard['activity'] }) {
                     />
                   )}
                   {series.map(({ key, fill }, position) => {
-                    const value = entry[key] ?? 0
+                    const value = valueOf(entry, key) ?? 0
                     if (!value) return null
-                    const h = (value / max) * inner.h
+                    const h = Math.max(1, (value / max) * inner.h)
                     return (
                       <path
-                        key={key}
-                        d={barPath(start + position * (bar + 2), plot.top + inner.h - h, bar, h)}
+                        key={String(key)}
+                        d={barPath(start + position * (bar + gap), plot.top + inner.h - h, bar, h)}
                         className={fill}
                       />
                     )
                   })}
                   {index % labelEvery === (data.length - 1) % labelEvery && (
-                    <text
-                      x={x0 + column / 2}
-                      y={height - 6}
-                      textAnchor="middle"
-                      className="fill-muted-foreground text-[11px]"
-                    >
-                      {formatDay(entry.day)}
-                    </text>
+                    <DayLabel x={x0 + column / 2} width={width} height={height} day={entry.day} />
                   )}
                   <rect
                     x={x0}
@@ -186,15 +243,17 @@ export function ActivityChart({ data }: { data: Dashboard['activity'] }) {
         {hovered && hover !== null && (
           <Tooltip x={plot.left + (hover + 0.5) * column} width={width}>
             <p className="mb-1.5 font-medium">{formatLongDay(hovered.day)}</p>
-            {hovered.opened === null ? (
+            {series.every(({ key }) => valueOf(hovered, key) === null) ? (
               <p className="text-muted-foreground">Not fetched yet</p>
             ) : (
               <ul className="space-y-1">
-                {series.map(({ key, label, bg }) => (
-                  <li key={key} className="flex items-center gap-2">
+                {series.map(({ key, label: name, bg }) => (
+                  <li key={String(key)} className="flex items-center gap-2">
                     <Swatch className={bg} />
-                    <span className="flex-1 text-muted-foreground">{label}</span>
-                    <span className="pl-4 font-medium tabular-nums">{hovered[key]}</span>
+                    <span className="flex-1 text-muted-foreground">{name}</span>
+                    <span className="pl-4 font-medium tabular-nums">
+                      {format(valueOf(hovered, key) ?? 0)}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -204,12 +263,12 @@ export function ActivityChart({ data }: { data: Dashboard['activity'] }) {
       </div>
       <div className="sr-only">
         <table>
-          <caption>Pull requests opened, merged and closed per day</caption>
+          <caption>{label}</caption>
           <thead>
             <tr>
               <th>Day</th>
-              {series.map(({ key, label }) => (
-                <th key={key}>{label}</th>
+              {series.map(({ key, label: name }) => (
+                <th key={String(key)}>{name}</th>
               ))}
             </tr>
           </thead>
@@ -217,15 +276,48 @@ export function ActivityChart({ data }: { data: Dashboard['activity'] }) {
             {data.map((entry) => (
               <tr key={entry.day}>
                 <td>{entry.day}</td>
-                {series.map(({ key }) => (
-                  <td key={key}>{entry[key] ?? 'unknown'}</td>
-                ))}
+                {series.map(({ key }) => {
+                  const value = valueOf(entry, key)
+                  return <td key={String(key)}>{value === null ? 'unknown' : format(value)}</td>
+                })}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
     </div>
+  )
+}
+
+const activitySeries: BarSeries<Dashboard['activity'][number]>[] = [
+  { key: 'opened', label: 'Opened', fill: 'fill-chart-1', bg: 'bg-chart-1' },
+  { key: 'merged', label: 'Merged', fill: 'fill-chart-2', bg: 'bg-chart-2' },
+  { key: 'closed', label: 'Closed', fill: 'fill-chart-3', bg: 'bg-chart-3' },
+]
+
+export function ActivityChart({ data }: { data: Dashboard['activity'] }) {
+  return <BarChart data={data} series={activitySeries} label="Pull requests per day" />
+}
+
+const costSeries: BarSeries<Dashboard['usage']['daily'][number]>[] = [
+  { key: 'costUsd', label: 'Cost', fill: 'fill-primary', bg: 'bg-primary' },
+]
+
+function formatCostTick(tick: number) {
+  if (tick >= 10 || Number.isInteger(tick)) return `$${Math.round(tick)}`
+  return `$${tick.toFixed(2)}`
+}
+
+export function CostChart({ data }: { data: Dashboard['usage']['daily'] }) {
+  return (
+    <BarChart
+      data={data}
+      series={costSeries}
+      label="Agent cost per day"
+      min={0.1}
+      format={formatCost}
+      formatAxis={formatCostTick}
+    />
   )
 }
 
