@@ -278,16 +278,23 @@ export async function refreshBuiltinSkills(ctx: Ctx) {
     const next = `${row.path}.next`
     await rm(next, { recursive: true, force: true })
     await cp(fresh.dir, next, { recursive: true })
-    await rm(old, { recursive: true, force: true })
+    const cleared = await rm(old, { recursive: true, force: true }).then(
+      () => true,
+      () => false,
+    )
+    if (!cleared) {
+      await rm(next, { recursive: true, force: true }).catch(() => {})
+      continue
+    }
     await rename(row.path, old)
     await rename(next, row.path)
-    await rm(old, { recursive: true, force: true })
     ctx.db
       .update(skills)
       .set({ description: fresh.description, contentHash: bundledHash })
       .where(eq(skills.id, row.id))
       .run()
     updated += 1
+    await rm(old, { recursive: true, force: true }).catch(() => {})
   }
   if (updated) ctx.skillsChanged()
   return updated

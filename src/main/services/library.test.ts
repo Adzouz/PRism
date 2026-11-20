@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rename, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, rename, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -223,5 +223,54 @@ describe('built-in source', () => {
     expect(await refreshBuiltinSkills(ctx)).toBe(1)
     expect(await readSkillContent(ctx, review.id)).toContain('v3')
     expect(await exists(`${review.path}.old`)).toBe(false)
+  })
+
+  it('records the new hash even when the old copy cannot be removed', async () => {
+    const ctx = await makeCtx()
+    ctx.builtinSkillsDir = await mkdtemp(join(tmpdir(), 'prism-builtin-'))
+    const bundle = async (name: string, version: string) => {
+      await mkdir(join(ctx.builtinSkillsDir, name, 'locked'), { recursive: true })
+      await writeFile(join(ctx.builtinSkillsDir, name, 'locked', 'notes.md'), 'notes')
+      await writeFile(
+        join(ctx.builtinSkillsDir, name, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: ${version}\n---\n${version}`,
+      )
+    }
+    await bundle('pr-review', 'v1')
+    await bundle('pr-test-plan', 'v1')
+    const source = await ensureBuiltinSource(ctx)
+    const review = await importSkill(ctx, {
+      sourceId: source.id,
+      relDir: 'pr-review',
+      mode: 'copy',
+    })
+    const plan = await importSkill(ctx, {
+      sourceId: source.id,
+      relDir: 'pr-test-plan',
+      mode: 'copy',
+    })
+    const locked = join(review.path, 'locked')
+    await chmod(locked, 0o500)
+    try {
+      await bundle('pr-review', 'v2')
+      await bundle('pr-test-plan', 'v2')
+      expect(await refreshBuiltinSkills(ctx)).toBe(2)
+      expect(await exists(`${review.path}.old`)).toBe(true)
+      expect(await readSkillContent(ctx, review.id)).toContain('v2')
+      expect(await readSkillContent(ctx, plan.id)).toContain('v2')
+
+      await bundle('pr-review', 'v3')
+      await bundle('pr-test-plan', 'v3')
+      expect(await refreshBuiltinSkills(ctx)).toBe(1)
+      expect(await readSkillContent(ctx, review.id)).toContain('v2')
+      expect(await readSkillContent(ctx, plan.id)).toContain('v3')
+
+      await chmod(`${review.path}.old/locked`, 0o700)
+      expect(await refreshBuiltinSkills(ctx)).toBe(1)
+      expect(await readSkillContent(ctx, review.id)).toContain('v3')
+      expect(await exists(`${review.path}.old`)).toBe(false)
+    } finally {
+      await chmod(`${review.path}.old/locked`, 0o700).catch(() => {})
+    }
   })
 })
