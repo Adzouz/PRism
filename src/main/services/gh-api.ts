@@ -99,7 +99,10 @@ export function createGithubApi(): GithubApi {
     async get<T>(path: string) {
       const response = await request(path, {})
       const payload = (await response.json().catch(() => null)) as T & { message?: string }
-      if (!response.ok) throw new Error(payload?.message ?? `GitHub returned ${response.status}`)
+      if (!response.ok) {
+        const error = new Error(payload?.message ?? `GitHub returned ${response.status}`)
+        throw Object.assign(error, { status: response.status })
+      }
       return payload
     },
     rate: () => rate,

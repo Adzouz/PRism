@@ -400,6 +400,11 @@ export function createRunner(deps: RunnerDeps) {
       pr,
     )
     if (signal.aborted) return null
+    if (run.stage === 'address' && !worktree.current) {
+      throw new Error(
+        `${(worktree.warning ?? `The worktree at ${worktree.path} does not contain the pull request head`).replace(/\.$/, '')}. Address runs start from the pull request head, so their changes can be pushed.`,
+      )
+    }
     const reviewing = run.stage === 'review' || run.stage === 're-review'
     let delta: Delta | null = null
     if (run.stage === 're-review') {

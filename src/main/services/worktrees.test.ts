@@ -98,6 +98,41 @@ describe('worktrees', () => {
     expect(third.warning).toContain(after.slice(0, 7))
   })
 
+  it('checks out the pull request head when the local branch was left behind by a force-push', async () => {
+    const { base, work, origin, clone, options } = await setup()
+    git(clone, 'branch', '-q', 'feature', 'origin/feature')
+    const stale = git(clone, 'rev-parse', 'feature')
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'e.txt', 'rewritten')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    const logs: string[] = []
+    const result = await prepareWorktree(
+      { ...options, log: (line) => logs.push(line) },
+      pr({ headOid: rewritten }),
+    )
+    expect(result).toMatchObject({
+      path: join(base, 'wts/pr-7'),
+      created: true,
+      headOid: rewritten,
+      warning: null,
+    })
+    expect(git(result.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('HEAD')
+    expect(git(clone, 'rev-parse', 'feature')).toBe(stale)
+    expect(logs.join('\n')).toContain('not part of the pull request head')
+  })
+
+  it('checks out a local branch that is behind the pull request head and fast-forwards it', async () => {
+    const { work, origin, clone, options } = await setup()
+    git(clone, 'branch', '-q', 'feature', 'origin/feature')
+    git(work, 'checkout', '-q', 'feature')
+    const next = await commit(work, 'c.txt', 'three')
+    git(work, 'push', '-q', origin, 'feature')
+    const result = await prepareWorktree(options, pr({ headOid: next }))
+    expect(result).toMatchObject({ created: true, headOid: next, warning: null })
+    expect(git(result.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feature')
+  })
+
   it('follows a force-push when the worktree is clean', async () => {
     const { work, origin, head, options } = await setup()
     const first = await prepareWorktree(options, pr({ headOid: head }))
@@ -137,6 +172,36 @@ describe('worktrees', () => {
     expect(third.headOid).toBe(mine)
   })
 
+  it('moves unpushed commits onto a force-pushed head', async () => {
+    const { work, origin, clone, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    const mine = await commit(first.path, 'mine.txt', 'not pushed')
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'e.txt', 'rewritten')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    const second = await prepareWorktree(options, pr({ headOid: rewritten }))
+    expect(second).toMatchObject({ path: first.path, current: true, warning: null })
+    expect(git(second.path, 'rev-parse', 'HEAD~1')).toBe(rewritten)
+    expect(git(second.path, 'log', '-1', '--format=%s')).toBe('edit mine.txt')
+    expect(git(clone, 'rev-parse', 'refs/prism/pr-7-unpushed')).toBe(mine)
+    expect(git(clone, 'rev-parse', 'refs/prism/pr-7-checkout')).toBe(rewritten)
+  })
+
+  it('keeps unpushed commits that do not apply on a force-pushed head', async () => {
+    const { work, origin, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    const mine = await commit(first.path, 'b.txt', 'mine')
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'b.txt', 'theirs')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    const second = await prepareWorktree(options, pr({ headOid: rewritten }))
+    expect(second).toMatchObject({ headOid: mine, current: false })
+    expect(second.warning).toContain('do not apply')
+    expect(git(second.path, 'status', '--porcelain')).toBe('')
+  })
+
   it('reinstalls the push guard on a reused worktree', async () => {
     const { base, head, options } = await setup()
     const first = await prepareWorktree(options, pr({ headOid: head }))
@@ -163,21 +228,6 @@ describe('worktrees', () => {
     expect(third.headOid).toBe(local)
     expect(third.warning).toContain(head.slice(0, 7))
     expect(git(first.path, 'rev-parse', 'feature')).toBe(local)
-  })
-
-  it('keeps local commits after a force-push', async () => {
-    const { work, origin, head, options } = await setup()
-    const first = await prepareWorktree(options, pr({ headOid: head }))
-    const local = await commit(first.path, 'mine.txt', 'local work')
-    git(work, 'checkout', '-q', 'feature')
-    git(work, 'reset', '-q', '--hard', 'main')
-    const rewritten = await commit(work, 'e.txt', 'rewritten')
-    git(work, 'push', '-q', '--force', origin, 'feature')
-    const second = await prepareWorktree(options, pr({ headOid: rewritten }))
-    expect(second.headOid).toBe(local)
-    expect(second.warning).toContain(rewritten.slice(0, 7))
-    const third = await prepareWorktree(options, pr({ headOid: rewritten }))
-    expect(third.headOid).toBe(local)
   })
 
   it('checks out pull/<n>/head for a pull request from a deleted fork', async () => {
@@ -338,6 +388,40 @@ describe('removePrWorktree', () => {
     expect(await removePrWorktree(options, { number: 7, headOid: local })).toMatchObject({
       status: 'removed',
     })
+  })
+
+  it('keeps a worktree left at unpushed commits that did not apply on a force-push', async () => {
+    const { work, origin, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    await commit(first.path, 'b.txt', 'mine')
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'b.txt', 'theirs')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    expect((await prepareWorktree(options, pr({ headOid: rewritten }))).current).toBe(false)
+    expect(await removePrWorktree(options, { number: 7, headOid: rewritten })).toMatchObject({
+      status: 'kept',
+      reason: 'commits that are not on GitHub',
+    })
+  })
+
+  it('keeps the backup of unpushed commits when the worktree is removed without them', async () => {
+    const { work, origin, clone, head, options } = await setup()
+    const first = await prepareWorktree(options, pr({ headOid: head }))
+    const mine = await commit(first.path, 'mine.txt', 'not pushed')
+    git(work, 'checkout', '-q', 'feature')
+    git(work, 'reset', '-q', '--hard', 'main')
+    const rewritten = await commit(work, 'e.txt', 'rewritten')
+    git(work, 'push', '-q', '--force', origin, 'feature')
+    await prepareWorktree(options, pr({ headOid: rewritten }))
+    git(first.path, 'reset', '-q', '--hard', rewritten)
+    expect(await removePrWorktree(options, { number: 7, headOid: rewritten })).toMatchObject({
+      status: 'removed',
+    })
+    expect(git(clone, 'for-each-ref', '--format=%(refname)', 'refs/prism')).toBe(
+      'refs/prism/pr-7-unpushed',
+    )
+    expect(git(clone, 'rev-parse', 'refs/prism/pr-7-unpushed')).toBe(mine)
   })
 
   it('leaves a folder that is not a worktree of the clone', async () => {
