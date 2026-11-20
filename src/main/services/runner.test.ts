@@ -8,6 +8,7 @@ import type { Run, RunEvent, Stage } from '@shared/domain'
 import type { AgentAdapter, SegmentInput, SegmentResult } from '../agents/types'
 import { openDb } from '../db/client'
 import {
+  agentUsage,
   findings,
   postGates,
   prs,
@@ -1224,6 +1225,14 @@ describe('agent runner', () => {
     await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
     expect(getRun(ctx, run.id)).toMatchObject({ tokensIn: 300, tokensOut: 60 })
     expect(getRun(ctx, run.id).costUsd).toBeCloseTo(0.03)
+    const spent = ctx.db.select().from(agentUsage).where(eq(agentUsage.runId, run.id)).all()
+    expect(spent.map(({ stage, tokensIn, tokensOut }) => ({ stage, tokensIn, tokensOut }))).toEqual(
+      [
+        { stage: 'review', tokensIn: 200, tokensOut: 40 },
+        { stage: 'review', tokensIn: 100, tokensOut: 20 },
+      ],
+    )
+    expect(spent.map((row) => row.costUsd)).toEqual([expect.closeTo(0.02), expect.closeTo(0.01)])
   })
 
   it('refuses follow-ups and new runs while a stopped run winds down', async () => {

@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { openDb } from '../db/client'
 import { eq } from 'drizzle-orm'
-import { activity, repos, reviewLatency, snapshots } from '../db/schema'
+import { activity, agentUsage, repos, reviewLatency, snapshots } from '../db/schema'
 import type { Ctx } from './context'
 import {
   getDashboard,
@@ -370,6 +370,92 @@ describe('getDashboard', () => {
     expect(dashboard.latency).toEqual({
       week: { medianS: 2 * 3600, count: 2 },
       month: { medianS: 3 * 3600, count: 3 },
+    })
+  })
+
+  it('sums merged pull requests per week and month, empty while a day is missing', async () => {
+    const { ctx, app, docs } = await makeCtx()
+    const days = lastDays(localDay(now), 30)
+    const row = (repoId: number, day: string, merged: number) => ({
+      repoId,
+      day,
+      opened: 0,
+      merged,
+      closed: 0,
+      openPrs: 0,
+      fetchedAt: now,
+    })
+    ctx.db
+      .insert(activity)
+      .values(days.flatMap((day, index) => [row(app.id, day, index % 3), row(docs.id, day, 1)]))
+      .run()
+    const merged = (repoId: number | null) => getDashboard(ctx, { repoId }, now).merged
+    const appCounts = days.map((_, index) => index % 3)
+    const total = (counts: number[]) => counts.reduce((sum, value) => sum + value, 0)
+    expect(merged(app.id)).toEqual({
+      week: total(appCounts.slice(-7)),
+      previousWeek: total(appCounts.slice(-14, -7)),
+      month: total(appCounts),
+    })
+    expect(merged(null).month).toBe(total(appCounts) + 30)
+    ctx.db.delete(activity).where(eq(activity.day, days[10]!)).run()
+    expect(merged(null)).toEqual({
+      week: total(appCounts.slice(-7)) + 7,
+      previousWeek: total(appCounts.slice(-14, -7)) + 7,
+      month: null,
+    })
+  })
+
+  it('totals agent usage per window, day and stage for the picked repositories', async () => {
+    const { ctx, app, docs } = await makeCtx()
+    const spend = (
+      repoId: number,
+      runId: number,
+      stage: string,
+      at: number,
+      costUsd: number,
+      tokens = 1000,
+    ) => ({
+      repoId,
+      runId,
+      stage,
+      model: 'sonnet',
+      at,
+      tokensIn: tokens,
+      tokensOut: tokens / 10,
+      costUsd,
+    })
+    const day = 24 * hour
+    ctx.db
+      .insert(agentUsage)
+      .values([
+        spend(app.id, 1, 'review', now - hour, 0.5),
+        spend(app.id, 1, 'review', now - 2 * hour, 0.25),
+        spend(app.id, 2, 'address', now - 3 * day, 1),
+        spend(docs.id, 3, 'review', now - 10 * day, 2),
+        spend(app.id, 4, 're-review', now - 40 * day, 9),
+        spend(app.id, 5, 'gone', now - day, 4),
+      ])
+      .run()
+    const usage = getDashboard(ctx, { repoId: null }, now).usage
+    expect(usage.week).toEqual({ costUsd: 5.75, tokensIn: 4000, tokensOut: 400, runs: 3 })
+    expect(usage.month).toEqual({ costUsd: 7.75, tokensIn: 5000, tokensOut: 500, runs: 4 })
+    expect(usage.daily).toHaveLength(30)
+    expect(usage.daily.at(-1)).toEqual({ day: localDay(now), costUsd: 0.75, tokens: 2200 })
+    expect(usage.daily.at(-4)).toEqual({
+      day: addDays(localDay(now), -3),
+      costUsd: 1,
+      tokens: 1100,
+    })
+    expect(usage.byStage).toEqual([
+      { stage: 'review', costUsd: 2.75, tokensIn: 3000, tokensOut: 300, runs: 2 },
+      { stage: 'address', costUsd: 1, tokensIn: 1000, tokensOut: 100, runs: 1 },
+    ])
+    expect(getDashboard(ctx, { repoId: docs.id }, now).usage.month).toEqual({
+      costUsd: 2,
+      tokensIn: 1000,
+      tokensOut: 100,
+      runs: 1,
     })
   })
 })

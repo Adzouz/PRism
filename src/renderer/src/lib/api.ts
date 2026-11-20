@@ -168,6 +168,10 @@ export function useBoardEvents() {
       client.setQueryData(keys.sync, status)
     })
     const offRun = window.prism.on('runs:changed', (run) => {
+      const before = client.getQueryData<Run[]>(keys.runs)?.find((item) => item.id === run.id)
+      if (!before || before.costUsd !== run.costUsd || before.tokensOut !== run.tokensOut) {
+        void client.invalidateQueries({ queryKey: ['dashboard'] })
+      }
       const merge = (list: Run[] | undefined) =>
         list &&
         (list.some((item) => item.id === run.id)

@@ -218,6 +218,24 @@ export const runs = sqliteTable(
   (t) => [index('runs_pr').on(t.prId), index('runs_status').on(t.status)],
 )
 
+export const agentUsage = sqliteTable(
+  'agent_usage',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    repoId: integer('repo_id')
+      .notNull()
+      .references(() => repos.id, { onDelete: 'cascade' }),
+    runId: integer('run_id').notNull(),
+    stage: text('stage').notNull(),
+    model: text('model').notNull(),
+    at: integer('at').notNull(),
+    tokensIn: integer('tokens_in').notNull(),
+    tokensOut: integer('tokens_out').notNull(),
+    costUsd: real('cost_usd').notNull(),
+  },
+  (t) => [index('agent_usage_at').on(t.at)],
+)
+
 export const runEvents = sqliteTable(
   'run_events',
   {
