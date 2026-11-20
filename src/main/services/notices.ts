@@ -66,6 +66,10 @@ function finishedBody(run: Run, pr: BoardPr) {
       .filter(Boolean)
       .join(' · ')
   }
+  if (run.stage === 'resolve-conflicts') {
+    const files = run.changes?.filesTouched.length ?? 0
+    return `${files > 0 ? `${plural(files, 'file', 'files')} resolved · ` : ''}Ready to commit and push`
+  }
   if (run.stage === 'address') {
     const threads = run.changes?.threads.length ?? 0
     const handled = threads > 0 ? `${plural(threads, 'thread', 'threads')} handled · ` : ''

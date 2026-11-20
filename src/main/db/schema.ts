@@ -93,6 +93,7 @@ export const prs = sqliteTable(
     baseOid: text('base_oid').notNull(),
     reviewDecision: text('review_decision'),
     ciState: text('ci_state', { enum: ['success', 'failure', 'pending', 'none'] }).notNull(),
+    mergeable: text('mergeable', { enum: ['MERGEABLE', 'CONFLICTING', 'UNKNOWN'] }),
     labelsJson: text('labels_json').notNull().default('[]'),
     additions: integer('additions').notNull(),
     deletions: integer('deletions').notNull(),
@@ -283,7 +284,7 @@ export const postGates = sqliteTable('post_gates', {
   runId: integer('run_id')
     .primaryKey()
     .references(() => runs.id, { onDelete: 'cascade' }),
-  kind: text('kind', { enum: ['review', 'address', 'replies'] }).notNull(),
+  kind: text('kind', { enum: ['review', 'address', 'replies', 'conflicts'] }).notNull(),
   mode: text('mode', { enum: ['submit', 'draft'] }),
   event: text('event', { enum: ['approve', 'comment', 'request_changes'] }),
   body: text('body'),

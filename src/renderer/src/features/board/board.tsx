@@ -71,6 +71,10 @@ const dropCopy: Record<Stage, { title: string; body: string }> = {
     title: 'Start a test plan run?',
     body: 'Your default agent reads this pull request in a worktree with the skill bound to Test plan, then writes how to test it. It never commits, pushes or posts.',
   },
+  'resolve-conflicts': {
+    title: 'Start a resolve conflicts run?',
+    body: 'PRism merges the base branch into a worktree of this pull request, then your default agent resolves the conflicts and runs the checks. It never commits, pushes or posts: you commit the merge and push it from the Actions tab.',
+  },
   'draft-replies': {
     title: 'Start a draft replies run?',
     body: 'Your default agent drafts replies to the unresolved review threads with the skill bound to Draft replies. It never posts them.',

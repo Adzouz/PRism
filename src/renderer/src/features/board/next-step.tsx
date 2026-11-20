@@ -25,6 +25,7 @@ function secondaryLabel(step: NextStep, pr: BoardPr) {
 }
 
 function stepLabel(step: NextStep, pr: BoardPr) {
+  if (step.kind === 'run' && step.stage === 'resolve-conflicts') return 'Resolve conflicts'
   if (step.kind === 'run') return `Run ${runStageLabel(step.stage, pr).toLowerCase()}`
   if (step.kind === 'approve') return pr.role === 'author' ? 'Post GO' : 'Approve'
   return `Move to ${stageLabel(pr.tab, step.stage)}`

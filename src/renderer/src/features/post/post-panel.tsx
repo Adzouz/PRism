@@ -20,6 +20,7 @@ import {
   boardColumns,
   findingComment,
   postModeLabels,
+  pushesCode,
   stageLabels,
   type BoardPr,
   type Finding,
@@ -176,7 +177,13 @@ function Checklist({ gate }: { gate: PostGate }) {
         </Button>
       )
     }
-    if (check.key === 'push' && !check.ok && gate.worktree && gate.worktree.dirty.length === 0) {
+    if (
+      check.key === 'push' &&
+      !check.ok &&
+      gate.worktree &&
+      gate.worktree.dirty.length === 0 &&
+      !gate.worktree.merge?.merging
+    ) {
       return (
         <Button size="sm" className="h-7" disabled={busy} onClick={() => push.mutate(gate.runId)}>
           {push.isPending ? <Loader2 className="animate-spin" /> : <Upload />}
@@ -551,7 +558,9 @@ function Closed({ gate, pr }: { gate: PostGate; pr: BoardPr }) {
         <CircleCheck className="size-4 text-success" />
         {gate.kind === 'review'
           ? `${gate.mode === 'submit' ? 'Review submitted' : 'Pending review staged'} with ${gate.findings.included} finding${gate.findings.included === 1 ? '' : 's'}`
-          : `${posted.length} repl${posted.length === 1 ? 'y' : 'ies'} posted`}
+          : gate.kind === 'conflicts'
+            ? 'Merge pushed to GitHub'
+            : `${posted.length} repl${posted.length === 1 ? 'y' : 'ies'} posted`}
         <span className="font-normal text-muted-foreground">· {ago(gate.postedAt!, now)}</span>
       </p>
       {gate.kind === 'review' && gate.mode === 'draft' && (
@@ -670,9 +679,9 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
           {gate.warning && <p className="text-sm text-warning select-text">{gate.warning}</p>}
           <Checklist gate={gate} />
           {gate.kind === 'review' && <ReviewSection gate={gate} run={run} />}
-          {gate.kind === 'address' && <AddressSection gate={gate} />}
-          {gate.kind !== 'review' && <RepliesSection gate={gate} />}
-          {run.changes?.summary && gate.kind === 'address' && (
+          {pushesCode(gate.kind) && <AddressSection gate={gate} />}
+          {(gate.kind === 'address' || gate.kind === 'replies') && <RepliesSection gate={gate} />}
+          {run.changes?.summary && pushesCode(gate.kind) && (
             <section className="space-y-2">
               <Heading>Agent summary</Heading>
               <Markdown text={run.changes.summary} />
@@ -680,21 +689,23 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
           )}
           <div className="sticky bottom-0 -mr-6 -ml-13 space-y-2 border-t bg-background py-3 pr-6 pl-13">
             <div className="flex flex-wrap items-center gap-2">
-              <Button
-                disabled={!gate.ready || busy}
-                onClick={() => {
-                  address.reset()
-                  post.mutate(run.id)
-                }}
-              >
-                {post.isPending ? <Loader2 className="animate-spin" /> : <Send />}
-                {postLabel(gate)}
-                {gate.nextStage && (
-                  <span className="font-normal opacity-80">
-                    → {boardColumns.mine.find((column) => column.stage === gate.nextStage)?.label}
-                  </span>
-                )}
-              </Button>
+              {gate.kind !== 'conflicts' && (
+                <Button
+                  disabled={!gate.ready || busy}
+                  onClick={() => {
+                    address.reset()
+                    post.mutate(run.id)
+                  }}
+                >
+                  {post.isPending ? <Loader2 className="animate-spin" /> : <Send />}
+                  {postLabel(gate)}
+                  {gate.nextStage && (
+                    <span className="font-normal opacity-80">
+                      → {boardColumns.mine.find((column) => column.stage === gate.nextStage)?.label}
+                    </span>
+                  )}
+                </Button>
+              )}
               {canAddress && (
                 <Button
                   variant="outline"
@@ -713,11 +724,13 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
                 disabled={skip.isPending || busy}
                 onClick={() => skip.mutate({ runId: run.id, skipped: true })}
               >
-                Skip posting
+                {gate.kind === 'conflicts' ? 'Close without pushing' : 'Skip posting'}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              PRism adds an AI tag line to everything it posts.
+              {gate.kind === 'conflicts'
+                ? 'Push commits the merge to the pull request branch and closes this step.'
+                : 'PRism adds an AI tag line to everything it posts.'}
             </p>
             <ErrorText error={post.error ?? skip.error ?? address.error} />
           </div>

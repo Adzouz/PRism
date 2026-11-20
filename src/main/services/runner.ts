@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm'
 import { z } from 'zod'
 import {
   activeRunStatuses,
+  isSkillStage,
   needsAnswer,
   threadStages,
   type AgentId,
@@ -33,6 +34,7 @@ import { computeDelta, describeDelta, mergeConflicts, type Delta } from './delta
 import { isCommentable, parseUnifiedDiff, type DiffMap } from './diff'
 import type { GithubApi } from './gh-api'
 import { effectiveBindings, findSkill, readSkillContent, skillDirOf } from './library'
+import { startBaseMerge, type BaseMerge } from './merge'
 import { prThreads } from './prs'
 import { getRepo } from './repos'
 import {
@@ -87,6 +89,7 @@ export type RunnerDeps = {
     shellError?: string | null
   }>
   prepare?: typeof prepareWorktree
+  startMerge?: typeof startBaseMerge
 }
 
 const checkoutQuery = `
@@ -112,6 +115,7 @@ const reportedBy: Record<Stage, (run: Run) => boolean> = {
   'test-plan': (run) => run.report !== null,
   address: (run) => run.changes !== null,
   'draft-replies': (run) => run.replies.length > 0,
+  'resolve-conflicts': (run) => run.changes !== null,
 }
 
 const reportTool: Record<Stage, string> = {
@@ -120,6 +124,16 @@ const reportTool: Record<Stage, string> = {
   'test-plan': 'prism_report_findings',
   address: 'prism_report_changes',
   'draft-replies': 'prism_draft_replies',
+  'resolve-conflicts': 'prism_report_changes',
+}
+
+function describeMerge(merge: BaseMerge) {
+  const what = merge.resumed
+    ? `Continuing the merge of ${merge.base} (${merge.baseOid.slice(0, 7)}) already in progress`
+    : `Merged ${merge.base} (${merge.baseOid.slice(0, 7)}) into the worktree without committing`
+  return merge.conflicts.length
+    ? `${what}: ${merge.conflicts.length} file${merge.conflicts.length === 1 ? '' : 's'} to resolve (${merge.conflicts.join(', ')}).`
+    : `${what}: no conflicts left.`
 }
 
 const terminal = (status: Run['status']) =>
@@ -165,6 +179,7 @@ export function createRunner(deps: RunnerDeps) {
   const controllers = new Map<number, AbortController>()
   const queued = new Map<number, string[]>()
   const prepare = deps.prepare ?? prepareWorktree
+  const startMerge = deps.startMerge ?? startBaseMerge
   const agentEnv = deps.agentEnv ?? (() => defaultAgentEnv(ctx.userData))
 
   const event = (runId: number, kind: RunEvent['kind'], payload: Record<string, unknown>) =>
@@ -304,8 +319,11 @@ export function createRunner(deps: RunnerDeps) {
       },
       reportPriorStatus: (items) => `Updated ${setPriorStatus(ctx, prId, items)} finding(s).`,
       reportChanges: (changes) => {
-        emit.run(saveChanges(ctx, runId, changes))
-        return `Recorded changes for ${changes.threads.length} thread(s).`
+        const saved = saveChanges(ctx, runId, changes)
+        emit.run(saved)
+        return saved.stage === 'resolve-conflicts'
+          ? 'Recorded the resolution. PRism commits the merge after the user confirms.'
+          : `Recorded changes for ${changes.threads.length} thread(s).`
       },
       draftReplies: (replies) => {
         emit.run(saveReplies(ctx, runId, replies))
@@ -434,9 +452,10 @@ export function createRunner(deps: RunnerDeps) {
       pr,
     )
     if (signal.aborted) return null
-    if (run.stage === 'address' && !worktree.current) {
+    const pushing = run.stage === 'address' || run.stage === 'resolve-conflicts'
+    if (pushing && !worktree.current) {
       throw new Error(
-        `${(worktree.warning ?? `The worktree at ${worktree.path} does not contain the pull request head`).replace(/\.$/, '')}. Address runs start from the pull request head, so their changes can be pushed.`,
+        `${(worktree.warning ?? `The worktree at ${worktree.path} does not contain the pull request head`).replace(/\.$/, '')}. ${run.stage === 'address' ? 'Address' : 'Resolve conflicts'} runs start from the pull request head, so their changes can be pushed.`,
       )
     }
     const reviewing = run.stage === 'review' || run.stage === 're-review'
@@ -471,6 +490,12 @@ export function createRunner(deps: RunnerDeps) {
       pushRemote: worktree.remote,
       pushRef: pr.headRef,
     })
+    let merge: BaseMerge | null = null
+    if (run.stage === 'resolve-conflicts') {
+      merge = await startMerge(worktree.path, `${worktree.baseRemote}/${pr.baseRef}`)
+      update(runId, { reviewedBaseOid: merge.baseOid }, false)
+      event(runId, 'note', { text: describeMerge(merge) })
+    }
     return {
       cwd: worktree.path,
       skillDir,
@@ -493,6 +518,7 @@ export function createRunner(deps: RunnerDeps) {
         priorFindings: reviewing ? priorFindings(run.prId) : [],
         delta,
         conflicts: conflicted ?? [],
+        merge,
         threads,
         findings: addressed,
       }),
@@ -651,13 +677,17 @@ export function createRunner(deps: RunnerDeps) {
       if (!config) throw new Error('Pick a default agent in Settings first')
       if (!deps.adapters[config.agent])
         throw new Error(`The ${config.agent} agent is not supported yet`)
-      const binding = effectiveBindings(ctx, row.repoId).find((item) => item.stage === input.stage)
-      if (!binding?.skill) throw new Error(`No skill is bound to the ${input.stage} stage`)
+      const needsSkill = isSkillStage(input.stage)
+      const skill = needsSkill
+        ? (effectiveBindings(ctx, row.repoId).find((item) => item.stage === input.stage)?.skill ??
+          null)
+        : null
+      if (needsSkill && !skill) throw new Error(`No skill is bound to the ${input.stage} stage`)
       const run = createRun(ctx, {
         prId: input.prId,
         stage: input.stage,
-        skillId: binding.skill.id,
-        skillName: binding.skill.name,
+        skillId: skill?.id ?? null,
+        skillName: skill?.name ?? null,
         agent: config.agent,
         model: config.model,
         threadIds: threadStages.includes(input.stage) ? input.threadIds : undefined,

@@ -265,6 +265,25 @@ describe('syncRepo', () => {
     expect(ctx.db.select().from(activity).all()).toHaveLength(30)
   })
 
+  it('flags conflicts and keeps them while GitHub recomputes the same heads', async () => {
+    const { ctx, repo } = await makeCtx()
+    const pr = makePr({ author: { login: me, avatarUrl: '' }, mergeable: 'CONFLICTING' })
+    let current = pr
+    const { api } = fakeApi(() => ({ auth: [current] }))
+    const conflicting = async () => {
+      await syncRepo(ctx, api, repo, me)
+      return listPrs(ctx)[0]!.conflicting
+    }
+
+    expect(await conflicting()).toBe(true)
+    current = { ...pr, mergeable: 'UNKNOWN' }
+    expect(await conflicting()).toBe(true)
+    current = { ...pr, mergeable: 'UNKNOWN', headRefOid: 'merged' }
+    expect(await conflicting()).toBe(false)
+    current = { ...pr, mergeable: 'MERGEABLE', headRefOid: 'merged' }
+    expect(await conflicting()).toBe(false)
+  })
+
   it('keeps a manual stage until GitHub state changes', async () => {
     const { ctx, repo } = await makeCtx()
     let pr = makePr()

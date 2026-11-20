@@ -1,6 +1,6 @@
-import { stages, type Manifest, type ScannedSkill, type Stage } from '@shared/domain'
+import { skillStages, type Manifest, type ScannedSkill, type SkillStage } from '@shared/domain'
 
-const keywords: Record<Stage, { names: string[]; words: string[] }> = {
+const keywords: Record<SkillStage, { names: string[]; words: string[] }> = {
   review: {
     names: ['pr-review', 'code-review', 'review-pr', 'review'],
     words: [
@@ -29,7 +29,7 @@ const keywords: Record<Stage, { names: string[]; words: string[] }> = {
   },
 }
 
-function score(skill: ScannedSkill, stage: Stage) {
+function score(skill: ScannedSkill, stage: SkillStage) {
   const name = skill.name.toLowerCase()
   const description = skill.description.toLowerCase()
   const { names, words } = keywords[stage]
@@ -41,7 +41,11 @@ function score(skill: ScannedSkill, stage: Stage) {
   return wordIndex === -1 ? 0 : 20 - wordIndex
 }
 
-export type Match = { stage: Stage; skill: ScannedSkill | null; reason: 'hint' | 'match' | 'none' }
+export type Match = {
+  stage: SkillStage
+  skill: ScannedSkill | null
+  reason: 'hint' | 'match' | 'none'
+}
 
 export function proposeFromSource(
   skills: ScannedSkill[],
@@ -49,7 +53,7 @@ export function proposeFromSource(
   identity: string | null,
 ): Match[] {
   const usable = skills.filter((skill) => skill.identity === null || skill.identity === identity)
-  return stages.map((stage) => {
+  return skillStages.map((stage) => {
     for (const hint of manifest?.stageHints?.[stage] ?? []) {
       const hit =
         usable.find((skill) => skill.name === hint && skill.identity === identity) ??

@@ -32,6 +32,7 @@ export type GqlPr = {
   headRefOid: string
   baseRefName: string
   baseRefOid: string
+  mergeable?: Mergeable
   reviewDecision: string | null
   additions: number
   deletions: number
@@ -62,7 +63,8 @@ export type GqlPr = {
 const prFields = `
   id number title url isDraft state createdAt updatedAt closedAt
   author { login avatarUrl }
-  headRefName headRefOid baseRefName baseRefOid reviewDecision additions deletions changedFiles
+  headRefName headRefOid baseRefName baseRefOid mergeable reviewDecision
+  additions deletions changedFiles
   labels(first: 20) { nodes { name color } }
   reviewRequests(first: 30) {
     nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } }
@@ -110,6 +112,17 @@ type Search = { nodes: (GqlPr | Record<string, never> | null)[] }
 
 const isPr = (node: GqlPr | Record<string, never> | null): node is GqlPr =>
   !!node && 'id' in node && typeof node.number === 'number'
+
+type Mergeable = 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
+
+function mergeableOf(
+  pr: GqlPr,
+  prev: { mergeable: Mergeable | null; headOid: string; baseOid: string } | undefined,
+) {
+  const value = pr.mergeable ?? null
+  const unchanged = prev?.headOid === pr.headRefOid && prev.baseOid === pr.baseRefOid
+  return value === 'UNKNOWN' && unchanged ? (prev?.mergeable ?? value) : value
+}
 
 const time = (value: string | null) => (value ? Date.parse(value) : null)
 
@@ -252,6 +265,7 @@ export function applyPr(
     baseOid: pr.baseRefOid,
     reviewDecision: pr.reviewDecision,
     ciState: options.ci,
+    mergeable: mergeableOf(pr, prev),
     labelsJson: JSON.stringify(pr.labels.nodes.map(({ name, color }) => ({ name, color }))),
     additions: pr.additions,
     deletions: pr.deletions,

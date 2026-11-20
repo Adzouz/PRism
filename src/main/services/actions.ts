@@ -12,6 +12,7 @@ import {
   gateReply,
   postMode,
   postModeLabels,
+  pushesCode,
   verdict as verdictSchema,
   withAiTag,
   withoutAiSignature,
@@ -32,6 +33,7 @@ import { getSetting, setSetting } from '../db/settings'
 import { run as exec } from '../system/exec'
 import type { Ctx } from './context'
 import { diffMap, isCommentable, type DiffMap } from './diff'
+import { mergeState } from './merge'
 import type { GithubApi } from './gh-api'
 import type { PostedReview } from './mirador'
 import { reviewDirection, tabOf } from './pr-stage'
@@ -138,12 +140,17 @@ const allEvents: Verdict[] = ['approve', 'comment', 'request_changes']
 
 export const defaultCommitMessage = 'fix: address review comments'
 
+export const mergeCommitMessage = (pr: { baseRef: string; headRef: string }) =>
+  `Merge branch '${pr.baseRef}' into ${pr.headRef}`
+
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 const short = (oid: string | null) => (oid ? oid.slice(0, 7) : 'none')
 
-const restart =
-  'Run Address comments again: it starts from the new head and moves the unpushed commits of the worktree onto it.'
+const restartFor = (kind: GateKind) =>
+  kind === 'conflicts'
+    ? 'Run Resolve conflicts again: it starts from the new head.'
+    : 'Run Address comments again: it starts from the new head and moves the unpushed commits of the worktree onto it.'
 
 const isGone = (error: unknown) =>
   typeof error === 'object' &&
@@ -229,6 +236,23 @@ type CheckInput = {
   replies: GateReply[]
 }
 
+function conflictCheck(reported: boolean, worktree: GateWorktree | null): GateCheck {
+  const left = [
+    ...new Set([...(worktree?.merge?.unmerged ?? []), ...(worktree?.merge?.markers ?? [])]),
+  ]
+  return {
+    key: 'conflicts',
+    label: 'Conflicts resolved',
+    ok: reported && left.length === 0,
+    detail:
+      left.length > 0
+        ? `Conflicts left in ${left.join(', ')}`
+        : reported
+          ? null
+          : 'The agent has not reported the resolution',
+  }
+}
+
 function replyCheck(replies: GateReply[]): GateCheck {
   const chosen = replies.filter((reply) => reply.selected && !reply.postedUrl)
   const empty = chosen.filter((reply) => !reply.body.trim()).length
@@ -245,29 +269,34 @@ function replyCheck(replies: GateReply[]): GateCheck {
   }
 }
 
-function worktreeChecks(worktree: GateWorktree | null): GateCheck[] {
+function worktreeChecks(worktree: GateWorktree | null, kind: GateKind): GateCheck[] {
+  const label = kind === 'conflicts' ? 'Merge committed' : 'Changes committed'
   if (!worktree) {
     const detail = 'The worktree of this run is gone'
     return [
-      { key: 'commit', label: 'Changes committed', ok: false, detail },
+      { key: 'commit', label, ok: false, detail },
       { key: 'push', label: 'Pushed and verified on GitHub', ok: false, detail },
     ]
   }
   const dirty = worktree.dirty.length
+  const merging = worktree.merge?.merging ?? false
   const changed = worktree.localHead !== worktree.checkoutHead
+  const committed = dirty === 0 && !merging
   const synced =
-    dirty === 0 && worktree.localHead !== null && worktree.localHead === worktree.remoteHead
+    committed && worktree.localHead !== null && worktree.localHead === worktree.remoteHead
   return [
     {
       key: 'commit',
-      label: 'Changes committed',
-      ok: dirty === 0,
+      label,
+      ok: committed,
       detail:
         dirty > 0
           ? `${dirty} file${dirty === 1 ? '' : 's'} not committed`
-          : changed
-            ? `Head ${short(worktree.localHead)}`
-            : 'No code changes',
+          : merging
+            ? 'The merge is not committed'
+            : changed
+              ? `Head ${short(worktree.localHead)}`
+              : 'No code changes',
     },
     {
       key: 'push',
@@ -275,12 +304,12 @@ function worktreeChecks(worktree: GateWorktree | null): GateCheck[] {
       ok: synced,
       detail: synced
         ? `GitHub is at ${short(worktree.remoteHead)}`
-        : dirty > 0
+        : !committed
           ? 'Commit first'
           : worktree.remoteHead === null
             ? 'Could not read the head on GitHub'
             : worktree.remoteInLocal === false
-              ? `GitHub moved to ${short(worktree.remoteHead)}, which this worktree does not have: a push would be refused. ${restart}`
+              ? `GitHub moved to ${short(worktree.remoteHead)}, which this worktree does not have: a push would be refused. ${restartFor(kind)}`
               : `GitHub is at ${short(worktree.remoteHead)}, local is ${short(worktree.localHead)}`,
     },
   ]
@@ -323,6 +352,12 @@ export function gateChecks(input: CheckInput): GateCheck[] {
     ]
   }
   if (input.kind === 'replies') return [replyCheck(input.replies)]
+  if (input.kind === 'conflicts') {
+    return [
+      conflictCheck(input.reportedThreads !== null, input.worktree),
+      ...worktreeChecks(input.worktree, input.kind),
+    ]
+  }
   const missing = input.reportedThreads
     ? input.threadIds.filter((id) => !input.reportedThreads!.includes(id)).length
     : input.threadIds.length
@@ -336,7 +371,7 @@ export function gateChecks(input: CheckInput): GateCheck[] {
           ? `${missing} item${missing === 1 ? '' : 's'} without fix, push back or defer`
           : null,
     },
-    ...worktreeChecks(input.worktree),
+    ...worktreeChecks(input.worktree, input.kind),
     input.replies.length === 0
       ? {
           key: 'replies',
@@ -443,7 +478,7 @@ export function createActions(deps: ActionDeps) {
   }
 
   async function worktreeState(
-    { run }: Loaded,
+    { run, kind }: Loaded,
     remoteHead: string | null,
   ): Promise<GateWorktree | null> {
     const path = run.worktreePath
@@ -461,6 +496,7 @@ export function createActions(deps: ActionDeps) {
       remoteHead,
       remoteInLocal: remoteHead === null ? null : await contains(path, remoteHead),
       branch: getRunRow(ctx, run.id).pushRef,
+      merge: kind === 'conflicts' ? await mergeState(path, git) : null,
     }
   }
 
@@ -487,7 +523,7 @@ export function createActions(deps: ActionDeps) {
       : allEvents.filter((item) => !(conflicting && item === 'approve'))
     if (kind === 'review' && conflicting) {
       warnings.push(
-        `The pull request conflicts with ${node?.baseRefName ?? 'its base'}, so GitHub cannot merge it${own ? '' : ': Approve comes back once the conflicts are resolved'}.`,
+        `The pull request conflicts with ${node?.baseRefName ?? 'its base'}, so GitHub cannot merge it${own ? ': run Resolve conflicts to merge it in' : ': Approve comes back once the conflicts are resolved'}.`,
       )
     }
     const chosen = gate.event ?? run.report?.verdict ?? 'comment'
@@ -524,7 +560,7 @@ export function createActions(deps: ActionDeps) {
     }
     const replies = kind === 'review' ? [] : repliesOf(loaded)
     let worktree: GateWorktree | null = null
-    if (kind === 'address' && !closed) {
+    if (pushesCode(kind) && !closed) {
       try {
         worktree = await worktreeState(loaded, node?.headRefOid ?? null)
       } catch (error) {
@@ -532,7 +568,7 @@ export function createActions(deps: ActionDeps) {
       }
     }
     const pendingReview = (node?.reviews.nodes.length ?? 0) > 0
-    if (pendingReview && kind !== 'review') {
+    if (pendingReview && (kind === 'address' || kind === 'replies')) {
       warnings.push(
         'You have a pending review on this pull request: GitHub may hold these replies in it until you submit it.',
       )
@@ -555,15 +591,17 @@ export function createActions(deps: ActionDeps) {
     const live = activeRunFor(ctx, run.prId) !== null || run.status !== 'done'
     const direction = reviewDirection(mode, event, run.report?.verdict)
     const nextStage: BoardStage | null =
-      kind !== 'review'
-        ? tabOf(pr.myRole) === 'mine'
-          ? 'waiting-review'
-          : null
-        : direction.goes === 'changes'
-          ? 'changes-requested'
-          : direction.approvedOnGithub
-            ? 'approved'
-            : 'to-approve'
+      kind === 'conflicts'
+        ? null
+        : kind !== 'review'
+          ? tabOf(pr.myRole) === 'mine'
+            ? 'waiting-review'
+            : null
+          : direction.goes === 'changes'
+            ? 'changes-requested'
+            : direction.approvedOnGithub
+              ? 'approved'
+              : 'to-approve'
     return {
       runId,
       prId: run.prId,
@@ -575,7 +613,7 @@ export function createActions(deps: ActionDeps) {
       body,
       findings: { included: included.length, total: findings.length, outsideDiff },
       pendingReview,
-      commitMessage: gate.commitMessage ?? defaultCommitMessage,
+      commitMessage: gate.commitMessage ?? defaultMessage(loaded),
       worktree,
       replies,
       checks,
@@ -590,6 +628,9 @@ export function createActions(deps: ActionDeps) {
       warning: warnings.length > 0 ? warnings.join(' ') : null,
     }
   }
+
+  const defaultMessage = ({ kind, pr }: Loaded) =>
+    kind === 'conflicts' ? mergeCommitMessage(pr) : defaultCommitMessage
 
   const setGate = (runId: number, set: Partial<Omit<GateRow, 'runId' | 'kind'>>) =>
     ctx.db.update(postGates).set(set).where(eq(postGates.runId, runId)).run()
@@ -653,11 +694,21 @@ export function createActions(deps: ActionDeps) {
       const loaded = load(runId)
       ensureOpen(loaded)
       ensureIdle(loaded)
-      if (loaded.kind !== 'address') throw new Error('Only address runs commit')
+      if (!pushesCode(loaded.kind))
+        throw new Error('Only address and resolve conflicts runs commit')
       const path = loaded.run.worktreePath
       if (!path) throw new Error('The run has no worktree')
-      const commitMessage = (text ?? loaded.gate.commitMessage ?? defaultCommitMessage).trim()
+      const commitMessage = (text ?? loaded.gate.commitMessage ?? defaultMessage(loaded)).trim()
       if (!commitMessage) throw new Error('Write a commit message')
+      if (loaded.kind === 'conflicts') {
+        const state = await mergeState(path, git)
+        if (state.unmerged.length > 0) {
+          throw new Error(`Resolve the conflicts in ${state.unmerged.join(', ')} first`)
+        }
+        if (state.markers.length > 0) {
+          throw new Error(`Conflict markers are left in ${state.markers.join(', ')}`)
+        }
+      }
       setGate(runId, { commitMessage })
       await gitOk(path, ['add', '-A'])
       await gitOk(path, ['commit', '-m', commitMessage])
@@ -689,10 +740,10 @@ export function createActions(deps: ActionDeps) {
       const loaded = load(runId)
       ensureOpen(loaded)
       ensureIdle(loaded)
-      if (loaded.kind !== 'address') throw new Error('Only address runs push')
+      if (!pushesCode(loaded.kind)) throw new Error('Only address and resolve conflicts runs push')
       const { row, pr } = loaded
       if (!row.pushRemote || !row.pushRef) {
-        throw new Error('This run does not know where to push. Run Address comments again.')
+        throw new Error(`This run does not know where to push. ${restartFor(loaded.kind)}`)
       }
       const state = await worktreeState(loaded, null)
       if (!state) throw new Error('The worktree of this run is gone')
@@ -701,7 +752,7 @@ export function createActions(deps: ActionDeps) {
       const before = (await liveNode(pr.nodeId)).headRefOid
       if (!(await contains(state.path, before))) {
         throw new Error(
-          `GitHub's ${row.pushRef} is at ${short(before)}, which this worktree does not have, so nothing was pushed. ${restart}`,
+          `GitHub's ${row.pushRef} is at ${short(before)}, which this worktree does not have, so nothing was pushed. ${restartFor(loaded.kind)}`,
         )
       }
       await withPushNonce((nonce) =>
@@ -719,7 +770,7 @@ export function createActions(deps: ActionDeps) {
       ).catch((error: unknown) => {
         if (!message(error).includes('[rejected]')) throw error
         throw new Error(
-          `GitHub's ${row.pushRef} moved while pushing, so nothing was pushed. ${restart}`,
+          `GitHub's ${row.pushRef} moved while pushing, so nothing was pushed. ${restartFor(loaded.kind)}`,
         )
       })
       let remote: string | null = null
@@ -733,7 +784,10 @@ export function createActions(deps: ActionDeps) {
           `Pushed, but GitHub still shows ${short(remote)} instead of ${short(state.localHead)}. Check again in a moment.`,
         )
       }
-      setGate(runId, { pushedOid: remote })
+      setGate(runId, {
+        pushedOid: remote,
+        ...(loaded.kind === 'conflicts' ? { postedAt: Date.now(), postedHeadOid: remote } : {}),
+      })
       emit.prsChanged()
       return build(runId)
     })

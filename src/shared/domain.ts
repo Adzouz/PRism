@@ -1,8 +1,13 @@
 import { z } from 'zod'
 
-export const stages = ['review', 're-review', 'test-plan', 'address', 'draft-replies'] as const
+export const skillStages = ['review', 're-review', 'test-plan', 'address', 'draft-replies'] as const
+export type SkillStage = (typeof skillStages)[number]
+export const stages = [...skillStages, 'resolve-conflicts'] as const
 export const stage = z.enum(stages)
 export type Stage = z.infer<typeof stage>
+
+export const isSkillStage = (value: Stage): value is SkillStage =>
+  (skillStages as readonly Stage[]).includes(value)
 
 export const stageLabels: Record<Stage, string> = {
   review: 'Review',
@@ -10,6 +15,7 @@ export const stageLabels: Record<Stage, string> = {
   'test-plan': 'Test plan',
   address: 'Address comments',
   'draft-replies': 'Draft replies',
+  'resolve-conflicts': 'Resolve conflicts',
 }
 
 export const agentIds = ['claude', 'codex', 'gemini', 'cursor-agent'] as const
@@ -489,8 +495,11 @@ export const findingItemId = (item: string) =>
 
 export const runStagesByTab: Record<BoardTab, Stage[]> = {
   reviews: ['review', 're-review', 'draft-replies', 'test-plan'],
-  mine: ['review', 're-review', 'address', 'draft-replies', 'test-plan'],
+  mine: ['review', 're-review', 'address', 'resolve-conflicts', 'draft-replies', 'test-plan'],
 }
+
+export const runStagesFor = (pr: Pick<BoardPr, 'tab' | 'conflicting'>) =>
+  runStagesByTab[pr.tab].filter((value) => value !== 'resolve-conflicts' || pr.conflicting)
 
 export const appChoice = z.object({ id: z.string(), name: z.string() })
 export type AppChoice = z.infer<typeof appChoice>
@@ -539,6 +548,7 @@ export const boardPr = z.object({
   deletions: z.number(),
   changedFiles: z.number(),
   unresolvedThreads: z.number(),
+  conflicting: z.boolean(),
   reviewRequested: z.boolean(),
   requestedTeam: z.string().nullable(),
   myReviewState: z.string().nullable(),
@@ -617,10 +627,10 @@ export type NextStep =
 
 type NextStepPr = Pick<
   BoardPr,
-  'tab' | 'stage' | 'state' | 'reviewed' | 'myReviewState' | 'unresolvedThreads'
+  'tab' | 'stage' | 'state' | 'reviewed' | 'myReviewState' | 'unresolvedThreads' | 'conflicting'
 >
 
-function primaryNextStep(pr: NextStepPr): NextStep | null {
+function loopNextStep(pr: NextStepPr): NextStep | null {
   switch (pr.stage) {
     case 'to-review':
     case 'waiting-review':
@@ -643,6 +653,8 @@ function secondaryNextStep(pr: NextStepPr): NextStep | null {
     : null
 }
 
+const resolvesConflicts = (pr: NextStepPr) => pr.tab === 'mine' && pr.conflicting
+
 const sameStep = (a: NextStep, b: NextStep) =>
   a.kind === b.kind && (a.kind === 'approve' || a.stage === (b as typeof a).stage)
 
@@ -651,11 +663,14 @@ export function nextSteps(
 ): { primary: NextStep | null; secondary: NextStep | null; others: NextStep[] } | null {
   const column = boardColumns[pr.tab].find((item) => item.stage === pr.stage)
   if (pr.state !== 'OPEN' || !column || column.agent) return null
-  const primary = primaryNextStep(pr)
-  const secondary = secondaryNextStep(pr)
+  const loop = loopNextStep(pr)
+  const primary: NextStep | null = resolvesConflicts(pr)
+    ? { kind: 'run', stage: 'resolve-conflicts' }
+    : loop
+  const secondary = resolvesConflicts(pr) ? (loop ?? secondaryNextStep(pr)) : secondaryNextStep(pr)
   const shown = [primary, secondary].filter((step): step is NextStep => step !== null)
   const all: NextStep[] = [
-    ...runStagesByTab[pr.tab].map((value) => ({ kind: 'run' as const, stage: value })),
+    ...runStagesFor(pr).map((value) => ({ kind: 'run' as const, stage: value })),
     ...(column.approve ? [] : [{ kind: 'approve' as const }]),
     ...boardColumns[pr.tab]
       .filter((item) => !item.agent && !item.approve && item.stage !== pr.stage)
@@ -768,7 +783,7 @@ export const defaultNotificationSettings: NotificationSettings = {
 
 export type NoticeKind = 'needsYou' | 'runFinished' | 'reviewRequested' | 'ciFailed'
 
-export const gateKind = z.enum(['review', 'address', 'replies'])
+export const gateKind = z.enum(['review', 'address', 'replies', 'conflicts'])
 export type GateKind = z.infer<typeof gateKind>
 
 export const gateKindOf: Partial<Record<Stage, GateKind>> = {
@@ -776,13 +791,17 @@ export const gateKindOf: Partial<Record<Stage, GateKind>> = {
   're-review': 'review',
   address: 'address',
   'draft-replies': 'replies',
+  'resolve-conflicts': 'conflicts',
 }
+
+export const pushesCode = (kind: GateKind) => kind === 'address' || kind === 'conflicts'
 
 export const gateCheckKey = z.enum([
   'findings',
   'event',
   'mode',
   'threads',
+  'conflicts',
   'commit',
   'push',
   'replies',
@@ -813,6 +832,9 @@ export const gateWorktree = z.object({
   remoteHead: z.string().nullable(),
   remoteInLocal: z.boolean().nullable(),
   branch: z.string().nullable(),
+  merge: z
+    .object({ merging: z.boolean(), unmerged: z.array(z.string()), markers: z.array(z.string()) })
+    .nullable(),
 })
 export type GateWorktree = z.infer<typeof gateWorktree>
 
