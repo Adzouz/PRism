@@ -34,7 +34,7 @@ import { computeDelta, describeDelta, mergeConflicts, type Delta } from './delta
 import { isCommentable, parseUnifiedDiff, type DiffMap } from './diff'
 import type { GithubApi } from './gh-api'
 import { effectiveBindings, findSkill, readSkillContent, skillDirOf } from './library'
-import { startBaseMerge, type BaseMerge } from './merge'
+import { mergeInProgress, startBaseMerge, type BaseMerge } from './merge'
 import { prThreads } from './prs'
 import { getRepo } from './repos'
 import {
@@ -90,6 +90,7 @@ export type RunnerDeps = {
   }>
   prepare?: typeof prepareWorktree
   startMerge?: typeof startBaseMerge
+  merging?: typeof mergeInProgress
 }
 
 const checkoutQuery = `
@@ -180,6 +181,7 @@ export function createRunner(deps: RunnerDeps) {
   const queued = new Map<number, string[]>()
   const prepare = deps.prepare ?? prepareWorktree
   const startMerge = deps.startMerge ?? startBaseMerge
+  const merging = deps.merging ?? mergeInProgress
   const agentEnv = deps.agentEnv ?? (() => defaultAgentEnv(ctx.userData))
 
   const event = (runId: number, kind: RunEvent['kind'], payload: Record<string, unknown>) =>
@@ -459,6 +461,17 @@ export function createRunner(deps: RunnerDeps) {
       )
     }
     const reviewing = run.stage === 'review' || run.stage === 're-review'
+    if ((run.stage === 'address' || reviewing) && (await merging(worktree.path))) {
+      const stray = `A base merge from Resolve conflicts is in progress in ${worktree.path}`
+      if (run.stage === 'address') {
+        throw new Error(
+          `${stray}. Finish it with Resolve conflicts, or run git merge --abort there, then run Address comments again`,
+        )
+      }
+      event(runId, 'note', {
+        text: `${stray}, so this review reads half-merged files. Finish the merge with Resolve conflicts, or run git merge --abort there, before relying on it.`,
+      })
+    }
     let delta: Delta | null = null
     if (run.stage === 're-review') {
       const last = lastReviewed(ctx, run.prId, runId)

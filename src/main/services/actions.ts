@@ -33,7 +33,7 @@ import { getSetting, setSetting } from '../db/settings'
 import { run as exec } from '../system/exec'
 import type { Ctx } from './context'
 import { diffMap, isCommentable, type DiffMap } from './diff'
-import { mergeState } from './merge'
+import { mergeInProgress, mergeState } from './merge'
 import type { GithubApi } from './gh-api'
 import type { PostedReview } from './mirador'
 import { reviewDirection, tabOf } from './pr-stage'
@@ -269,6 +269,9 @@ function replyCheck(replies: GateReply[]): GateCheck {
   }
 }
 
+const strayMerge =
+  'A base merge from Resolve conflicts is in progress in this worktree. Finish it with Resolve conflicts, or run git merge --abort there, then run Address comments again'
+
 function worktreeChecks(worktree: GateWorktree | null, kind: GateKind): GateCheck[] {
   const label = kind === 'conflicts' ? 'Merge committed' : 'Changes committed'
   if (!worktree) {
@@ -290,13 +293,15 @@ function worktreeChecks(worktree: GateWorktree | null, kind: GateKind): GateChec
       label,
       ok: committed,
       detail:
-        dirty > 0
-          ? `${dirty} file${dirty === 1 ? '' : 's'} not committed`
-          : merging
-            ? 'The merge is not committed'
-            : changed
-              ? `Head ${short(worktree.localHead)}`
-              : 'No code changes',
+        merging && kind !== 'conflicts'
+          ? strayMerge
+          : dirty > 0
+            ? `${dirty} file${dirty === 1 ? '' : 's'} not committed`
+            : merging
+              ? 'The merge is not committed'
+              : changed
+                ? `Head ${short(worktree.localHead)}`
+                : 'No code changes',
     },
     {
       key: 'push',
@@ -496,7 +501,7 @@ export function createActions(deps: ActionDeps) {
       remoteHead,
       remoteInLocal: remoteHead === null ? null : await contains(path, remoteHead),
       branch: getRunRow(ctx, run.id).pushRef,
-      merge: kind === 'conflicts' ? await mergeState(path, git) : null,
+      merge: pushesCode(kind) ? await mergeState(path, git) : null,
     }
   }
 
@@ -708,6 +713,8 @@ export function createActions(deps: ActionDeps) {
         if (state.markers.length > 0) {
           throw new Error(`Conflict markers are left in ${state.markers.join(', ')}`)
         }
+      } else if (await mergeInProgress(path, git)) {
+        throw new Error(strayMerge)
       }
       setGate(runId, { commitMessage })
       await gitOk(path, ['add', '-A'])
@@ -747,6 +754,7 @@ export function createActions(deps: ActionDeps) {
       }
       const state = await worktreeState(loaded, null)
       if (!state) throw new Error('The worktree of this run is gone')
+      if (loaded.kind !== 'conflicts' && state.merge?.merging) throw new Error(strayMerge)
       if (state.dirty.length > 0) throw new Error('Commit the changes first')
       const ref = `refs/heads/${row.pushRef}`
       const before = (await liveNode(pr.nodeId)).headRefOid

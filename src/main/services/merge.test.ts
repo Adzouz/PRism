@@ -111,6 +111,14 @@ describe('mergeState', () => {
     expect(await mergeState(cwd)).toEqual({ merging: true, unmerged: [], markers: [] })
   })
 
+  it('does not read a setext heading underline from the base as a conflict marker', async () => {
+    const cwd = await repo()
+    await commit(cwd, 'README.md', 'Title\n=======\n\nText\n', 'main adds a readme')
+    git(cwd, 'checkout', '-q', 'feature')
+    await startBaseMerge(cwd, 'main')
+    expect(await mergeState(cwd)).toEqual({ merging: true, unmerged: [], markers: [] })
+  })
+
   it('reports no merge on a clean worktree', async () => {
     const cwd = await repo()
     expect(await mergeState(cwd)).toEqual({ merging: false, unmerged: [], markers: [] })

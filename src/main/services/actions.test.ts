@@ -901,6 +901,34 @@ describe('conflicts gate', () => {
     await expect(actions.post(runId)).rejects.toThrow(/Already posted/)
   })
 
+  it('refuses to commit or push from an address gate while a base merge is in progress', async () => {
+    const { ctx, addRun } = await setup('author')
+    const { bare, work, head } = await conflictingPr()
+    await startBaseMerge(work, 'origin/main')
+    const runId = addRun('address', {
+      worktreePath: work,
+      reviewedHeadOid: head,
+      pushRemote: 'origin',
+      pushRef: 'feature',
+      changesJson: JSON.stringify({ threads: [] }),
+    })
+    const actions = createActions({
+      ctx,
+      api: fakeApi({ headRefOid: head, viewerDidAuthor: true, pending: null }).api,
+      emit: { prsChanged: () => {} },
+      sleep: noSleep,
+    })
+    const gate = await actions.get(runId)
+    expect(gate.checks.find((check) => check.key === 'commit')).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining('A base merge from Resolve conflicts is in progress'),
+    })
+    await expect(actions.commit(runId, 'fix: x')).rejects.toThrow(/base merge .* in progress/)
+    await expect(actions.push(runId)).rejects.toThrow(/base merge .* in progress/)
+    expect(git(work, 'rev-parse', 'HEAD')).toBe(head)
+    expect(git(bare, 'rev-parse', 'refs/heads/feature')).toBe(head)
+  })
+
   it('waits for the agent report before the conflicts count as resolved', async () => {
     const { ctx, addRun } = await setup('author')
     const { work, head } = await conflictingPr()

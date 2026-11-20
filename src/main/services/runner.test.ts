@@ -515,6 +515,27 @@ describe('agent runner', () => {
     expect(adapter.run).not.toHaveBeenCalled()
   })
 
+  it('fails an address run while a base merge is in progress in the worktree', async () => {
+    const { ctx, ids } = await setup()
+    threadNodes = [threadNode('T1', false)]
+    const adapter: AgentAdapter = { run: vi.fn<AgentAdapter['run']>(async () => ok('s')) }
+    const runner = createRunner({
+      ctx,
+      api,
+      adapters: { claude: adapter },
+      emit: { run: () => {}, event: () => {}, prsChanged: () => {} },
+      agentEnv: async () => ({ env: {}, executable: null }),
+      prepare,
+      merging: async () => true,
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'address' })
+    await until(() => getRun(ctx, run.id).status === 'failed')
+    expect(getRun(ctx, run.id).error).toMatch(
+      /^A base merge from Resolve conflicts is in progress in \/code\/app-worktrees\/pr-1\. Finish it/,
+    )
+    expect(adapter.run).not.toHaveBeenCalled()
+  })
+
   it('hands review findings posted in the body to address runs', async () => {
     const { ctx, ids } = await setup()
     threadNodes = [threadNode('T9', true)]

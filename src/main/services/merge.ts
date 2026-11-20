@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { run, type RunResult } from '../system/exec'
 
 export type BaseMerge = { base: string; baseOid: string; conflicts: string[]; resumed: boolean }
@@ -20,12 +22,30 @@ async function unmergedFiles(cwd: string, exec: Exec = git) {
   return [...new Set(result.stdout.split('\0').filter(Boolean))]
 }
 
+export async function mergeInProgress(cwd: string, exec: Exec = git) {
+  return Boolean(await oidOf(cwd, 'MERGE_HEAD', exec))
+}
+
+async function opensConflict(cwd: string, file: string, lines: number[]) {
+  const content = await readFile(join(cwd, file), 'utf8').catch(() => null)
+  if (content === null) return true
+  const text = content.split('\n')
+  return lines.some((line) => text[line - 1]?.startsWith('<<<<<<<'))
+}
+
 async function conflictMarkers(cwd: string, exec: Exec) {
   const result = await exec(cwd, ['diff', 'HEAD', '--check', '--no-color'])
-  const files = result.stdout
-    .split('\n')
-    .flatMap((line) => /^(.+):\d+: leftover conflict marker$/.exec(line)?.[1] ?? [])
-  return [...new Set(files)]
+  const flagged = new Map<string, number[]>()
+  for (const line of result.stdout.split('\n')) {
+    const match = /^(.+):(\d+): leftover conflict marker$/.exec(line)
+    if (match) flagged.set(match[1]!, [...(flagged.get(match[1]!) ?? []), Number(match[2])])
+  }
+  const files = await Promise.all(
+    [...flagged].map(async ([file, lines]) =>
+      (await opensConflict(cwd, file, lines)) ? file : [],
+    ),
+  )
+  return files.flat()
 }
 
 export async function mergeState(cwd: string, exec: Exec = git): Promise<MergeState> {
