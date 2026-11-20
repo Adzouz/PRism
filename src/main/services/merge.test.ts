@@ -111,6 +111,19 @@ describe('mergeState', () => {
     expect(await mergeState(cwd)).toEqual({ merging: true, unmerged: [], markers: [] })
   })
 
+  it('reports closing markers left after the opening one was removed', async () => {
+    const cwd = await conflicting()
+    await startBaseMerge(cwd, 'main')
+    const content = await readFile(join(cwd, 'a.txt'), 'utf8')
+    await writeFile(join(cwd, 'a.txt'), content.replace(/^<{7}.*\n.*\n/m, ''))
+    git(cwd, 'add', 'a.txt')
+    expect(await mergeState(cwd)).toEqual({ merging: true, unmerged: [], markers: ['a.txt'] })
+
+    await writeFile(join(cwd, 'a.txt'), 'one\nmain\n>>>>>>> main\nthree\n')
+    git(cwd, 'add', 'a.txt')
+    expect(await mergeState(cwd)).toEqual({ merging: true, unmerged: [], markers: ['a.txt'] })
+  })
+
   it('does not read a setext heading underline from the base as a conflict marker', async () => {
     const cwd = await repo()
     await commit(cwd, 'README.md', 'Title\n=======\n\nText\n', 'main adds a readme')

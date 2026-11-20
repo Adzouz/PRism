@@ -30,7 +30,7 @@ async function opensConflict(cwd: string, file: string, lines: number[]) {
   const content = await readFile(join(cwd, file), 'utf8').catch(() => null)
   if (content === null) return true
   const text = content.split('\n')
-  return lines.some((line) => text[line - 1]?.startsWith('<<<<<<<'))
+  return lines.some((line) => /^(<{7}|\|{7}|>{7})/.test(text[line - 1] ?? ''))
 }
 
 async function conflictMarkers(cwd: string, exec: Exec) {
