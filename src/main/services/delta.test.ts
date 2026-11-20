@@ -3,7 +3,7 @@ import { mkdtemp, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { computeDelta, describeDelta, parseRangeDiff } from './delta'
+import { computeDelta, describeDelta, mergeConflicts, parseRangeDiff } from './delta'
 
 const env = {
   ...process.env,
@@ -146,5 +146,18 @@ describe('computeDelta', () => {
     expect(describeDelta(delta)).toBe(
       `Re-review covers 0 commits, 1 commit removed since ${reviewed.slice(0, 12)} (after a force-push, commits that only moved are left out).`,
     )
+  })
+})
+
+describe('mergeConflicts', () => {
+  it('lists the files that conflict with the base, none on a clean merge', async () => {
+    const { dir } = await repo()
+    expect(await mergeConflicts(dir, 'main', 'HEAD')).toEqual([])
+    await commit(dir, 'base.txt', 'feature\n')
+    git(dir, 'checkout', '-q', 'main')
+    await commit(dir, 'base.txt', 'main\n')
+    git(dir, 'checkout', '-q', 'feature')
+    expect(await mergeConflicts(dir, 'main', 'HEAD')).toEqual(['base.txt'])
+    expect(await mergeConflicts(dir, 'missing', 'HEAD')).toBeNull()
   })
 })
