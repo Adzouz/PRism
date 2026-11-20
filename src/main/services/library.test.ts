@@ -12,9 +12,12 @@ import type { Ctx } from './context'
 import {
   createCustomSkill,
   effectiveBindings,
+  findSkill,
   importSkill,
   linkCustomFile,
   proposeBindings,
+  readSkillContent,
+  refreshBuiltinSkills,
   setBinding,
   stopWatching,
   validateBinding,
@@ -158,5 +161,60 @@ describe('built-in source', () => {
     const builtinSource = await ensureBuiltinSource(ctx)
     const proposals = await proposeBindings(ctx, builtinSource.id)
     expect(proposals.every((p) => p.reason === 'builtin')).toBe(true)
+  })
+
+  it('ships one starter per stage', async () => {
+    const ctx = await makeCtx()
+    const proposals = await proposeBindings(ctx, null)
+    expect(Object.fromEntries(proposals.map((p) => [p.stage, p.skillName]))).toEqual({
+      review: 'pr-review',
+      're-review': 'pr-re-review',
+      'test-plan': 'pr-test-plan',
+      address: 'address-comments',
+      'draft-replies': 'draft-replies',
+    })
+  })
+
+  it('refreshes untouched copies when the bundled starter changes', async () => {
+    const ctx = await makeCtx()
+    ctx.builtinSkillsDir = await mkdtemp(join(tmpdir(), 'prism-builtin-'))
+    let changes = 0
+    ctx.skillsChanged = () => {
+      changes += 1
+    }
+    const bundle = async (name: string, version: string) => {
+      await mkdir(join(ctx.builtinSkillsDir, name), { recursive: true })
+      await writeFile(
+        join(ctx.builtinSkillsDir, name, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: ${version}\n---\n${version}`,
+      )
+    }
+    await bundle('pr-review', 'v1')
+    await bundle('pr-test-plan', 'v1')
+    const source = await ensureBuiltinSource(ctx)
+    const review = await importSkill(ctx, {
+      sourceId: source.id,
+      relDir: 'pr-review',
+      mode: 'copy',
+    })
+    const plan = await importSkill(ctx, {
+      sourceId: source.id,
+      relDir: 'pr-test-plan',
+      mode: 'copy',
+    })
+    expect(await refreshBuiltinSkills(ctx)).toBe(0)
+
+    const edited = '---\nname: pr-test-plan\ndescription: mine\n---\nmine'
+    await writeFile(join(plan.path, 'SKILL.md'), edited)
+    await bundle('pr-review', 'v2')
+    await bundle('pr-test-plan', 'v2')
+
+    expect(await refreshBuiltinSkills(ctx)).toBe(1)
+    expect(changes).toBe(1)
+    expect(await readSkillContent(ctx, review.id)).toContain('v2')
+    expect(findSkill(ctx, review.id)).toMatchObject({ description: 'v2', path: review.path })
+    expect(await readSkillContent(ctx, plan.id)).toBe(edited)
+    expect(await exists(`${review.path}.next`)).toBe(false)
+    expect(await refreshBuiltinSkills(ctx)).toBe(0)
   })
 })

@@ -19,7 +19,7 @@ import { createActions } from './services/actions'
 import { createAutoRun } from './services/autorun'
 import { createWorktreeCleanup } from './services/cleanup'
 import { createGithubApi } from './services/gh-api'
-import { stopWatching, watchLinkedSkills } from './services/library'
+import { refreshBuiltinSkills, stopWatching, watchLinkedSkills } from './services/library'
 import { createMiradorBridge } from './services/mirador'
 import { getNotificationSettings, setNotificationSettings } from './services/notices'
 import { createRunner, type AgentRunner } from './services/runner'
@@ -109,6 +109,9 @@ void app.whenReady().then(() => {
     skillsChanged: () => emit('skills:changed', null),
   }
   watchLinkedSkills(ctx)
+  void refreshBuiltinSkills(ctx).catch((error) =>
+    console.warn('Could not refresh the built-in skills:', error),
+  )
 
   const api = createGithubApi()
   const desk = createDesktop({

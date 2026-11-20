@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from 'node:fs'
-import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { and, eq } from 'drizzle-orm'
 import {
@@ -17,7 +17,7 @@ import { hashPath, parseFrontmatter, readSkillFile, scanSkills } from '../skills
 import { runStreaming } from '../system/exec'
 import type { Ctx } from './context'
 import { exists } from './git'
-import { ensureBuiltinSource, getSource, scanSourceSkills } from './sources'
+import { builtinKey, ensureBuiltinSource, getSource, scanSourceSkills } from './sources'
 
 type SkillRow = typeof skills.$inferSelect
 
@@ -252,6 +252,41 @@ export async function refreshLinkedSkills(ctx: Ctx, sourceId?: number) {
     if (sourceId !== undefined && row.sourceId !== sourceId) continue
     await refreshSkill(ctx, row.id)
   }
+}
+
+export async function refreshBuiltinSkills(ctx: Ctx) {
+  const source = ctx.db
+    .select()
+    .from(skillSources)
+    .where(eq(skillSources.urlOrPath, builtinKey))
+    .get()
+  if (!source) return 0
+  const bundled = await scanSkills(ctx.builtinSkillsDir)
+  const copies = ctx.db
+    .select()
+    .from(skills)
+    .where(and(eq(skills.sourceId, source.id), eq(skills.mode, 'copy')))
+    .all()
+  let updated = 0
+  for (const row of copies) {
+    const fresh = bundled.find((skill) => skill.name === row.name)
+    if (!fresh) continue
+    const [bundledHash, currentHash] = await Promise.all([hashPath(fresh.dir), hashPath(row.path)])
+    if (bundledHash === row.contentHash || currentHash !== row.contentHash) continue
+    const next = `${row.path}.next`
+    await rm(next, { recursive: true, force: true })
+    await cp(fresh.dir, next, { recursive: true })
+    await rm(row.path, { recursive: true, force: true })
+    await rename(next, row.path)
+    ctx.db
+      .update(skills)
+      .set({ description: fresh.description, contentHash: bundledHash })
+      .where(eq(skills.id, row.id))
+      .run()
+    updated += 1
+  }
+  if (updated) ctx.skillsChanged()
+  return updated
 }
 
 export function watchLinkedSkills(ctx: Ctx) {
