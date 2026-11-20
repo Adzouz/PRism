@@ -271,13 +271,17 @@ export async function refreshBuiltinSkills(ctx: Ctx) {
   for (const row of copies) {
     const fresh = bundled.find((skill) => skill.name === row.name)
     if (!fresh) continue
+    const old = `${row.path}.old`
+    if (!(await exists(row.path)) && (await exists(old))) await rename(old, row.path)
     const [bundledHash, currentHash] = await Promise.all([hashPath(fresh.dir), hashPath(row.path)])
     if (bundledHash === row.contentHash || currentHash !== row.contentHash) continue
     const next = `${row.path}.next`
     await rm(next, { recursive: true, force: true })
     await cp(fresh.dir, next, { recursive: true })
-    await rm(row.path, { recursive: true, force: true })
+    await rm(old, { recursive: true, force: true })
+    await rename(row.path, old)
     await rename(next, row.path)
+    await rm(old, { recursive: true, force: true })
     ctx.db
       .update(skills)
       .set({ description: fresh.description, contentHash: bundledHash })

@@ -215,6 +215,13 @@ describe('built-in source', () => {
     expect(findSkill(ctx, review.id)).toMatchObject({ description: 'v2', path: review.path })
     expect(await readSkillContent(ctx, plan.id)).toBe(edited)
     expect(await exists(`${review.path}.next`)).toBe(false)
+    expect(await exists(`${review.path}.old`)).toBe(false)
     expect(await refreshBuiltinSkills(ctx)).toBe(0)
+
+    await rename(review.path, `${review.path}.old`)
+    await bundle('pr-review', 'v3')
+    expect(await refreshBuiltinSkills(ctx)).toBe(1)
+    expect(await readSkillContent(ctx, review.id)).toContain('v3')
+    expect(await exists(`${review.path}.old`)).toBe(false)
   })
 })
