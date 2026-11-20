@@ -33,6 +33,17 @@ import {
 } from './runs'
 import type { prepareWorktree } from './worktrees'
 
+const conflictCheck = vi.hoisted(() => ({ fail: false }))
+
+vi.mock('./delta', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./delta')>()
+  return {
+    ...actual,
+    mergeConflicts: (...args: Parameters<typeof actual.mergeConflicts>) =>
+      conflictCheck.fail ? Promise.resolve(null) : actual.mergeConflicts(...args),
+  }
+})
+
 const migrations = resolve(__dirname, '../../../drizzle')
 
 async function setup(count = 1) {
@@ -837,6 +848,80 @@ describe('agent runner', () => {
     expect(replies[0]).toContain('- src/a.ts:25 (RIGHT) Null check')
     expect(replies[1]).toContain('Recorded the comment verdict with 1 finding(s).')
     expect(listFindings(ctx, run.id).map((item) => item.line)).toEqual([3])
+  })
+
+  it('notes an unchecked conflict only once a verdict is recorded', async () => {
+    const { ctx, ids } = await setup()
+    const dir = await mkdtemp(join(tmpdir(), 'prism-unchecked-'))
+    const sh = (...args: string[]) =>
+      execFileSync('git', ['-C', dir, ...args], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'Octo',
+          GIT_AUTHOR_EMAIL: 'octo@example.com',
+          GIT_COMMITTER_NAME: 'Octo',
+          GIT_COMMITTER_EMAIL: 'octo@example.com',
+          GIT_CONFIG_GLOBAL: '/dev/null',
+        },
+      }).trim()
+    execFileSync('git', ['init', '-q', '-b', 'main', dir])
+    await mkdir(join(dir, 'src'))
+    const rows = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`)
+    await writeFile(join(dir, 'src/a.ts'), `${rows.join('\n')}\n`)
+    sh('add', '-A')
+    sh('commit', '-qm', 'base')
+    const base = sh('rev-parse', 'HEAD')
+    rows[2] = 'changed 3'
+    await writeFile(join(dir, 'src/a.ts'), `${rows.join('\n')}\n`)
+    sh('commit', '-qam', 'change')
+    const head = sh('rev-parse', 'HEAD')
+    ctx.db.update(prs).set({ baseOid: base }).run()
+    const note =
+      'PRism could not check whether the pull request conflicts with its base, so the verdict was recorded without that check.'
+    const replies: string[] = []
+    let notesAfterRefusal: string[] = []
+    conflictCheck.fail = true
+    try {
+      const { runner, events } = makeRunner(
+        ctx,
+        async (input) => {
+          const report = { verdict: 'approve' as const, summary: 'Done.', dimensions: [] }
+          for (const line of [25, 3]) {
+            try {
+              replies.push(await input.tools.reportFindings(report, [{ ...finding, line }]))
+            } catch (error) {
+              replies.push(`error: ${(error as Error).message}`)
+            }
+            if (line === 25) {
+              notesAfterRefusal = events
+                .filter((item) => item.kind === 'note')
+                .map((item) => String(item.payload.text))
+            }
+          }
+          return ok('s')
+        },
+        undefined,
+        async () => ({
+          path: dir,
+          branch: 'feature',
+          remote: 'origin',
+          baseRemote: 'origin',
+          created: true,
+          headOid: head,
+          warning: null,
+        }),
+      )
+      const run = runner.start({ prId: ids[0]!, stage: 'review' })
+      await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
+      expect(replies[0]).toContain('Nothing was recorded')
+      expect(notesAfterRefusal).not.toContain(note)
+      expect(replies[1]).toContain('Recorded the approve verdict')
+      const notes = events.filter((item) => item.kind === 'note').map((item) => item.payload.text)
+      expect(notes.filter((text) => text === note)).toHaveLength(1)
+    } finally {
+      conflictCheck.fail = false
+    }
   })
 
   it('refuses a GO verdict while the pull request conflicts with its base', async () => {

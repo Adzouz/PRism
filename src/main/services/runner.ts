@@ -228,17 +228,16 @@ export function createRunner(deps: RunnerDeps) {
       row.worktreePath && row.reviewedBaseOid && row.reviewedHeadOid
         ? await mergeConflicts(row.worktreePath, row.reviewedBaseOid, row.reviewedHeadOid)
         : null
-    if (files) {
-      update(runId, { conflictsJson: JSON.stringify(files) }, false)
-      return files
-    }
-    if (!conflictCheckFailed.has(runId)) {
-      conflictCheckFailed.add(runId)
-      event(runId, 'note', {
-        text: 'PRism could not check whether the pull request conflicts with its base, so the verdict was recorded without that check.',
-      })
-    }
-    return []
+    if (files) update(runId, { conflictsJson: JSON.stringify(files) }, false)
+    return files
+  }
+
+  function noteUncheckedConflicts(runId: number) {
+    if (conflictCheckFailed.has(runId)) return
+    conflictCheckFailed.add(runId)
+    event(runId, 'note', {
+      text: 'PRism could not check whether the pull request conflicts with its base, so the verdict was recorded without that check.',
+    })
   }
 
   const reviewPosted = (runId: number) =>
@@ -258,9 +257,11 @@ export function createRunner(deps: RunnerDeps) {
           )
         }
         const stage = getRunRow(ctx, runId).stage
+        let conflictsUnchecked = false
         if (report.verdict === 'approve' && (stage === 'review' || stage === 're-review')) {
           const files = await conflictsOf(runId)
-          if (files.length > 0) {
+          conflictsUnchecked = files === null
+          if (files && files.length > 0) {
             throw new Error(
               `Nothing was recorded: the pull request conflicts with its base in ${files.map((file) => `\`${file}\``).join(', ')}, so GitHub cannot merge it and the verdict cannot be approve. Report the conflicts as a finding (line null on a conflicting file) with a comment or request_changes verdict, then call prism_report_findings again with every finding.`,
             )
@@ -283,6 +284,7 @@ export function createRunner(deps: RunnerDeps) {
         const anchored = items.map((item) => ({ ...item, hunkHash: anchorOf(worktree, item) }))
         const { kept, repeats } = splitRepeats(ctx, prId, runId, anchored)
         const run = saveReview(ctx, runId, report, kept)
+        if (conflictsUnchecked) noteUncheckedConflicts(runId)
         if (repeats.length > 0) {
           event(runId, 'note', {
             text: `Dropped ${repeats.length} finding(s) already reported and still open: ${repeats
