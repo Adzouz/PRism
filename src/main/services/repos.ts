@@ -29,6 +29,7 @@ const toRepo = (row: Row): Repo => ({
   worktreeRoot: row.worktreeRoot,
   skillSourceId: row.skillSourceId,
   autoRun: row.autoRun,
+  mirador: row.mirador,
   ignoredChecks: parseList(row.ignoredChecksJson),
   qaLabels: parseList(row.qaLabelsJson),
   postMode: row.postMode,
@@ -132,12 +133,13 @@ export function setRepoSource(ctx: Ctx, id: number, sourceId: number | null) {
 export function setRepoOptions(
   ctx: Ctx,
   id: number,
-  options: { autoRun: boolean; ignoredChecks: string[]; qaLabels: string[] },
+  options: { autoRun: boolean; mirador: boolean; ignoredChecks: string[]; qaLabels: string[] },
 ) {
   getRow(ctx, id)
   const clean = (list: string[]) => [...new Set(list.map((item) => item.trim()).filter(Boolean))]
   return update(ctx, id, {
     autoRun: options.autoRun,
+    mirador: options.mirador,
     ignoredChecksJson: JSON.stringify(clean(options.ignoredChecks)),
     qaLabelsJson: JSON.stringify(clean(options.qaLabels)),
   })

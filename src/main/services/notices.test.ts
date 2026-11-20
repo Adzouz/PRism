@@ -106,6 +106,7 @@ function makeRun(overrides: Partial<Run> = {}): Run {
     costUsd: 0,
     error: null,
     ask: null,
+    gate: null,
     ...overrides,
   }
 }

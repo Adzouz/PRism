@@ -82,6 +82,7 @@ export function onboardingHandlers(
   | 'settings:setNotifications'
   | 'notifications:test'
   | 'notifications:openSettings'
+  | 'mirador:status'
   | 'app:pendingOpen'
   | BoardChannel
   | RunChannel

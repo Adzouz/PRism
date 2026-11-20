@@ -401,6 +401,10 @@ export const ipcContract = {
     input: z.void(),
     output: z.void(),
   },
+  'mirador:status': {
+    input: z.void(),
+    output: z.object({ available: z.boolean() }),
+  },
   'app:pendingOpen': {
     input: z.void(),
     output: openTarget.nullable(),

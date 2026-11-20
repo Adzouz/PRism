@@ -151,7 +151,7 @@ function Column({
         'flex w-72 shrink-0 flex-col gap-2 rounded-2xl bg-secondary/50 p-2 transition-colors',
         'max-h-full min-h-0',
         dragged && !disabled && !fromHere && 'bg-accent/50',
-        isOver && !disabled && !fromHere && 'bg-accent ring-2 ring-primary/40',
+        isOver && !disabled && !fromHere && 'bg-accent ring-2 ring-primary/40 ring-inset',
         dragged && disabled && 'opacity-50',
       )}
     >

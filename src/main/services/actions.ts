@@ -33,6 +33,7 @@ import { run as exec } from '../system/exec'
 import type { Ctx } from './context'
 import { diffMap, isCommentable, type DiffMap } from './diff'
 import type { GithubApi } from './gh-api'
+import type { PostedReview } from './mirador'
 import { reviewDirection, tabOf } from './pr-stage'
 import { clearManualStage, markApproved } from './prs'
 import { getRepo } from './repos'
@@ -57,7 +58,7 @@ const defaultGit: GitExec = (cwd, args, env = {}) =>
 export type ActionDeps = {
   ctx: Ctx
   api: GithubApi
-  emit: { prsChanged: () => void }
+  emit: { prsChanged: () => void; posted?: (runId: number, posted: PostedReview) => void }
   git?: GitExec
   sleep?: (ms: number) => Promise<void>
   verifyAttempts?: number
@@ -849,6 +850,13 @@ export function createActions(deps: ActionDeps) {
       })
       clearManualStage(ctx, loaded.run.prId)
       emit.prsChanged()
+      if (loaded.kind === 'review') {
+        emit.posted?.(runId, {
+          event: gate.event,
+          mode: gate.mode,
+          eventForced: gate.allowedEvents.length === 1,
+        })
+      }
       return build(runId)
     })
   }

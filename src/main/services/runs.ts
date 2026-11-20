@@ -108,7 +108,38 @@ export function bodyFindings(ctx: Ctx, prId: number): Finding[] {
     .map(({ finding }) => toFinding(finding))
 }
 
-function toRun(ctx: Ctx, row: RunRow): Run {
+type RunGate = Run['gate']
+
+function gatesFor(ctx: Ctx, runIds: number[]) {
+  const gates = new Map<number, NonNullable<RunGate>>()
+  if (runIds.length === 0) return gates
+  const rows = ctx.db
+    .select({
+      runId: postGates.runId,
+      postedAt: postGates.postedAt,
+      skippedAt: postGates.skippedAt,
+      mode: postGates.mode,
+    })
+    .from(postGates)
+    .where(inArray(postGates.runId, runIds))
+    .all()
+  for (const { runId, ...gate } of rows) gates.set(runId, gate)
+  return gates
+}
+
+function toRuns(ctx: Ctx, rows: RunRow[]) {
+  const gates = gatesFor(
+    ctx,
+    rows.map((row) => row.id),
+  )
+  return rows.map((row) => toRun(ctx, row, gates.get(row.id) ?? null))
+}
+
+function toRun(
+  ctx: Ctx,
+  row: RunRow,
+  gate: RunGate = gatesFor(ctx, [row.id]).get(row.id) ?? null,
+): Run {
   return {
     id: row.id,
     prId: row.prId,
@@ -135,6 +166,7 @@ function toRun(ctx: Ctx, row: RunRow): Run {
     costUsd: row.costUsd,
     error: row.error,
     ask: row.status === 'needs_you' ? pendingAsk(ctx, row.id) : null,
+    gate,
   }
 }
 
@@ -194,13 +226,10 @@ export function recordUsage(ctx: Ctx, id: number, totals: SessionTotals, resumed
 }
 
 export function listRunsForPr(ctx: Ctx, prId: number) {
-  return ctx.db
-    .select()
-    .from(runs)
-    .where(eq(runs.prId, prId))
-    .orderBy(desc(runs.id))
-    .all()
-    .map((row) => toRun(ctx, row))
+  return toRuns(
+    ctx,
+    ctx.db.select().from(runs).where(eq(runs.prId, prId)).orderBy(desc(runs.id)).all(),
+  )
 }
 
 export function listRuns(ctx: Ctx, statuses?: readonly RunStatus[]) {
@@ -211,7 +240,7 @@ export function listRuns(ctx: Ctx, statuses?: readonly RunStatus[]) {
         .orderBy(desc(runs.id))
         .all()
     : query.orderBy(desc(runs.id)).limit(200).all()
-  return rows.map((row) => toRun(ctx, row))
+  return toRuns(ctx, rows)
 }
 
 export function activeRunFor(ctx: Ctx, prId: number) {

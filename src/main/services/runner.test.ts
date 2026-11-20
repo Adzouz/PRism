@@ -327,6 +327,67 @@ describe('agent runner', () => {
     expect(notes[0]?.payload).toEqual({ text: 'Started automatically.' })
   })
 
+  it('tells the started hook about each new run, once', async () => {
+    const { ctx, ids } = await setup()
+    const started = vi.fn<(run: Run) => void>()
+    const runner = createRunner({
+      ctx,
+      api,
+      adapters: {
+        claude: {
+          run: async (input) => {
+            await input.tools.reportFindings(
+              { verdict: 'approve', summary: 'Fine.', dimensions: [] },
+              [],
+            )
+            return ok('s1')
+          },
+        },
+      },
+      emit: { run: () => {}, event: () => {}, prsChanged: () => {}, started },
+      agentEnv: async () => ({ env: {}, executable: null }),
+      prepare,
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'done')
+    expect(started.mock.calls).toEqual([[run]])
+  })
+
+  it('keeps a posted review when a follow-up reports findings again', async () => {
+    const { ctx, ids } = await setup()
+    const answers: string[] = []
+    const { runner } = makeRunner(ctx, async (input) => {
+      if (!input.resume) {
+        await input.tools.reportFindings(
+          { verdict: 'comment', summary: 'One nit.', dimensions: [] },
+          [finding],
+        )
+        return ok('s1')
+      }
+      answers.push(
+        await Promise.resolve()
+          .then(() =>
+            input.tools.reportFindings(
+              { verdict: 'approve', summary: 'Fine.', dimensions: [] },
+              [],
+            ),
+          )
+          .catch((error: Error) => error.message),
+      )
+      return ok('s1', 2)
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'done')
+    ctx.db.insert(postGates).values({ runId: run.id, kind: 'review', postedAt: 1 }).run()
+
+    runner.followUp({ runId: run.id, message: 'Why is this only a nit?' })
+    await until(() => getRun(ctx, run.id).status === 'done' && answers.length === 1)
+    expect(answers[0]).toContain('already posted')
+    expect(getRun(ctx, run.id).report?.verdict).toBe('comment')
+    expect(listFindings(ctx, run.id)).toHaveLength(1)
+    expect(getRun(ctx, run.id).gate).toEqual({ postedAt: 1, skippedAt: null, mode: null })
+  })
+
   it('nudges once for a missing report, then fails', async () => {
     const { ctx, ids } = await setup()
     const { runner, adapter } = makeRunner(ctx, async () => ok('s'))

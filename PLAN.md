@@ -2,7 +2,7 @@
 
 PRism is a macOS app for reviewing GitHub pull requests with AI agents. You watch repositories and get a kanban board of the PRs that involve you. You run review / address-comments skills in parallel and watch each one live. Every action that touches git history or GitHub waits for your go.
 
-Status: phases 0–6 done, phase 8 started with notifications, the Dock badge, the menu bar and auto-run (see [AGENTS.md](AGENTS.md#status)). The repo is public (MIT), so this document, the code and the defaults stay generic: no private repo names, no internal tooling, no personal data.
+Status: phases 0–6 done, phase 8 started with notifications, the Dock badge, the menu bar, auto-run and the Mirador bridge (see [AGENTS.md](AGENTS.md#status)). The repo is public (MIT), so this document, the code and the defaults stay generic: no private repo names, no internal tooling, no personal data.
 
 ---
 
@@ -169,7 +169,7 @@ Every stage has a global default. Each repo can override per stage. Every bindin
       - pick from another source,
       - drop / write a custom file.
       Every stage must be validated (✓) by you.
-   6. **Options:** auto-run (a review when someone requests yours by name), expected-red CI checks to ignore, labels that mean "QA pending".
+   6. **Options:** auto-run (a review when someone requests yours by name), report to Mirador (when its CLI is installed), expected-red CI checks to ignore, labels that mean "QA pending".
 4. **Notifications** (optional): **Turn on notifications** sends a test, so the macOS permission prompt shows while you are looking. macOS asks only once per app; after a refusal only System Settings can turn them on, so Settings → Notifications has an **Open System Settings** button.
 5. **Initial scan:** PRs requesting your review (direct + team), PRs you authored, PRs you took over (you pushed commits to someone else's PR). Progress per repo, then the board opens. Daily snapshot #1 is written.
 
@@ -198,7 +198,7 @@ Action columns run something when a card is dropped on them; state columns show 
 
 Posting a gate moves the card: review → To approve (GO) or Changes requested (GO WITH NITS, NO GO), or straight to Approved when submitted as Approve; address and replies on My PRs → Waiting review (back to the reviewers). Skipping a gate moves it the same way.
 
-**Next step:** the drawer header, and the summary of a posted or skipped gate, show a split button for cards in state columns. Its main action moves the loop forward (To review / Waiting review / To re-review → review or re-review run, Changes requested → address on My PRs or To re-review on Reviews, To approve → approve); its menu lists every other run, Approve, and every other state column.
+**Next step:** the drawer header, and the summary of a posted or skipped gate, show a split button for cards in state columns. Its main action moves the loop forward (To review / Waiting review / To re-review → review or re-review run, Changes requested → address on My PRs or To re-review on Reviews, To approve → approve); its menu lists every other run, Approve, and every other state column. On My PRs, a card in To approve that still has unresolved comments (the nits of a GO WITH NITS) also shows **Address N comments** next to **Post GO**.
 
 **Card:** repo chip, `#num`, title, author avatar, stage age, CI dot, labels, size, verdict badge, unresolved threads, star, live spinner, Needs-you glow.
 
@@ -242,7 +242,7 @@ Cost/time win: a typical re-review reads a few hundred lines instead of the whol
 
 ## 8. Post gate (after every review or address run)
 
-When a run ends, its card stays in Reviewing or Addressing, marked ready to post, and the drawer's **Post** tab shows a live checklist. The post button unlocks only when every check passes:
+When a run ends, its card stays in Reviewing or Addressing, marked ready to post, and the drawer's **Actions** tab shows a live checklist. The tab lists every gate of the pull request as a timeline, newest first, with **Ask agent anything** on the selected one, which jumps to that run in the Runs tab. The post button unlocks only when every check passes:
 
 **After a review**
 - [ ] Findings validated (include/exclude/edit each)
@@ -269,8 +269,8 @@ When a run ends, its card stays in Reviewing or Addressing, marked ready to post
 
 Tabs:
 - **Overview:** checks (ignoring the repo's expected-red checks), reviewers, linked issues, labels, description.
-- **Runs:** each run's live transcript and report (verdict, findings, changes or draft replies), tokens/cost; answer a question, send a follow-up, dismiss. Footer: open the worktree in your editor, or resume the agent session in your terminal.
-- **Post:** the post gate.
+- **Runs:** the runs as a timeline, newest first, the selected one expanded with its live transcript and report (verdict, findings, changes or draft replies), tokens/cost; answer a question, send a follow-up, dismiss. Footer: open the worktree in your editor, or resume the agent session in your terminal.
+- **Actions:** the post gates as a timeline, newest first: each step shows its outcome (ready to post, submitted, staged, skipped), the selected one expands to its checklist, and Ask agent anything opens that run in the Runs tab with the message box focused, to continue its session.
 - Planned: a **Findings** tab anchored on the diff with the ledger history, and a **Changes** tab with the worktree diff.
 
 ---
@@ -293,7 +293,7 @@ Tabs:
 - **Worktrees:** `<repo worktree folder>/pr-<number>`. Fork PRs get a remote per fork. Existing worktrees of the branch (from any tool, via `git worktree list`) are reused. PRism removes its own worktrees once the pull request is merged or closed, unless they hold uncommitted changes or commits that are not on GitHub.
 - **Address runs:** rebase onto the PR's real base first (stacked PRs included).
 - **Auto-run** (opt-in per repository): a review request that names you starts a Review, or a Re-review when you reviewed before, two runs at a time at most. New commits never start one: the author asks again when it's ready. Team requests stay manual, since a teammate may take them.
-- **Mirador bridge** (optional, auto-detected): reports review/addressing steps through the `mirador` CLI.
+- **Mirador bridge** ([Mirador](https://github.com/Adzouz/Mirador) is a macOS work tracker; optional: offered only when its `mirador` CLI is installed, then switched on per repository, since Mirador tracks a single repository): marks a pull request Reviewing when a review or re-review run starts and Addressing when an address run starts on your pull request, and adds the verdict as a note (GO / GO WITH NITS / NO GO + one reason) when a review is posted. Mirador's own GitHub sync sets every other status.
 - **Notifications:** needs you (answer from the notification), run done or failed, new review request, CI red on my PR. The dock badge shows the Needs-you count: agent questions plus runs ready to post. The menu bar shows the Needs-you list, the cards where it's your turn (not counted) and running agents. macOS asks for permission once per app: onboarding triggers the prompt, and Settings links to System Settings.
 
 ---
@@ -303,8 +303,8 @@ Tabs:
 `src/main/db/schema.ts` is the source of truth; migrations live in `drizzle/`.
 
 ```
-repos(id, owner, name, local_path, worktree_root, skill_source_id, auto_run, ignored_checks_json,
-      qa_labels_json, post_mode[submit|draft]?, added_at, last_synced_at)
+repos(id, owner, name, local_path, worktree_root, skill_source_id, auto_run, mirador,
+      ignored_checks_json, qa_labels_json, post_mode[submit|draft]?, added_at, last_synced_at)
 skill_sources(id, kind[git|local|builtin], name, url_or_path, local_path, manifest_json, identity,
               setup_at, last_synced_at)
 skills(id, source_id?, name, description, mode[copy|link|custom|linked_file], path, content_hash)
