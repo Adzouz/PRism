@@ -34,6 +34,7 @@ export type PromptContext = {
   worktreeWarning: string | null
   priorFindings: string[]
   delta: Delta | null
+  conflicts?: string[]
   threads: ReviewThread[]
   findings?: Finding[]
 }
@@ -69,6 +70,14 @@ export function buildPrompt(context: PromptContext) {
   ]
   if (context.worktreeWarning) lines.push('', `Note: ${context.worktreeWarning}.`)
   if (context.stage === 're-review' && context.delta) lines.push('', ...scopeLines(context.delta))
+  if ((context.stage === 'review' || context.stage === 're-review') && context.conflicts?.length) {
+    lines.push(
+      '',
+      '## Merge conflicts',
+      '',
+      `This pull request conflicts with \`${context.baseRemote}/${context.baseRef}\` in ${context.conflicts.map((file) => `\`${file}\``).join(', ')}, so GitHub cannot merge it. The verdict cannot be \`approve\` until they are resolved: report the conflicts as a finding (line null on a conflicting file) and use \`comment\` or \`request_changes\`. Review the code as usual otherwise.`,
+    )
+  }
   lines.push('', '## Reporting', '', reportSteps[context.stage])
   if (context.stage === 'address' || context.stage === 'draft-replies') {
     lines.push('', '## Review threads to handle', '')

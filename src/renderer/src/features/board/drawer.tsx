@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import DOMPurify from 'dompurify'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import {
@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   CircleDashed,
+  Copy,
   Eye,
   EyeOff,
   GitBranch,
@@ -142,6 +143,33 @@ function Checks({ detail }: { detail: PrDetail }) {
   )
 }
 
+function CopyText({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(timer)
+  }, [copied])
+  const copy = () => {
+    navigator.clipboard.writeText(text).then(
+      () => setCopied(true),
+      () => setCopied(false),
+    )
+  }
+  return (
+    <Button
+      size="icon"
+      variant="ghost"
+      className="size-6 text-muted-foreground [&_svg]:size-3.5"
+      title={copied ? 'Copied' : label}
+      aria-label={label}
+      onClick={copy}
+    >
+      {copied ? <Check /> : <Copy />}
+    </Button>
+  )
+}
+
 function Overview({ pr }: { pr: BoardPr }) {
   const { data: detail, isLoading, error } = usePrDetail(pr.id)
   const setStage = useSetStage()
@@ -170,6 +198,7 @@ function Overview({ pr }: { pr: BoardPr }) {
         <dd className="flex items-center gap-2">
           <Avatar src={pr.authorAvatar} name={pr.author} />
           {pr.author}
+          <CopyText text={pr.author} label="Copy author name" />
           {pr.role === 'takeover' && <Badge variant="accent">Taken over</Badge>}
         </dd>
         <dt className="text-muted-foreground">Branch</dt>

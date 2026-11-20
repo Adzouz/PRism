@@ -148,3 +148,15 @@ export function describeDelta(delta: Delta) {
   const removed = delta.dropped.length ? `, ${plural(delta.dropped.length)} removed` : ''
   return `Re-review covers ${plural(delta.commits.length)}${removed} since ${since}${delta.rebased ? ' (after a force-push, commits that only moved are left out)' : ''}.`
 }
+
+export async function mergeConflicts(cwd: string, base: string, head: string) {
+  const result = await run(
+    'git',
+    ['-C', cwd, 'merge-tree', '--write-tree', '--name-only', '--no-messages', base, head],
+    { timeout: 120_000 },
+  )
+  const [tree, ...files] = lines(result.stdout)
+  if (!tree || !/^[0-9a-f]{40,64}$/.test(tree)) return null
+  if (result.code === 0) return []
+  return result.code === 1 ? [...new Set(files)] : null
+}

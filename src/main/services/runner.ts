@@ -2,6 +2,7 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
+import { z } from 'zod'
 import {
   activeRunStatuses,
   needsAnswer,
@@ -28,7 +29,7 @@ import { openInEditor, openInTerminal, resumeCommand, runInTerminal } from './ap
 import { anchorOf } from './anchors'
 import { getAgentConfig } from './config'
 import type { Ctx } from './context'
-import { computeDelta, describeDelta, type Delta } from './delta'
+import { computeDelta, describeDelta, mergeConflicts, type Delta } from './delta'
 import { isCommentable, parseUnifiedDiff, type DiffMap } from './diff'
 import type { GithubApi } from './gh-api'
 import { effectiveBindings, findSkill, readSkillContent, skillDirOf } from './library'
@@ -218,6 +219,27 @@ export function createRunner(deps: RunnerDeps) {
     return cached
   }
 
+  const conflictCheckFailed = new Set<number>()
+
+  async function conflictsOf(runId: number) {
+    const row = getRunRow(ctx, runId)
+    if (row.conflictsJson) return z.array(z.string()).parse(JSON.parse(row.conflictsJson))
+    const files =
+      row.worktreePath && row.reviewedBaseOid && row.reviewedHeadOid
+        ? await mergeConflicts(row.worktreePath, row.reviewedBaseOid, row.reviewedHeadOid)
+        : null
+    if (files) update(runId, { conflictsJson: JSON.stringify(files) }, false)
+    return files
+  }
+
+  function noteUncheckedConflicts(runId: number) {
+    if (conflictCheckFailed.has(runId)) return
+    conflictCheckFailed.add(runId)
+    event(runId, 'note', {
+      text: 'PRism could not check whether the pull request conflicts with its base, so the verdict was recorded without that check.',
+    })
+  }
+
   const reviewPosted = (runId: number) =>
     ctx.db
       .select({ postedAt: postGates.postedAt })
@@ -233,6 +255,17 @@ export function createRunner(deps: RunnerDeps) {
           throw new Error(
             'Nothing was recorded: this review is already posted on GitHub, so its findings cannot change. Answer in your reply instead. New commits get a re-review.',
           )
+        }
+        const stage = getRunRow(ctx, runId).stage
+        let conflictsUnchecked = false
+        if (report.verdict === 'approve' && (stage === 'review' || stage === 're-review')) {
+          const files = await conflictsOf(runId)
+          conflictsUnchecked = files === null
+          if (files && files.length > 0) {
+            throw new Error(
+              `Nothing was recorded: the pull request conflicts with its base in ${files.map((file) => `\`${file}\``).join(', ')}, so GitHub cannot merge it and the verdict cannot be approve. Report the conflicts as a finding (line null on a conflicting file) with a comment or request_changes verdict, then call prism_report_findings again with every finding.`,
+            )
+          }
         }
         const map = await prDiff(runId)
         const off = map
@@ -251,6 +284,7 @@ export function createRunner(deps: RunnerDeps) {
         const anchored = items.map((item) => ({ ...item, hunkHash: anchorOf(worktree, item) }))
         const { kept, repeats } = splitRepeats(ctx, prId, runId, anchored)
         const run = saveReview(ctx, runId, report, kept)
+        if (conflictsUnchecked) noteUncheckedConflicts(runId)
         if (repeats.length > 0) {
           event(runId, 'note', {
             text: `Dropped ${repeats.length} finding(s) already reported and still open: ${repeats
@@ -417,10 +451,23 @@ export function createRunner(deps: RunnerDeps) {
       })
       event(runId, 'note', { text: describeDelta(delta) })
     }
+    const conflicted = reviewing
+      ? await mergeConflicts(
+          worktree.path,
+          `${worktree.baseRemote}/${pr.baseRef}`,
+          worktree.headOid,
+        )
+      : null
+    if (conflicted?.length) {
+      event(runId, 'note', {
+        text: `The pull request conflicts with ${pr.baseRef} in ${conflicted.join(', ')}, so a GO verdict is refused until the conflicts are resolved.`,
+      })
+    }
     update(runId, {
       worktreePath: worktree.path,
       reviewedHeadOid: worktree.headOid,
       reviewedBaseOid: row.baseOid,
+      conflictsJson: conflicted ? JSON.stringify(conflicted) : null,
       pushRemote: worktree.remote,
       pushRef: pr.headRef,
     })
@@ -445,6 +492,7 @@ export function createRunner(deps: RunnerDeps) {
         worktreeWarning: worktree.warning,
         priorFindings: reviewing ? priorFindings(run.prId) : [],
         delta,
+        conflicts: conflicted ?? [],
         threads,
         findings: addressed,
       }),

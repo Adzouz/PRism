@@ -74,7 +74,7 @@ export function setPostMode(ctx: Ctx, mode: PostMode) {
 const gateQuery = `
   query Gate($id: ID!) {
     node(id: $id) { ... on PullRequest {
-      headRefOid viewerDidAuthor
+      headRefOid viewerDidAuthor mergeable baseRefName
       reviews(states: PENDING, first: 1) { nodes { id body url } }
     } }
   }
@@ -85,6 +85,8 @@ type PendingReview = { id: string; body: string; url: string }
 type GateNode = {
   headRefOid: string
   viewerDidAuthor: boolean
+  mergeable?: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
+  baseRefName?: string
   reviews: { nodes: PendingReview[] }
 }
 
@@ -479,7 +481,15 @@ export function createActions(deps: ActionDeps) {
       }
     }
     const own = node ? node.viewerDidAuthor : pr.myRole === 'author'
-    const allowedEvents = own ? (['comment'] as Verdict[]) : allEvents
+    const conflicting = node?.mergeable === 'CONFLICTING'
+    const allowedEvents = own
+      ? (['comment'] as Verdict[])
+      : allEvents.filter((item) => !(conflicting && item === 'approve'))
+    if (kind === 'review' && conflicting) {
+      warnings.push(
+        `The pull request conflicts with ${node?.baseRefName ?? 'its base'}, so GitHub cannot merge it${own ? '' : ': Approve comes back once the conflicts are resolved'}.`,
+      )
+    }
     const chosen = gate.event ?? run.report?.verdict ?? 'comment'
     const event = allowedEvents.includes(chosen) ? chosen : 'comment'
     const mode = gate.mode ?? repo.postMode ?? getPostMode(ctx)
@@ -890,6 +900,11 @@ export function createActions(deps: ActionDeps) {
     }
     return lockPr(prId, async () => {
       const node = await liveNode(pr.nodeId)
+      if (node.mergeable === 'CONFLICTING') {
+        throw new Error(
+          `The pull request conflicts with ${node.baseRefName ?? 'its base'}, so GitHub cannot merge it. Resolve the conflicts before approving.`,
+        )
+      }
       const event = node.viewerDidAuthor ? 'COMMENT' : 'APPROVE'
       const body = `✅ GO\n\n${aiTag}`
       const pending = node.reviews.nodes[0] ?? null
