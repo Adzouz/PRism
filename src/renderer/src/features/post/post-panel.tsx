@@ -40,12 +40,12 @@ import {
   useCommit,
   useGate,
   usePost,
+  usePostAndAddress,
   usePrRuns,
   usePrThreads,
   usePush,
   useRunFindings,
   useSkipPost,
-  useStartRun,
   useUpdateFinding,
   useUpdateGate,
 } from '@/lib/api'
@@ -611,34 +611,21 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
   const { data: gate, error, isLoading, refetch, isFetching } = useGate(run.id)
   const post = usePost()
   const skip = useSkipPost()
-  const start = useStartRun()
-  const [addressing, setAddressing] = useState(false)
+  const address = usePostAndAddress((next) => {
+    const board = useBoardStore.getState()
+    if (board.openPrId === next.prId) board.openPr(next.prId, 'runs', next.id)
+  })
   const askAgent = useBoardStore((state) => state.askAgent)
-  const openPr = useBoardStore((state) => state.openPr)
   const now = useNow()
   if (isLoading) return <Loading>Checking what is ready to post…</Loading>
   if (!gate) return <ErrorText error={error} />
   const closed = gate.postedAt !== null || gate.skippedAt !== null
-  const busy = post.isPending || start.isPending
+  const busy = post.isPending || address.isPending
   const canAddress =
     gate.kind === 'review' &&
     gate.mode === 'submit' &&
     pr.tab === 'mine' &&
     gate.findings.included > 0
-  const postAndAddress = () => {
-    setAddressing(true)
-    start.reset()
-    post.mutate(run.id, {
-      onSuccess: () =>
-        start.mutate(
-          { prId: pr.id, stage: 'address' },
-          { onSuccess: (next) => openPr(pr.id, 'runs', next.id) },
-        ),
-      onSettled: (_data, failure) => {
-        if (failure) setAddressing(false)
-      },
-    })
-  }
   const canAsk =
     run.status === 'done' && run.sessionId !== null && run.worktreePath !== null && !gate.live
   return (
@@ -671,7 +658,7 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
       {closed ? (
         <>
           <Closed gate={gate} pr={pr} />
-          <ErrorText error={start.error} />
+          <ErrorText error={address.error} />
         </>
       ) : (
         <>
@@ -696,11 +683,11 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
               <Button
                 disabled={!gate.ready || busy}
                 onClick={() => {
-                  setAddressing(false)
+                  address.reset()
                   post.mutate(run.id)
                 }}
               >
-                {post.isPending && !addressing ? <Loader2 className="animate-spin" /> : <Send />}
+                {post.isPending ? <Loader2 className="animate-spin" /> : <Send />}
                 {postLabel(gate)}
                 {gate.nextStage && (
                   <span className="font-normal opacity-80">
@@ -709,8 +696,15 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
                 )}
               </Button>
               {canAddress && (
-                <Button variant="outline" disabled={!gate.ready || busy} onClick={postAndAddress}>
-                  {addressing && busy ? <Loader2 className="animate-spin" /> : <Play />}
+                <Button
+                  variant="outline"
+                  disabled={!gate.ready || busy}
+                  onClick={() => {
+                    post.reset()
+                    address.mutate({ runId: run.id, prId: pr.id })
+                  }}
+                >
+                  {address.isPending ? <Loader2 className="animate-spin" /> : <Play />}
                   Post and address
                 </Button>
               )}
@@ -725,7 +719,7 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
             <p className="text-xs text-muted-foreground">
               PRism adds an AI tag line to everything it posts.
             </p>
-            <ErrorText error={post.error ?? skip.error ?? start.error} />
+            <ErrorText error={post.error ?? skip.error ?? address.error} />
           </div>
         </>
       )}
