@@ -142,6 +142,15 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 
 const short = (oid: string | null) => (oid ? oid.slice(0, 7) : 'none')
 
+const restart =
+  'Run Address comments again: it starts from the new head and moves the unpushed commits of the worktree onto it.'
+
+const isGone = (error: unknown) =>
+  typeof error === 'object' &&
+  error !== null &&
+  'status' in error &&
+  (error.status === 404 || error.status === 422)
+
 function parseReplies(json: string | null): GateReply[] | null {
   if (!json) return null
   try {
@@ -270,8 +279,8 @@ function worktreeChecks(worktree: GateWorktree | null): GateCheck[] {
           ? 'Commit first'
           : worktree.remoteHead === null
             ? 'Could not read the head on GitHub'
-            : !changed && worktree.remoteHead !== worktree.checkoutHead
-              ? `GitHub moved to ${short(worktree.remoteHead)} since this run started`
+            : worktree.remoteInLocal === false
+              ? `GitHub moved to ${short(worktree.remoteHead)}, which this worktree does not have: a push would be refused. ${restart}`
               : `GitHub is at ${short(worktree.remoteHead)}, local is ${short(worktree.localHead)}`,
     },
   ]
@@ -346,6 +355,7 @@ export function createActions(deps: ActionDeps) {
   const verifyAttempts = deps.verifyAttempts ?? 6
   const busy = new Set<number>()
   const diffs = new Map<string, Promise<DiffMap>>()
+  const ancestry = new Map<string, Promise<boolean>>()
   let pushLock: Promise<unknown> = Promise.resolve()
 
   function load(runId: number) {
@@ -385,6 +395,26 @@ export function createActions(deps: ActionDeps) {
     }
   }
 
+  function reviewedOnPr({ repo, row }: Loaded, head: string) {
+    const reviewed = row.reviewedHeadOid
+    if (!reviewed) return Promise.resolve(false)
+    if (reviewed === head) return Promise.resolve(true)
+    const path = `/repos/${repo.owner}/${repo.name}/compare/${reviewed}...${head}?per_page=1`
+    let cached = ancestry.get(path)
+    if (!cached) {
+      cached = api
+        .get<{ status?: string }>(path)
+        .then((result) => result.status === 'ahead' || result.status === 'identical')
+        .catch((error: unknown) => {
+          if (isGone(error)) return false
+          ancestry.delete(path)
+          throw error
+        })
+      ancestry.set(path, cached)
+    }
+    return cached
+  }
+
   function reviewDiff({ repo, row }: Loaded) {
     if (!row.reviewedBaseOid || !row.reviewedHeadOid) return Promise.resolve<DiffMap>(new Map())
     const path = `/repos/${repo.owner}/${repo.name}/compare/${row.reviewedBaseOid}...${row.reviewedHeadOid}`
@@ -408,6 +438,10 @@ export function createActions(deps: ActionDeps) {
     return result.stdout.trim()
   }
 
+  async function contains(path: string, oid: string) {
+    return (await git(path, ['merge-base', '--is-ancestor', oid, 'HEAD'])).code === 0
+  }
+
   async function worktreeState(
     { run }: Loaded,
     remoteHead: string | null,
@@ -425,6 +459,7 @@ export function createActions(deps: ActionDeps) {
       localHead: await gitOk(path, ['rev-parse', 'HEAD']),
       checkoutHead: run.reviewedHeadOid,
       remoteHead,
+      remoteInLocal: remoteHead === null ? null : await contains(path, remoteHead),
       branch: getRunRow(ctx, run.id).pushRef,
     }
   }
@@ -462,7 +497,21 @@ export function createActions(deps: ActionDeps) {
     const findings = kind === 'review' ? listFindings(ctx, runId) : []
     const included = findings.filter((finding) => finding.included)
     let outsideDiff = 0
-    if (kind === 'review' && !closed) {
+    let onPr = true
+    if (kind === 'review' && !closed && node) {
+      onPr = await reviewedOnPr(loaded, node.headRefOid).catch((error: unknown) => {
+        warnings.push(
+          `Could not check that the reviewed commit is still on the pull request: ${message(error)}`,
+        )
+        return true
+      })
+    }
+    if (!onPr) {
+      outsideDiff = included.length
+      warnings.push(
+        `The reviewed commit ${short(loaded.row.reviewedHeadOid)} is no longer on the pull request (force-pushed or rebased), so findings go in the review body. Re-review to comment on the new code.`,
+      )
+    } else if (kind === 'review' && !closed) {
       try {
         const map = await reviewDiff(loaded)
         outsideDiff = included.filter((finding) => !isCommentable(map, finding)).length
@@ -649,15 +698,30 @@ export function createActions(deps: ActionDeps) {
       if (!state) throw new Error('The worktree of this run is gone')
       if (state.dirty.length > 0) throw new Error('Commit the changes first')
       const ref = `refs/heads/${row.pushRef}`
-      const expected = loaded.gate.pushedOid ?? row.reviewedHeadOid
-      const lease = expected ? `--force-with-lease=${ref}:${expected}` : null
+      const before = (await liveNode(pr.nodeId)).headRefOid
+      if (!(await contains(state.path, before))) {
+        throw new Error(
+          `GitHub's ${row.pushRef} is at ${short(before)}, which this worktree does not have, so nothing was pushed. ${restart}`,
+        )
+      }
       await withPushNonce((nonce) =>
         gitOk(
           state.path,
-          ['push', '--porcelain', ...(lease ? [lease] : []), row.pushRemote!, `HEAD:${ref}`],
+          [
+            'push',
+            '--porcelain',
+            `--force-with-lease=${ref}:${before}`,
+            row.pushRemote!,
+            `HEAD:${ref}`,
+          ],
           { PRISM_PUSH_NONCE: nonce },
         ),
-      )
+      ).catch((error: unknown) => {
+        if (!message(error).includes('[rejected]')) throw error
+        throw new Error(
+          `GitHub's ${row.pushRef} moved while pushing, so nothing was pushed. ${restart}`,
+        )
+      })
       let remote: string | null = null
       for (let attempt = 0; attempt < verifyAttempts; attempt += 1) {
         if (attempt > 0) await sleep(1500)
@@ -677,9 +741,11 @@ export function createActions(deps: ActionDeps) {
 
   async function postReview(loaded: Loaded, gate: PostGate) {
     const { row, pr, run } = loaded
-    const pending = (await liveNode(pr.nodeId)).reviews.nodes[0] ?? null
+    const node = await liveNode(pr.nodeId)
+    const pending = node.reviews.nodes[0] ?? null
+    const onPr = await reviewedOnPr(loaded, node.headRefOid)
     const findings = listFindings(ctx, run.id).filter((item) => item.included && !item.posted)
-    const map = await reviewDiff(loaded).catch(() => new Map() as DiffMap)
+    const map = onPr ? await reviewDiff(loaded).catch(() => new Map() as DiffMap) : new Map()
     const inline = findings.filter((item) => isCommentable(map, item))
     const outside = findings.filter((item) => !isCommentable(map, item))
     const body = reviewBody(gate.body, outside)
@@ -703,7 +769,7 @@ export function createActions(deps: ActionDeps) {
       }>(addReviewMutation, {
         input: {
           pullRequestId: pr.nodeId,
-          ...(row.reviewedHeadOid ? { commitOID: row.reviewedHeadOid } : {}),
+          ...(onPr && row.reviewedHeadOid ? { commitOID: row.reviewedHeadOid } : {}),
           body,
           threads: inline.map(thread),
           ...(gate.mode === 'submit' ? { event: eventEnum[gate.event] } : {}),

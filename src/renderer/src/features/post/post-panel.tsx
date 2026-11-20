@@ -10,6 +10,7 @@ import {
   Loader2,
   MessageSquare,
   Pencil,
+  Play,
   RefreshCw,
   RotateCcw,
   Send,
@@ -39,6 +40,7 @@ import {
   useCommit,
   useGate,
   usePost,
+  usePostAndAddress,
   usePrRuns,
   usePrThreads,
   usePush,
@@ -609,11 +611,21 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
   const { data: gate, error, isLoading, refetch, isFetching } = useGate(run.id)
   const post = usePost()
   const skip = useSkipPost()
+  const address = usePostAndAddress((next) => {
+    const board = useBoardStore.getState()
+    if (board.openPrId === next.prId) board.openPr(next.prId, 'runs', next.id)
+  })
   const askAgent = useBoardStore((state) => state.askAgent)
   const now = useNow()
   if (isLoading) return <Loading>Checking what is ready to post…</Loading>
   if (!gate) return <ErrorText error={error} />
   const closed = gate.postedAt !== null || gate.skippedAt !== null
+  const busy = post.isPending || address.isPending
+  const canAddress =
+    gate.kind === 'review' &&
+    gate.mode === 'submit' &&
+    pr.tab === 'mine' &&
+    gate.findings.included > 0
   const canAsk =
     run.status === 'done' && run.sessionId !== null && run.worktreePath !== null && !gate.live
   return (
@@ -644,7 +656,10 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
         </div>
       </div>
       {closed ? (
-        <Closed gate={gate} pr={pr} />
+        <>
+          <Closed gate={gate} pr={pr} />
+          <ErrorText error={address.error} />
+        </>
       ) : (
         <>
           {gate.live && (
@@ -664,8 +679,14 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
             </section>
           )}
           <div className="sticky bottom-0 -mr-6 -ml-13 space-y-2 border-t bg-background py-3 pr-6 pl-13">
-            <div className="flex items-center gap-2">
-              <Button disabled={!gate.ready || post.isPending} onClick={() => post.mutate(run.id)}>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                disabled={!gate.ready || busy}
+                onClick={() => {
+                  address.reset()
+                  post.mutate(run.id)
+                }}
+              >
                 {post.isPending ? <Loader2 className="animate-spin" /> : <Send />}
                 {postLabel(gate)}
                 {gate.nextStage && (
@@ -674,9 +695,22 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
                   </span>
                 )}
               </Button>
+              {canAddress && (
+                <Button
+                  variant="outline"
+                  disabled={!gate.ready || busy}
+                  onClick={() => {
+                    post.reset()
+                    address.mutate({ runId: run.id, prId: pr.id })
+                  }}
+                >
+                  {address.isPending ? <Loader2 className="animate-spin" /> : <Play />}
+                  Post and address
+                </Button>
+              )}
               <Button
                 variant="ghost"
-                disabled={skip.isPending || post.isPending}
+                disabled={skip.isPending || busy}
                 onClick={() => skip.mutate({ runId: run.id, skipped: true })}
               >
                 Skip posting
@@ -685,7 +719,7 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
             <p className="text-xs text-muted-foreground">
               PRism adds an AI tag line to everything it posts.
             </p>
-            <ErrorText error={post.error ?? skip.error} />
+            <ErrorText error={post.error ?? skip.error ?? address.error} />
           </div>
         </>
       )}

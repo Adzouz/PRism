@@ -344,6 +344,23 @@ export const usePush = () => useGateMutation((runId: number) => invoke('gates:pu
 
 export const usePost = () => useGateMutation((runId: number) => invoke('gates:post', runId))
 
+export function usePostAndAddress(onStarted: (run: Run) => void) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: { runId: number; prId: number }) => {
+      const gate = await invoke('gates:post', input.runId)
+      client.setQueryData(keys.gate(gate.runId), gate)
+      void client.invalidateQueries({ queryKey: keys.runFindings(gate.runId) })
+      return invoke('runs:start', { prId: input.prId, stage: 'address' })
+    },
+    onSuccess: (run) => {
+      void client.invalidateQueries({ queryKey: keys.prRuns(run.prId) })
+      void client.invalidateQueries({ queryKey: keys.prs, exact: true })
+      onStarted(run)
+    },
+  })
+}
+
 export const useSkipPost = () =>
   useGateMutation((input: { runId: number; skipped: boolean }) => invoke('gates:skip', input))
 

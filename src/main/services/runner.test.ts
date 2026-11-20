@@ -184,6 +184,7 @@ const prepare: typeof prepareWorktree = async (_options, pr) => ({
   baseRemote: 'origin',
   created: true,
   headOid: 'head1',
+  current: true,
   warning: null,
 })
 
@@ -492,6 +493,23 @@ describe('agent runner', () => {
       changes: { threads: [{ threadId: 'T1', action: 'fix' }] },
       replies: [{ threadId: 'T1', body: 'Done.' }],
     })
+  })
+
+  it('fails an address run on a worktree that does not contain the pull request head', async () => {
+    const { ctx, ids } = await setup()
+    threadNodes = [threadNode('T1', false)]
+    const stale: typeof prepareWorktree = async (options, pr) => ({
+      ...(await prepare(options, pr)),
+      current: false,
+      warning: 'Worktree is at old1, the pull request head is head2',
+    })
+    const { runner, adapter } = makeRunner(ctx, async () => ok('s'), undefined, stale)
+    const run = runner.start({ prId: ids[0]!, stage: 'address' })
+    await until(() => getRun(ctx, run.id).status === 'failed')
+    expect(getRun(ctx, run.id).error).toBe(
+      'Worktree is at old1, the pull request head is head2. Address runs start from the pull request head, so their changes can be pushed.',
+    )
+    expect(adapter.run).not.toHaveBeenCalled()
   })
 
   it('hands review findings posted in the body to address runs', async () => {
@@ -839,6 +857,7 @@ describe('agent runner', () => {
         baseRemote: 'origin',
         created: true,
         headOid: head,
+        current: true,
         warning: null,
       }),
     )
@@ -910,6 +929,7 @@ describe('agent runner', () => {
           created: true,
           headOid: head,
           warning: null,
+          current: true,
         }),
       )
       const run = runner.start({ prId: ids[0]!, stage: 'review' })
@@ -978,6 +998,7 @@ describe('agent runner', () => {
         created: true,
         headOid: head,
         warning: null,
+        current: true,
       }),
     )
     const run = runner.start({ prId: ids[0]!, stage: 'review' })
