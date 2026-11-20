@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import DOMPurify from 'dompurify'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import {
@@ -145,11 +145,16 @@ function Checks({ detail }: { detail: PrDetail }) {
 
 function CopyText({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(timer)
+  }, [copied])
   const copy = () => {
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
+    navigator.clipboard.writeText(text).then(
+      () => setCopied(true),
+      () => setCopied(false),
+    )
   }
   return (
     <Button

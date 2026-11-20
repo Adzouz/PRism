@@ -906,6 +906,35 @@ describe('agent runner', () => {
     expect(notes).toContain(
       'The pull request conflicts with main in a.txt, so a GO verdict is refused until the conflicts are resolved.',
     )
+
+    let afterRestart = ''
+    const restarted = makeRunner(ctx, async (input) => {
+      afterRestart = await Promise.resolve()
+        .then(() =>
+          input.tools.reportFindings({ verdict: 'approve', summary: 'Done.', dimensions: [] }, []),
+        )
+        .catch((error: Error) => error.message)
+      return ok('s')
+    })
+    restarted.runner.followUp({ runId: run.id, message: 'Approve it now' })
+    await until(() => afterRestart !== '' && !restarted.runner.isActive(run.id))
+    expect(afterRestart).toContain('the verdict cannot be approve')
+    expect(getRun(ctx, run.id).report?.verdict).toBe('comment')
+  })
+
+  it('notes a conflict check that could not run', async () => {
+    const { ctx, ids } = await setup()
+    const { runner, events } = makeRunner(ctx, async (input) => {
+      await input.tools.reportFindings({ verdict: 'approve', summary: 'Done.', dimensions: [] }, [])
+      return ok('s')
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'review' })
+    await until(() => getRun(ctx, run.id).status === 'done' && !runner.isActive(run.id))
+    expect(getRun(ctx, run.id).report?.verdict).toBe('approve')
+    const notes = events.filter((item) => item.kind === 'note').map((item) => item.payload.text)
+    expect(notes).toContain(
+      'PRism could not check whether the pull request conflicts with its base, so the verdict was recorded without that check.',
+    )
   })
 
   it('keeps a different finding on the same code as an open one', async () => {

@@ -2,6 +2,7 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
+import { z } from 'zod'
 import {
   activeRunStatuses,
   needsAnswer,
@@ -218,17 +219,26 @@ export function createRunner(deps: RunnerDeps) {
     return cached
   }
 
-  const conflicts = new Map<number, string[]>()
+  const conflictCheckFailed = new Set<number>()
 
   async function conflictsOf(runId: number) {
-    const known = conflicts.get(runId)
-    if (known) return known
     const row = getRunRow(ctx, runId)
-    if (!row.worktreePath || !row.reviewedBaseOid || !row.reviewedHeadOid) return []
+    if (row.conflictsJson) return z.array(z.string()).parse(JSON.parse(row.conflictsJson))
     const files =
-      (await mergeConflicts(row.worktreePath, row.reviewedBaseOid, row.reviewedHeadOid)) ?? []
-    conflicts.set(runId, files)
-    return files
+      row.worktreePath && row.reviewedBaseOid && row.reviewedHeadOid
+        ? await mergeConflicts(row.worktreePath, row.reviewedBaseOid, row.reviewedHeadOid)
+        : null
+    if (files) {
+      update(runId, { conflictsJson: JSON.stringify(files) }, false)
+      return files
+    }
+    if (!conflictCheckFailed.has(runId)) {
+      conflictCheckFailed.add(runId)
+      event(runId, 'note', {
+        text: 'PRism could not check whether the pull request conflicts with its base, so the verdict was recorded without that check.',
+      })
+    }
+    return []
   }
 
   const reviewPosted = (runId: number) =>
@@ -441,7 +451,6 @@ export function createRunner(deps: RunnerDeps) {
           worktree.headOid,
         )
       : null
-    if (conflicted) conflicts.set(runId, conflicted)
     if (conflicted?.length) {
       event(runId, 'note', {
         text: `The pull request conflicts with ${pr.baseRef} in ${conflicted.join(', ')}, so a GO verdict is refused until the conflicts are resolved.`,
@@ -451,6 +460,7 @@ export function createRunner(deps: RunnerDeps) {
       worktreePath: worktree.path,
       reviewedHeadOid: worktree.headOid,
       reviewedBaseOid: row.baseOid,
+      conflictsJson: conflicted ? JSON.stringify(conflicted) : null,
       pushRemote: worktree.remote,
       pushRef: pr.headRef,
     })

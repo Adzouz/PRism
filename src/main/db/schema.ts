@@ -202,6 +202,7 @@ export const runs = sqliteTable(
     repliesJson: text('replies_json'),
     threadsJson: text('threads_json'),
     findingsJson: text('findings_json'),
+    conflictsJson: text('conflicts_json'),
     pushRemote: text('push_remote'),
     pushRef: text('push_ref'),
     createdAt: integer('created_at').notNull(),
