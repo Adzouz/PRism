@@ -1,5 +1,6 @@
 import { findingItem, type Finding, type ReviewThread, type Stage } from '@shared/domain'
 import type { Delta } from '../services/delta'
+import type { BaseMerge } from '../services/merge'
 
 export const readOnlyStages = new Set<Stage>(['review', 're-review', 'test-plan', 'draft-replies'])
 
@@ -35,6 +36,7 @@ export type PromptContext = {
   priorFindings: string[]
   delta: Delta | null
   conflicts?: string[]
+  merge?: BaseMerge | null
   threads: ReviewThread[]
   findings?: Finding[]
 }
@@ -50,6 +52,8 @@ const reportSteps: Record<Stage, string> = {
     'Fix the review threads and review findings listed below in the worktree and run the relevant checks. Then call `prism_report_changes` with one entry per thread and per finding (fix, push_back or defer), using the thread id or the `finding:<id>` key as `threadId`, and `prism_draft_replies` with one reply per thread (findings have no thread to reply to). Leave the changes uncommitted.',
   'draft-replies':
     'Read each thread listed below and the code it points at, then call `prism_draft_replies` with one reply per thread, using its id as `threadId`.',
+  'resolve-conflicts':
+    'When every conflict is resolved and the checks pass, call `prism_report_changes` with `threads: []`, the resolved files in `filesTouched`, the checks you ran, and a `summary` that says per file how you resolved it. Leave the merge uncommitted: PRism commits it after the user confirms.',
 }
 
 export function buildPrompt(context: PromptContext) {
@@ -78,6 +82,8 @@ export function buildPrompt(context: PromptContext) {
       `This pull request conflicts with \`${context.baseRemote}/${context.baseRef}\` in ${context.conflicts.map((file) => `\`${file}\``).join(', ')}, so GitHub cannot merge it. The verdict cannot be \`approve\` until they are resolved: report the conflicts as a finding (line null on a conflicting file) and use \`comment\` or \`request_changes\`. Review the code as usual otherwise.`,
     )
   }
+  if (context.stage === 'resolve-conflicts' && context.merge)
+    lines.push('', ...mergeLines(context.merge))
   lines.push('', '## Reporting', '', reportSteps[context.stage])
   if (context.stage === 'address' || context.stage === 'draft-replies') {
     lines.push('', '## Review threads to handle', '')
@@ -155,6 +161,35 @@ function threadLines(thread: ReviewThread) {
     ...(hidden > 0 ? [`- … ${hidden} earlier comment(s)`] : []),
     ...shown.map((comment) => `- @${comment.author}: ${excerpt(comment.body)}`),
     '',
+  ]
+}
+
+function mergeLines(merge: BaseMerge) {
+  const files = merge.conflicts.length
+    ? [
+        `These files have conflicts (markers in diff3 style: ours, \`|||||||\` base, theirs):`,
+        '',
+        ...merge.conflicts.map((file) => `- \`${file}\``),
+        '',
+      ]
+    : [
+        'Git merged it without conflicts. Check that the merged code still builds and passes its tests, and fix what the merge broke.',
+        '',
+      ]
+  return [
+    '## Merge in progress',
+    '',
+    `PRism ran \`git merge --no-commit ${merge.base}\` (${merge.baseOid.slice(0, 12)}) in the worktree so this pull request no longer conflicts with its base. \`git diff --name-only --diff-filter=U\` lists what is left to resolve.`,
+    '',
+    ...files,
+    'For each conflict:',
+    '',
+    '1. Read both sides and why they changed (`git log --oneline -3 MERGE_HEAD -- <file>`, `git log --oneline -3 HEAD -- <file>`, `git show <sha>`).',
+    '2. Edit the file so it keeps the intent of both sides, with no conflict markers left. Do not just pick one side unless the other is obsolete.',
+    '3. Run `git add <file>` (or `git rm <file>` for a file that should go).',
+    '',
+    'Then run the type checks, linters and tests that cover the resolved files. Fix only what the merge broke: no refactors or unrelated changes.',
+    'Never run `git merge`, `git merge --abort`, `git commit`, `git reset`, `git checkout` or `git stash`: they would lose the merge. When a resolution needs a decision only the user can make, call `prism_ask_user`.',
   ]
 }
 

@@ -59,6 +59,7 @@ function boardPr(overrides: Partial<BoardPr> = {}): BoardPr {
     deletions: 1,
     changedFiles: 1,
     unresolvedThreads: 0,
+    conflicting: false,
     reviewRequested: true,
     requestedTeam: null,
     myReviewState: null,

@@ -24,6 +24,7 @@ import { createRunner, type RunnerDeps } from './runner'
 import {
   boardRunFor,
   getRun,
+  getRunRow,
   latestLoops,
   listEvents,
   listFindings,
@@ -201,6 +202,7 @@ function makeRunner(
   run: (input: SegmentInput) => Promise<SegmentResult>,
   agentEnv: RunnerDeps['agentEnv'] = async () => ({ env: {}, executable: null }),
   prepareWith: typeof prepareWorktree = prepare,
+  startMerge?: RunnerDeps['startMerge'],
 ) {
   const adapter: AgentAdapter = { run: vi.fn<AgentAdapter['run']>(run) }
   const runs: Run[] = []
@@ -216,6 +218,7 @@ function makeRunner(
     },
     agentEnv,
     prepare: prepareWith,
+    startMerge,
   })
   return { runner, adapter, runs, events }
 }
@@ -512,6 +515,27 @@ describe('agent runner', () => {
     expect(adapter.run).not.toHaveBeenCalled()
   })
 
+  it('fails an address run while a base merge is in progress in the worktree', async () => {
+    const { ctx, ids } = await setup()
+    threadNodes = [threadNode('T1', false)]
+    const adapter: AgentAdapter = { run: vi.fn<AgentAdapter['run']>(async () => ok('s')) }
+    const runner = createRunner({
+      ctx,
+      api,
+      adapters: { claude: adapter },
+      emit: { run: () => {}, event: () => {}, prsChanged: () => {} },
+      agentEnv: async () => ({ env: {}, executable: null }),
+      prepare,
+      merging: async () => true,
+    })
+    const run = runner.start({ prId: ids[0]!, stage: 'address' })
+    await until(() => getRun(ctx, run.id).status === 'failed')
+    expect(getRun(ctx, run.id).error).toMatch(
+      /^A base merge from Resolve conflicts is in progress in \/code\/app-worktrees\/pr-1\. Finish it/,
+    )
+    expect(adapter.run).not.toHaveBeenCalled()
+  })
+
   it('hands review findings posted in the body to address runs', async () => {
     const { ctx, ids } = await setup()
     threadNodes = [threadNode('T9', true)]
@@ -604,6 +628,59 @@ describe('agent runner', () => {
     await until(() => !runner.isActive(run.id))
     expect(() => runner.followUp({ runId: run.id, message: 'x' })).toThrow('no agent session')
     expect(runner.dismiss(run.id).dismissedAt).not.toBeNull()
+  })
+
+  it('merges the base before a resolve conflicts run, which needs no skill', async () => {
+    const { ctx, ids } = await setup()
+    const startMerge = vi.fn<NonNullable<RunnerDeps['startMerge']>>(async (_cwd, base) => ({
+      base,
+      baseOid: 'base2',
+      conflicts: ['AGENTS.md', 'src/a.ts'],
+      resumed: false,
+    }))
+    const { runner, adapter, events } = makeRunner(
+      ctx,
+      async (input) => {
+        input.tools.reportChanges({
+          threads: [],
+          filesTouched: ['AGENTS.md', 'src/a.ts'],
+          checks: [{ command: 'pnpm test', ok: true }],
+          summary: 'Kept both sides.',
+        })
+        return ok('s')
+      },
+      undefined,
+      prepare,
+      startMerge,
+    )
+    const run = runner.start({ prId: ids[0]!, stage: 'resolve-conflicts' })
+    await until(() => getRun(ctx, run.id).status === 'done')
+    expect(startMerge).toHaveBeenCalledWith('/code/app-worktrees/pr-1', 'origin/main')
+    const input = vi.mocked(adapter.run).mock.calls[0]![0]
+    expect(input.readOnly).toBe(false)
+    expect(input.prompt).toContain('## Merge in progress')
+    expect(input.prompt).toContain('- `AGENTS.md`\n- `src/a.ts`')
+    expect(input.prompt).toContain('`prism_report_changes` with `threads: []`')
+    expect(getRun(ctx, run.id)).toMatchObject({ skillName: null, changes: { threads: [] } })
+    expect(getRunRow(ctx, run.id).reviewedBaseOid).toBe('base2')
+    expect(events.map((item) => item.payload.text)).toContain(
+      'Merged origin/main (base2) into the worktree without committing: 2 files to resolve (AGENTS.md, src/a.ts).',
+    )
+  })
+
+  it('fails a resolve conflicts run when the base cannot be merged', async () => {
+    const { ctx, ids } = await setup()
+    const startMerge = vi.fn<NonNullable<RunnerDeps['startMerge']>>(async () => {
+      throw new Error('The branch already contains origin/main, so there is nothing to merge')
+    })
+    const { runner, adapter } = makeRunner(ctx, async () => ok('s'), undefined, prepare, startMerge)
+    const run = runner.start({ prId: ids[0]!, stage: 'resolve-conflicts' })
+    await until(() => getRun(ctx, run.id).status === 'failed')
+    expect(getRun(ctx, run.id).error).toBe(
+      'The branch already contains origin/main, so there is nothing to merge',
+    )
+    expect(getRun(ctx, run.id).worktreePath).toBe('/code/app-worktrees/pr-1')
+    expect(adapter.run).not.toHaveBeenCalled()
   })
 
   it('refuses to start without a bound skill', async () => {
@@ -1306,6 +1383,9 @@ describe('run stage overlay', () => {
       'addressing',
     )
     expect(runStage('mine', { stage: 'address', status: 'done', endedAt: 5 }, open)).toBe(
+      'addressing',
+    )
+    expect(runStage('mine', { stage: 'resolve-conflicts', status: 'done', endedAt: 5 }, open)).toBe(
       'addressing',
     )
     expect(runStage('mine', { stage: 'review', status: 'needs_you', endedAt: null }, open)).toBe(

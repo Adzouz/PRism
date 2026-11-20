@@ -103,6 +103,7 @@ function toBoardPr(
     deletions: pr.deletions,
     changedFiles: pr.changedFiles,
     unresolvedThreads: pr.unresolvedThreads,
+    conflicting: pr.state === 'OPEN' && pr.mergeable === 'CONFLICTING',
     reviewRequested: pr.reviewRequested,
     requestedTeam: pr.requestedTeam,
     myReviewState: pr.myReviewState,

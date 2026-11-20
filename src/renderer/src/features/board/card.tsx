@@ -7,6 +7,7 @@ import {
   Eye,
   EyeOff,
   GitCommitHorizontal,
+  GitMerge,
   Loader2,
   MessageSquare,
   MoveRight,
@@ -20,7 +21,7 @@ import {
 } from 'lucide-react'
 import {
   boardColumns,
-  runStagesByTab,
+  runStagesFor,
   runStageLabel,
   stageLabels,
   type BoardPr,
@@ -158,8 +159,15 @@ const ciLabel: Record<BoardPr['ciState'], string> = {
   none: 'No checks',
 }
 
+const conflictLabel = 'Conflicts with its base branch'
+
 const cardLabel = (pr: BoardPr) =>
-  [`${pr.repo} #${pr.number} ${pr.title}`, ciLabel[pr.ciState], runSummary(pr)]
+  [
+    `${pr.repo} #${pr.number} ${pr.title}`,
+    ciLabel[pr.ciState],
+    pr.conflicting ? conflictLabel : null,
+    runSummary(pr),
+  ]
     .filter(Boolean)
     .join(', ')
 
@@ -232,6 +240,11 @@ function CardHead({ pr, density }: { pr: BoardPr; density: Density }) {
         <Tooltip content={ciLabel[pr.ciState]}>
           <span className={cn('size-2 shrink-0 rounded-full', ciColor[pr.ciState])} />
         </Tooltip>
+        {pr.conflicting && (
+          <Tooltip content={conflictLabel}>
+            <GitMerge className="size-3 shrink-0 text-destructive" />
+          </Tooltip>
+        )}
         {pr.starred && <Star className="size-3 fill-warning text-warning" />}
       </div>
       <p
@@ -440,7 +453,7 @@ export const PrCard = memo(function PrCard({
                   Other runs
                 </ContextMenuSubTrigger>
                 <ContextMenuSubContent>
-                  {runStagesByTab[pr.tab]
+                  {runStagesFor(pr)
                     .filter((stage) => stage !== defaultStage)
                     .map((stage) => (
                       <ContextMenuItem key={stage} onSelect={() => actions.run(pr, stage)}>

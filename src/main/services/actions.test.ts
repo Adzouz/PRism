@@ -8,6 +8,7 @@ import { aiTag, type ReviewReport, type Stage } from '@shared/domain'
 import { prePushHookScript } from '../agents/guard'
 import { openDb } from '../db/client'
 import { prFlags, prs, repos, runs } from '../db/schema'
+import { startBaseMerge } from './merge'
 import type { PostedReview } from './mirador'
 import { createActions, gateChecks, parsePorcelain, reviewBody } from './actions'
 import type { Ctx } from './context'
@@ -801,6 +802,148 @@ describe('address gate', () => {
     })
     expect((await actions.get(runId)).live).toBe(true)
     await expect(actions.commit(runId, 'x')).rejects.toThrow(/agent run is in progress/)
+  })
+})
+
+describe('conflicts gate', () => {
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync('git', ['-C', cwd, ...args], {
+      encoding: 'utf8',
+      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+    }).trim()
+
+  async function conflictingPr() {
+    const root = await mkdtemp(join(tmpdir(), 'prism-actions-merge-'))
+    const bare = join(root, 'remote.git')
+    const work = join(root, 'pr-1')
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare])
+    execFileSync('git', ['clone', '-q', bare, work])
+    git(work, 'config', 'user.email', 'dev@example.com')
+    git(work, 'config', 'user.name', 'Dev')
+    git(work, 'config', 'commit.gpgsign', 'false')
+    git(work, 'checkout', '-q', '-b', 'feature')
+    await writeFile(join(work, 'a.ts'), 'one\ntwo\n')
+    git(work, 'add', '-A')
+    git(work, 'commit', '-q', '-m', 'init')
+    git(work, 'push', '-q', 'origin', 'feature:refs/heads/main')
+    git(work, 'checkout', '-q', '-b', 'mainline')
+    await writeFile(join(work, 'a.ts'), 'one\nmain\n')
+    git(work, 'commit', '-q', '-am', 'main')
+    git(work, 'push', '-q', 'origin', 'mainline:refs/heads/main')
+    git(work, 'checkout', '-q', 'feature')
+    await writeFile(join(work, 'a.ts'), 'one\nfeature\n')
+    git(work, 'commit', '-q', '-am', 'feature')
+    git(work, 'push', '-q', 'origin', 'feature')
+    git(work, 'fetch', '-q', 'origin')
+    return { bare, work, head: git(work, 'rev-parse', 'HEAD') }
+  }
+
+  it('commits the merge once the conflicts are resolved, pushes it and closes the gate', async () => {
+    const { ctx, addRun } = await setup('author')
+    const { bare, work, head } = await conflictingPr()
+    await startBaseMerge(work, 'origin/main')
+    const runId = addRun('resolve-conflicts', {
+      worktreePath: work,
+      reviewedHeadOid: head,
+      pushRemote: 'origin',
+      pushRef: 'feature',
+      changesJson: JSON.stringify({ threads: [], filesTouched: ['a.ts'], summary: 'Kept both.' }),
+    })
+    const fake = fakeApi({
+      headRefOid: () => git(bare, 'rev-parse', 'refs/heads/feature'),
+      viewerDidAuthor: true,
+      pending: null,
+    })
+    const actions = createActions({
+      ctx,
+      api: fake.api,
+      emit: { prsChanged: () => {} },
+      sleep: noSleep,
+    })
+
+    const open = await actions.get(runId)
+    expect(open.kind).toBe('conflicts')
+    expect(open.nextStage).toBeNull()
+    expect(open.commitMessage).toBe("Merge branch 'main' into feature")
+    expect(open.checks.map((check) => [check.key, check.ok])).toEqual([
+      ['conflicts', false],
+      ['commit', false],
+      ['push', false],
+    ])
+    expect(open.checks[0]!.detail).toBe('Conflicts left in a.ts')
+    await expect(actions.commit(runId)).rejects.toThrow(/Resolve the conflicts in a.ts first/)
+
+    git(work, 'add', 'a.ts')
+    await expect(actions.commit(runId)).rejects.toThrow(/Conflict markers are left in a.ts/)
+
+    await writeFile(join(work, 'a.ts'), 'one\nfeature and main\n')
+    git(work, 'add', 'a.ts')
+    const resolved = await actions.get(runId)
+    expect(resolved.checks.map((check) => [check.key, check.ok])).toEqual([
+      ['conflicts', true],
+      ['commit', false],
+      ['push', false],
+    ])
+
+    const committed = await actions.commit(runId)
+    expect(git(work, 'log', '-1', '--format=%s')).toBe("Merge branch 'main' into feature")
+    expect(git(work, 'rev-list', '--parents', '-n', '1', 'HEAD').split(' ')).toHaveLength(3)
+    expect(committed.checks.map((check) => [check.key, check.ok])).toEqual([
+      ['conflicts', true],
+      ['commit', true],
+      ['push', false],
+    ])
+
+    const pushed = await actions.push(runId)
+    expect(git(bare, 'rev-parse', 'refs/heads/feature')).toBe(git(work, 'rev-parse', 'HEAD'))
+    expect(pushed.postedAt).not.toBeNull()
+    expect(fake.named('Reply')).toEqual([])
+    await expect(actions.post(runId)).rejects.toThrow(/Already posted/)
+  })
+
+  it('refuses to commit or push from an address gate while a base merge is in progress', async () => {
+    const { ctx, addRun } = await setup('author')
+    const { bare, work, head } = await conflictingPr()
+    await startBaseMerge(work, 'origin/main')
+    const runId = addRun('address', {
+      worktreePath: work,
+      reviewedHeadOid: head,
+      pushRemote: 'origin',
+      pushRef: 'feature',
+      changesJson: JSON.stringify({ threads: [] }),
+    })
+    const actions = createActions({
+      ctx,
+      api: fakeApi({ headRefOid: head, viewerDidAuthor: true, pending: null }).api,
+      emit: { prsChanged: () => {} },
+      sleep: noSleep,
+    })
+    const gate = await actions.get(runId)
+    expect(gate.checks.find((check) => check.key === 'commit')).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining('A base merge from Resolve conflicts is in progress'),
+    })
+    await expect(actions.commit(runId, 'fix: x')).rejects.toThrow(/base merge .* in progress/)
+    await expect(actions.push(runId)).rejects.toThrow(/base merge .* in progress/)
+    expect(git(work, 'rev-parse', 'HEAD')).toBe(head)
+    expect(git(bare, 'rev-parse', 'refs/heads/feature')).toBe(head)
+  })
+
+  it('waits for the agent report before the conflicts count as resolved', async () => {
+    const { ctx, addRun } = await setup('author')
+    const { work, head } = await conflictingPr()
+    const runId = addRun('resolve-conflicts', { worktreePath: work, reviewedHeadOid: head })
+    const actions = createActions({
+      ctx,
+      api: fakeApi({ headRefOid: head, viewerDidAuthor: true, pending: null }).api,
+      emit: { prsChanged: () => {} },
+    })
+    const gate = await actions.get(runId)
+    expect(gate.checks[0]).toMatchObject({
+      key: 'conflicts',
+      ok: false,
+      detail: 'The agent has not reported the resolution',
+    })
   })
 })
 

@@ -1,7 +1,12 @@
-import { gateKindOf, type Run } from '@shared/domain'
+import { gateKindOf, type GateKind, type Run } from '@shared/domain'
 import type { TimelineTone } from '@/components/timeline'
 
-const postedLabel = { review: 'Submitted', address: 'Addressed', replies: 'Replies posted' }
+const postedLabel: Record<GateKind, string> = {
+  review: 'Submitted',
+  address: 'Addressed',
+  replies: 'Replies posted',
+  conflicts: 'Merged and pushed',
+}
 
 export function outcomeOf(run: Run): { label: string; tone: TimelineTone; at: number } {
   if (run.status === 'needs_you')
@@ -22,7 +27,8 @@ export function outcomeOf(run: Run): { label: string; tone: TimelineTone; at: nu
   if (run.status !== 'done')
     return { label: 'Follow-up stopped', tone: 'muted', at: run.endedAt ?? run.createdAt }
   if (run.dismissedAt) return { label: 'Dismissed', tone: 'muted', at: run.dismissedAt }
-  return { label: 'Ready to post', tone: 'open', at: run.endedAt ?? run.createdAt }
+  const ready = kind === 'conflicts' ? 'Ready to push' : 'Ready to post'
+  return { label: ready, tone: 'open', at: run.endedAt ?? run.createdAt }
 }
 
 export const gateRuns = (runs: Run[]) =>

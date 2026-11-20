@@ -20,7 +20,7 @@ import {
   findingItem,
   gateKindOf,
   needsAnswer,
-  runStagesByTab,
+  runStagesFor,
   runStageLabel,
   stageLabels,
   threadStages,
@@ -568,7 +568,7 @@ export function RunsPanel({ pr }: { pr: BoardPr }) {
               aria-label="Run stage"
               className="flex-wrap"
             >
-              {runStagesByTab[pr.tab].map((item) => (
+              {runStagesFor(pr).map((item) => (
                 <ToggleGroupItem key={item} value={item}>
                   {runStageLabel(item, pr)}
                 </ToggleGroupItem>

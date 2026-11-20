@@ -34,6 +34,7 @@ type RunRow = typeof runs.$inferSelect
 type AskRow = typeof asks.$inferSelect
 
 const reviewStages = new Set<Stage>(['review', 're-review'])
+const pushingStages = new Set<Stage>(['address', 'resolve-conflicts'])
 
 function parse<T>(schema: z.ZodType<T>, json: string | null, fallback: T): T {
   if (!json) return fallback
@@ -524,7 +525,7 @@ export function runStage(
     if (active) return 'reviewing'
     if (run.status === 'done' && (pr.myReviewAt ?? 0) < (run.endedAt ?? 0)) return 'reviewing'
   }
-  if (tab === 'mine' && run.stage === 'address') {
+  if (tab === 'mine' && pushingStages.has(run.stage)) {
     if (active) return 'addressing'
     if (run.status === 'done') return 'addressing'
   }
@@ -586,7 +587,8 @@ export function latestBoardRuns(ctx: Ctx, onlyPrId?: number) {
     entry.active ??= isActive(row.status) ? row : undefined
     entry.reviewed ??=
       row.status === 'done' && reviewStages.has(row.stage as Stage) ? row : undefined
-    entry.addressed ??= row.status === 'done' && row.stage === 'address' ? row : undefined
+    entry.addressed ??=
+      row.status === 'done' && pushingStages.has(row.stage as Stage) ? row : undefined
     picked.set(row.prId, entry)
   }
   const used = new Set<number>()
@@ -677,6 +679,7 @@ const finishedStatuses: RunStatus[] = ['done', 'failed', 'cancelled']
 const runGroups: Stage[][] = [
   ['review', 're-review'],
   ['address'],
+  ['resolve-conflicts'],
   ['test-plan'],
   ['draft-replies'],
 ]

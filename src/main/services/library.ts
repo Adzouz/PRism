@@ -3,7 +3,7 @@ import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { and, eq } from 'drizzle-orm'
 import {
-  stages,
+  skillStages,
   type EffectiveBinding,
   type Proposal,
   type Skill,
@@ -361,7 +361,7 @@ export function effectiveBindings(ctx: Ctx, repoId: number | null): EffectiveBin
       .all()
       .map((row) => [row.id, row.name]),
   )
-  return stages.map((stage) => {
+  return skillStages.map((stage) => {
     const own = repoId ? rows.find((row) => row.repoId === repoId && row.stage === stage) : null
     const global = rows.find((row) => row.repoId === 0 && row.stage === stage)
     const binding = own ?? global ?? null
@@ -386,7 +386,7 @@ export async function proposeBindings(ctx: Ctx, sourceId: number | null): Promis
   const matches = source
     ? proposeFromSource(await scanSourceSkills(ctx, source.id), source.manifest, source.identity)
     : null
-  return stages.map((stage, index) => {
+  return skillStages.map((stage, index) => {
     const match = matches?.[index]
     if (source && match?.skill && match.reason !== 'none') {
       return {

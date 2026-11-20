@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { aiTag, boardColumns, columnStage, nextSteps, runStageFor, withAiTag } from './domain'
+import {
+  aiTag,
+  boardColumns,
+  columnStage,
+  nextSteps,
+  runStageFor,
+  runStagesFor,
+  withAiTag,
+} from './domain'
 
 describe('runStageFor', () => {
   const reviews = {
@@ -53,6 +61,7 @@ describe('nextSteps', () => {
     myReviewState: null,
     reviewed: true,
     unresolvedThreads: 0,
+    conflicting: false,
   } as const
 
   it('suggests the step that moves each state column forward', () => {
@@ -96,6 +105,26 @@ describe('nextSteps', () => {
     expect(
       nextSteps({ ...pr, tab: 'reviews', stage: 'to-approve', unresolvedThreads: 2 })!.secondary,
     ).toBeNull()
+  })
+
+  it('puts Resolve conflicts first on my conflicting pull request', () => {
+    const conflicting = { ...pr, conflicting: true }
+    const waiting = nextSteps(conflicting)!
+    expect(waiting.primary).toEqual({ kind: 'run', stage: 'resolve-conflicts' })
+    expect(waiting.secondary).toEqual({ kind: 'run', stage: 're-review' })
+    const approving = nextSteps({ ...conflicting, stage: 'to-approve' })!
+    expect(approving.secondary).toEqual({ kind: 'approve' })
+    expect(approving.others).not.toContainEqual({ kind: 'run', stage: 'resolve-conflicts' })
+    expect(nextSteps(pr)!.others).not.toContainEqual({ kind: 'run', stage: 'resolve-conflicts' })
+    expect(
+      nextSteps({ ...conflicting, tab: 'reviews', stage: 'to-review', reviewed: false })!.primary,
+    ).toEqual({ kind: 'run', stage: 'review' })
+  })
+
+  it('offers Resolve conflicts in the run pickers only while my pull request conflicts', () => {
+    expect(runStagesFor({ tab: 'mine', conflicting: true })).toContain('resolve-conflicts')
+    expect(runStagesFor({ tab: 'mine', conflicting: false })).not.toContain('resolve-conflicts')
+    expect(runStagesFor({ tab: 'reviews', conflicting: true })).not.toContain('resolve-conflicts')
   })
 
   it('stays out of agent columns and closed pull requests', () => {
