@@ -692,7 +692,7 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
             </section>
           )}
           <div className="sticky bottom-0 -mr-6 -ml-13 space-y-2 border-t bg-background py-3 pr-6 pl-13">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 disabled={!gate.ready || busy}
                 onClick={() => {
@@ -712,7 +712,6 @@ function Gate({ run, pr }: { run: Run; pr: BoardPr }) {
                 <Button variant="outline" disabled={!gate.ready || busy} onClick={postAndAddress}>
                   {addressing && busy ? <Loader2 className="animate-spin" /> : <Play />}
                   Post and address
-                  <span className="font-normal opacity-80">→ Addressing</span>
                 </Button>
               )}
               <Button
