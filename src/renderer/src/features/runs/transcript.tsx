@@ -9,6 +9,7 @@ import { Loading, Markdown, statusLabel } from './parts'
 const str = (value: unknown) => (typeof value === 'string' ? value : '')
 
 const followThreshold = 48
+const endGap = 20
 
 function scrollParent(node: HTMLElement | null) {
   for (let element = node?.parentElement ?? null; element; element = element.parentElement) {
@@ -18,8 +19,8 @@ function scrollParent(node: HTMLElement | null) {
   return null
 }
 
-const atBottom = (element: HTMLElement) =>
-  element.scrollHeight - element.scrollTop - element.clientHeight <= followThreshold
+const endBelowView = (end: HTMLElement, container: HTMLElement) =>
+  end.getBoundingClientRect().bottom - container.getBoundingClientRect().bottom
 
 function toolLabel(name: string, input: unknown) {
   const short = name.replace(/^mcp__prism__/, '').replace(/^mcp__/, '')
@@ -172,7 +173,15 @@ const Line = memo(function Line({
   }
 })
 
-export function Transcript({ runId, live }: { runId: number; live: boolean }) {
+export function Transcript({
+  runId,
+  live,
+  pendingAskId,
+}: {
+  runId: number
+  live: boolean
+  pendingAskId: number | null
+}) {
   const { data: events, isLoading, error } = useRunEvents(runId)
   const root = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
@@ -186,8 +195,14 @@ export function Transcript({ runId, live }: { runId: number; live: boolean }) {
     [events],
   )
   const visible = useMemo(
-    () => (events ?? []).filter((event) => event.kind !== 'tool_result' && event.kind !== 'result'),
-    [events],
+    () =>
+      (events ?? []).filter(
+        (event) =>
+          event.kind !== 'tool_result' &&
+          event.kind !== 'result' &&
+          !(event.kind === 'ask' && event.payload.askId === pendingAskId),
+      ),
+    [events, pendingAskId],
   )
   const turnStart = useMemo(
     () => (events ?? []).findLast((event) => event.kind === 'status')?.id ?? 0,
@@ -199,16 +214,21 @@ export function Transcript({ runId, live }: { runId: number; live: boolean }) {
     const container = scrollParent(root.current)
     if (!container) return
     const onScroll = () => {
-      follow.current = atBottom(container)
+      if (root.current) follow.current = endBelowView(root.current, container) <= followThreshold
     }
     container.addEventListener('scroll', onScroll, { passive: true })
     return () => container.removeEventListener('scroll', onScroll)
   }, [])
 
+  const wasLive = useRef(live)
   useLayoutEffect(() => {
-    if (!live || !follow.current || count === 0) return
+    if (live && !wasLive.current) follow.current = true
+    wasLive.current = live
+    if (!live || !follow.current || count === 0 || !root.current) return
     const container = scrollParent(root.current)
-    container?.scrollTo({ top: container.scrollHeight })
+    if (!container) return
+    const distance = endBelowView(root.current, container) + endGap
+    if (distance > 0) container.scrollBy({ top: distance })
   }, [count, live])
 
   return (
