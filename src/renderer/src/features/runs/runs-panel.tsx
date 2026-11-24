@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import {
   ArrowRight,
@@ -24,6 +24,7 @@ import {
   runStageLabel,
   stageLabels,
   threadStages,
+  type Ask,
   type BoardPr,
   type ChangesReport,
   type Finding,
@@ -260,6 +261,21 @@ function FollowUp({ run, onClose }: { run: Run; onClose: () => void }) {
   )
 }
 
+function PendingQuestion({ runId, ask }: { runId: number; ask: Ask }) {
+  const transcript = useRunEvents(runId)
+  const box = useRef<HTMLDivElement>(null)
+  const ready = !transcript.isLoading
+  useLayoutEffect(() => {
+    if (ready) box.current?.scrollIntoView({ block: 'nearest' })
+  }, [ready])
+  if (!ready) return null
+  return (
+    <div ref={box} className="rounded-xl border border-warning/40 bg-warning/5 p-3">
+      <AnswerForm ask={ask} />
+    </div>
+  )
+}
+
 function NextActions({ run, canAsk, onPost }: { run: Run; canAsk: boolean; onPost: () => void }) {
   const askRunId = useBoardStore((state) => state.askRunId)
   const clearAsk = useBoardStore((state) => state.clearAsk)
@@ -407,12 +423,6 @@ function RunDetail({
       <ErrorText error={cancel.error ?? dismiss.error ?? resume.error} />
       {run.error && <p className="text-sm text-destructive select-text">{run.error}</p>}
 
-      {run.ask && (
-        <div className="rounded-xl border border-warning/40 bg-warning/5 p-3">
-          <AnswerForm ask={run.ask} />
-        </div>
-      )}
-
       {run.report && run.stage === 'test-plan' && (
         <section className="space-y-3">
           <Heading>How to test</Heading>
@@ -457,7 +467,8 @@ function RunDetail({
 
       <section className="space-y-2">
         <Heading>Transcript</Heading>
-        <Transcript runId={run.id} live={live} />
+        <Transcript runId={run.id} live={live} pendingAskId={run.ask?.id ?? null} />
+        {run.ask && <PendingQuestion key={run.ask.id} runId={run.id} ask={run.ask} />}
       </section>
 
       <NextActions

@@ -172,7 +172,15 @@ const Line = memo(function Line({
   }
 })
 
-export function Transcript({ runId, live }: { runId: number; live: boolean }) {
+export function Transcript({
+  runId,
+  live,
+  pendingAskId,
+}: {
+  runId: number
+  live: boolean
+  pendingAskId: number | null
+}) {
   const { data: events, isLoading, error } = useRunEvents(runId)
   const root = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
@@ -186,8 +194,14 @@ export function Transcript({ runId, live }: { runId: number; live: boolean }) {
     [events],
   )
   const visible = useMemo(
-    () => (events ?? []).filter((event) => event.kind !== 'tool_result' && event.kind !== 'result'),
-    [events],
+    () =>
+      (events ?? []).filter(
+        (event) =>
+          event.kind !== 'tool_result' &&
+          event.kind !== 'result' &&
+          !(event.kind === 'ask' && event.payload.askId === pendingAskId),
+      ),
+    [events, pendingAskId],
   )
   const turnStart = useMemo(
     () => (events ?? []).findLast((event) => event.kind === 'status')?.id ?? 0,
@@ -205,7 +219,10 @@ export function Transcript({ runId, live }: { runId: number; live: boolean }) {
     return () => container.removeEventListener('scroll', onScroll)
   }, [])
 
+  const wasLive = useRef(live)
   useLayoutEffect(() => {
+    if (live && !wasLive.current) follow.current = true
+    wasLive.current = live
     if (!live || !follow.current || count === 0) return
     const container = scrollParent(root.current)
     container?.scrollTo({ top: container.scrollHeight })
