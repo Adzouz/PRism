@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { boardView, columnOf, migrateBoard, useBoardStore } from './model'
+import { boardView, columnOf, isOpenDraft, migrateBoard, useBoardStore } from './model'
 
 const filters = {
   reviews: { repoIds: [], starred: false, needsMe: false, showHidden: false, search: '' },
@@ -59,6 +59,14 @@ describe('columnOf', () => {
     expect(columnOf({ tab: 'mine', stage: 'to-review' })).toBe('waiting-review')
     expect(columnOf({ tab: 'mine', stage: 'changes-requested' })).toBe('changes-requested')
     expect(columnOf({ tab: 'reviews', stage: 'to-review' })).toBe('to-review')
+  })
+})
+
+describe('isOpenDraft', () => {
+  it('marks a draft only while it is open', () => {
+    expect(isOpenDraft({ isDraft: true, state: 'OPEN' })).toBe(true)
+    expect(isOpenDraft({ isDraft: true, state: 'CLOSED' })).toBe(false)
+    expect(isOpenDraft({ isDraft: false, state: 'OPEN' })).toBe(false)
   })
 })
 

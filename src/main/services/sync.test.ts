@@ -117,7 +117,7 @@ function fakeApi(fixture: () => Fixture) {
       }
       if (name === 'Refresh') return { nodes: data.nodes ?? [] } as T
       if (name === 'Counts' && data.countsFail) throw new Error('search limit')
-      if (name === 'Latency') return { search: { nodes: [] } } as T
+      if (name === 'Reviews') return { search: { nodes: [] } } as T
       if (name === 'Activity') return {} as T
       if (name === 'Checks') {
         const nodes = [

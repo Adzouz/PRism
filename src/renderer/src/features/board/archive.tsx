@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { usePrs, useSetFlags } from '@/lib/api'
 import { Avatar } from './card'
-import { age, matchesSearch, useBoardStore, useNow } from './model'
+import { age, isOpenDraft, matchesSearch, useBoardStore, useNow } from './model'
 
 export function ArchiveList() {
   const { data: prs = [] } = usePrs()
@@ -50,6 +50,7 @@ export function ArchiveList() {
               </span>
               <span className="truncate text-sm">{pr.title}</span>
             </button>
+            {isOpenDraft(pr) && <Badge>draft</Badge>}
             {pr.state !== 'OPEN' && (
               <Badge variant={pr.state === 'MERGED' ? 'accent' : 'default'}>
                 {pr.state.toLowerCase()}

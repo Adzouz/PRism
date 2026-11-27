@@ -6,6 +6,7 @@ import {
   stageLabels,
   type BoardPr,
   type Dashboard,
+  type ReviewTotals,
   type Run,
   type UsageTotals,
 } from '@shared/domain'
@@ -134,11 +135,62 @@ function Latency({ latency }: { latency: Dashboard['latency'] }) {
   const stats = (label: string, value: Dashboard['latency']['week']) => ({
     label,
     value: value.medianS === null ? '—' : formatDuration(value.medianS),
-    note: value.count === 0 ? 'No reviews' : plural(value.count, 'review'),
+    note: value.count === 0 ? 'No requests answered' : `${plural(value.count, 'request')} answered`,
   })
   return (
     <WindowStats
       windows={[stats('Last 7 days', latency.week), stats('Last 30 days', latency.month)]}
+    />
+  )
+}
+
+type MonthStat = { label: string; month: number | null; week: number | null }
+
+function MonthStats({ stats, className }: { stats: MonthStat[]; className: string }) {
+  return (
+    <div className={cn('grid gap-4', className)}>
+      {stats.map(({ label, month, week }) => (
+        <div key={label} className="space-y-1">
+          <p className="text-sm text-muted-foreground">{label}</p>
+          <p className="text-3xl font-semibold tracking-tight tabular-nums">
+            {month?.toLocaleString('en') ?? '—'}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {week === null ? 'Not fetched yet' : `${week.toLocaleString('en')} in the last 7 days`}
+          </p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const reviewLabels: [keyof ReviewTotals, string][] = [
+  ['reviews', 'Reviews'],
+  ['pullRequests', 'Pull requests reviewed'],
+  ['approvals', 'Approvals'],
+]
+
+function MyReviews({ reviews }: { reviews: Dashboard['myReviews'] }) {
+  return (
+    <MonthStats
+      className="sm:grid-cols-3"
+      stats={reviewLabels.map(([key, label]) => ({
+        label,
+        month: reviews?.month[key] ?? null,
+        week: reviews?.week[key] ?? null,
+      }))}
+    />
+  )
+}
+
+function MyPullRequests({ prs }: { prs: Dashboard['myPullRequests'] }) {
+  return (
+    <MonthStats
+      className="sm:grid-cols-2"
+      stats={[
+        { label: 'Opened', month: prs.month.opened, week: prs.week.opened },
+        { label: 'Merged', month: prs.month.merged, week: prs.week.merged },
+      ]}
     />
   )
 }
@@ -307,6 +359,8 @@ function Agents() {
   )
 }
 
+const chartPanel = 'flex min-w-0 flex-col xl:col-span-2'
+
 export function DashboardOverview() {
   const selected = useDashboardRepo((state) => state.repoId)
   const { data: repos } = useRepos()
@@ -324,41 +378,58 @@ export function DashboardOverview() {
       {data && (
         <>
           <Tiles tiles={data.tiles} />
+          <div className="grid gap-4 xl:grid-cols-5">
+            <Panel
+              title="My reviews"
+              description="Submitted on pull requests by others, last 30 days."
+              className="min-w-0 xl:col-span-3"
+            >
+              <MyReviews reviews={data.myReviews} />
+            </Panel>
+            <Panel
+              title="My pull requests"
+              description="Opened and merged, last 30 days."
+              className="min-w-0 xl:col-span-2"
+            >
+              <MyPullRequests prs={data.myPullRequests} />
+            </Panel>
+          </div>
           <div className="grid gap-4 xl:grid-cols-3">
-            <div className="min-w-0 xl:col-span-2">
-              <Panel title="Pull requests per day" description="Last 14 days, from GitHub search.">
-                <ActivityChart data={data.activity.slice(-14)} />
-              </Panel>
-            </div>
-            <div className="space-y-4">
+            <Panel
+              title="Pull requests per day"
+              description="Last 14 days, from GitHub search."
+              className={chartPanel}
+            >
+              <ActivityChart data={data.activity.slice(-14)} />
+            </Panel>
+            <div className="flex flex-col gap-4">
               <Panel title="Merged pull requests" description="From GitHub search.">
                 <Merged merged={data.merged} />
               </Panel>
               <Panel
                 title="Review latency"
                 description="Median time from a review request to my review."
+                className="flex-1"
               >
                 <Latency latency={data.latency} />
               </Panel>
             </div>
           </div>
           <div className="grid gap-4 xl:grid-cols-3">
-            <div className="min-w-0 xl:col-span-2">
-              <Panel title="Agent cost per day" description="Last 30 days.">
-                {data.usage.month.runs === 0 ? (
-                  <p className="py-10 text-center text-sm text-muted-foreground">
-                    No agent runs in the last 30 days.
-                  </p>
-                ) : (
-                  <CostChart data={data.usage.daily} />
-                )}
-              </Panel>
-            </div>
-            <div className="space-y-4">
+            <Panel title="Agent cost per day" description="Last 30 days." className={chartPanel}>
+              {data.usage.month.runs === 0 ? (
+                <p className="flex flex-1 items-center justify-center py-10 text-sm text-muted-foreground">
+                  No agent runs in the last 30 days.
+                </p>
+              ) : (
+                <CostChart data={data.usage.daily} />
+              )}
+            </Panel>
+            <div className="flex flex-col gap-4">
               <Panel title="Agent usage" description="Reported by the agent, at API prices.">
                 <Usage usage={data.usage} />
               </Panel>
-              <Panel title="Cost by stage" description="Last 30 days.">
+              <Panel title="Cost by stage" description="Last 30 days." className="flex-1">
                 <ByStage stages={data.usage.byStage} />
               </Panel>
             </div>

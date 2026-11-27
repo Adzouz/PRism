@@ -18,17 +18,19 @@ function parseDay(day: string) {
 export const formatDay = (day: string) => dayLabel.format(parseDay(day))
 const formatLongDay = (day: string) => longDayLabel.format(parseDay(day))
 
-function useWidth() {
+function useSize() {
   const ref = useRef<HTMLDivElement>(null)
-  const [width, setWidth] = useState(0)
+  const [size, setSize] = useState({ width: 0, height: 0 })
   useEffect(() => {
     const node = ref.current
     if (!node) return
-    const observer = new ResizeObserver(([entry]) => setWidth(entry?.contentRect.width ?? 0))
+    const observer = new ResizeObserver(([entry]) =>
+      setSize({ width: entry?.contentRect.width ?? 0, height: entry?.contentRect.height ?? 0 }),
+    )
     observer.observe(node)
     return () => observer.disconnect()
   }, [])
-  return [ref, width] as const
+  return [ref, size] as const
 }
 
 function niceMax(value: number, min = 4) {
@@ -60,6 +62,8 @@ function Swatch({ className }: { className: string }) {
 }
 
 const plot = { top: 12, right: 4, bottom: 24, left: 40 }
+
+const barChartHeight = 220
 
 const formatTick = (tick: number) => (Number.isInteger(tick) ? String(tick) : tick.toFixed(1))
 
@@ -154,9 +158,10 @@ function BarChart<T extends DayEntry>({
   format?: (value: number) => string
   formatAxis?: (tick: number) => string
 }) {
-  const [ref, width] = useWidth()
+  const [ref, size] = useSize()
   const [hover, setHover] = useState<number | null>(null)
-  const height = 220
+  const width = size.width
+  const height = Math.max(barChartHeight, size.height)
   const inner = {
     w: Math.max(0, width - plot.left - plot.right),
     h: height - plot.top - plot.bottom,
@@ -181,7 +186,7 @@ function BarChart<T extends DayEntry>({
   const hovered = hover === null ? null : data[hover]
 
   return (
-    <div className="relative space-y-4">
+    <div className="relative flex flex-1 flex-col gap-4">
       {series.length > 1 && (
         <ul className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
           {series.map(({ key, label: name, bg }, index) => (
@@ -193,9 +198,20 @@ function BarChart<T extends DayEntry>({
           ))}
         </ul>
       )}
-      <div ref={ref} className="relative" onMouseLeave={() => setHover(null)}>
+      <div
+        ref={ref}
+        className="relative flex-1"
+        style={{ minHeight: barChartHeight }}
+        onMouseLeave={() => setHover(null)}
+      >
         {width > 0 && (
-          <svg width={width} height={height} role="img" aria-label={label}>
+          <svg
+            width={width}
+            height={height}
+            role="img"
+            aria-label={label}
+            className="absolute inset-0"
+          >
             <YAxis max={max} height={height} width={width} format={formatAxis} />
             {data.map((entry, index) => {
               const x0 = plot.left + index * column
@@ -322,7 +338,7 @@ export function CostChart({ data }: { data: Dashboard['usage']['daily'] }) {
 }
 
 export function TrendChart({ data }: { data: Dashboard['trend'] }) {
-  const [ref, width] = useWidth()
+  const [ref, { width }] = useSize()
   const [hover, setHover] = useState<number | null>(null)
   const height = 200
   const known = data.flatMap((entry, index) =>

@@ -200,7 +200,7 @@ Posting a gate moves the card: review → To approve (GO) or Changes requested (
 
 **Next step:** the drawer header, and the summary of a posted or skipped gate, show a split button for cards in state columns. Its main action moves the loop forward (To review / Waiting review / To re-review → review or re-review run, Changes requested → address on My PRs or To re-review on Reviews, To approve → approve); its menu lists every other run, Approve, and every other state column. On My PRs, a card in To approve that still has unresolved comments (the nits of a GO WITH NITS) also shows **Address N comments** next to **Post GO**.
 
-**Card:** repo chip, `#num`, title, author avatar, stage age, CI dot, labels, size, verdict badge, unresolved threads, star, live spinner, Needs-you glow.
+**Card:** repo chip, `#num`, Draft tag and dashed border while the pull request is a draft, title, author avatar, stage age, CI dot, labels, size, verdict badge, unresolved threads, star, live spinner, Needs-you glow.
 
 **Card actions** (hover + context menu + keyboard):
 - **Star:** pinned at the top of its column, shown by the "Starred" filter.
@@ -280,6 +280,8 @@ Tabs:
 - Stat tiles with Δ% vs yesterday: open PRs, open issues, awaiting my review, my open PRs.
 - Opened / merged / closed per day: exact daily counts from GitHub search date qualifiers, so useful from day 1.
 - Open-total trend: open pull requests at the end of each day (open now and created by then, plus closed after it), from GitHub search, so useful from day 1.
+- My reviews: reviews I submitted on pull requests by others, the pull requests they cover and my approvals (7d / 30d); an approval dismissed by a later push still counts.
+- My pull requests: opened and merged by me (7d / 30d), from GitHub search per day.
 - Review latency: median time from request to my first review (7d / 30d).
 - Needs-you list + running agents strip.
 
@@ -304,7 +306,7 @@ Tabs:
 
 ```
 repos(id, owner, name, local_path, worktree_root, skill_source_id, auto_run, mirador,
-      ignored_checks_json, qa_labels_json, post_mode[submit|draft]?, added_at, last_synced_at)
+      ignored_checks_json, qa_labels_json, post_mode[submit|draft]?, added_at, last_synced_at, reviews_fetched_at)
 skill_sources(id, kind[git|local|builtin], name, url_or_path, local_path, manifest_json, identity,
               setup_at, last_synced_at)
 skills(id, source_id?, name, description, mode[copy|link|custom|linked_file], path, content_hash)
@@ -328,8 +330,9 @@ post_gates(run_id, kind[review|address|replies], mode, event, body, commit_messa
            confirmed_at, posted_at, skipped_at)
 asks(id, run_id, prompt, schema_json, answer_json, created_at, answered_at)
 snapshots(repo_id, day, open_prs, open_issues, awaiting_me, my_open, taken_at)
-activity(repo_id, day, opened, merged, closed, open_prs, fetched_at)
+activity(repo_id, day, opened, merged, closed, open_prs, my_opened, my_merged, fetched_at)
 review_latency(repo_id, pr_node_id, requested_at, reviewed_at)
+my_reviews(id, repo_id, pr_node_id, approved, submitted_at)
 settings(key, value_json)
 ```
 
