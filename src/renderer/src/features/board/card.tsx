@@ -8,6 +8,7 @@ import {
   EyeOff,
   GitCommitHorizontal,
   GitMerge,
+  GitPullRequestDraft,
   Loader2,
   MessageSquare,
   MoveRight,
@@ -42,7 +43,7 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { errorMessage, runStageFor } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { AnswerForm, isLive, statusLabel, verdictLabel } from '../runs/parts'
-import { age, columnOf, hasLiveRun, prSize, readyToPost, type Density } from './model'
+import { age, columnOf, hasLiveRun, isOpenDraft, prSize, readyToPost, type Density } from './model'
 
 export type CardActions = {
   open: (pr: BoardPr) => void
@@ -164,6 +165,7 @@ const conflictLabel = 'Conflicts with its base branch'
 const cardLabel = (pr: BoardPr) =>
   [
     `${pr.repo} #${pr.number} ${pr.title}`,
+    isOpenDraft(pr) ? 'Draft' : null,
     ciLabel[pr.ciState],
     pr.conflicting ? conflictLabel : null,
     runSummary(pr),
@@ -253,6 +255,12 @@ function CardHead({ pr, density }: { pr: BoardPr; density: Density }) {
           density === 'compact' ? 'line-clamp-1' : 'line-clamp-2',
         )}
       >
+        {isOpenDraft(pr) && (
+          <span className="mr-1.5 inline-flex items-center gap-0.5 rounded border border-dashed border-muted-foreground/50 px-1 align-middle text-[10px] leading-4 text-muted-foreground uppercase">
+            <GitPullRequestDraft className="size-3" />
+            Draft
+          </span>
+        )}
         {pr.title}
       </p>
       {density === 'comfortable' && pr.labels.length > 0 && (
@@ -318,9 +326,17 @@ function CardMeta({ pr, now, density }: { pr: BoardPr; now: number; density: Den
 export const cardClass =
   'group relative flex w-full flex-col gap-2 rounded-xl border bg-surface p-3 text-left shadow-xs transition-[box-shadow,opacity]'
 
+const draftBorder = 'border-dashed border-muted-foreground/40'
+
 export function CardPreview({ pr, now, density }: { pr: BoardPr; now: number; density: Density }) {
   return (
-    <div className={cn(cardClass, 'rotate-1 cursor-grabbing shadow-xl ring-2 ring-primary/40')}>
+    <div
+      className={cn(
+        cardClass,
+        'rotate-1 cursor-grabbing shadow-xl ring-2 ring-primary/40',
+        isOpenDraft(pr) && draftBorder,
+      )}
+    >
       <div className="flex flex-col gap-2">
         <CardHead pr={pr} density={density} />
       </div>
@@ -382,6 +398,7 @@ export const PrCard = memo(function PrCard({
           className={cn(
             cardClass,
             'cursor-pointer hover:shadow-md has-[[data-card-body]:focus-visible]:ring-2 has-[[data-card-body]:focus-visible]:ring-ring',
+            isOpenDraft(pr) && draftBorder,
             isDragging && 'opacity-30',
             pr.hidden && 'opacity-60',
             needsMe && 'shadow-[0_0_0_1px_var(--primary),0_0_12px_-4px_var(--primary)]',

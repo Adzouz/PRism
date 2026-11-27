@@ -109,6 +109,9 @@ export const useBoardStore = create<BoardStore>()(
 export const hasLiveRun = (pr: BoardPr) =>
   pr.run !== null && ['queued', 'preparing', 'running', 'needs_you'].includes(pr.run.status)
 
+export const isOpenDraft = (pr: Pick<BoardPr, 'isDraft' | 'state'>) =>
+  pr.isDraft && pr.state === 'OPEN'
+
 export function matchesSearch(pr: BoardPr, search: string) {
   const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean)
   return terms.every((term) => {

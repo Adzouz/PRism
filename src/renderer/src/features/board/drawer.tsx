@@ -30,7 +30,16 @@ import { RunsPanel } from '../runs/runs-panel'
 import { WorktreeFooter } from '../runs/worktree-footer'
 import { Avatar } from './card'
 import { NextStepButton } from './next-step'
-import { age, hasLiveRun, prSize, readyToPost, stageLabel, useBoardStore, useNow } from './model'
+import {
+  age,
+  hasLiveRun,
+  isOpenDraft,
+  prSize,
+  readyToPost,
+  stageLabel,
+  useBoardStore,
+  useNow,
+} from './model'
 
 const reviewTone: Record<string, 'success' | 'destructive' | 'default' | 'accent'> = {
   APPROVED: 'success',
@@ -356,7 +365,7 @@ export function PrDrawer() {
                 <div className="flex items-center gap-2 pr-8 text-sm text-muted-foreground">
                   <span className="font-mono">{pr.repo}</span>
                   <span className="font-mono">#{pr.number}</span>
-                  {pr.isDraft && <Badge>Draft</Badge>}
+                  {isOpenDraft(pr) && <Badge>Draft</Badge>}
                   {pr.state === 'MERGED' && <Badge variant="accent">Merged</Badge>}
                   {pr.state === 'CLOSED' && <Badge variant="destructive">Closed</Badge>}
                   {pr.manual && <Badge variant="accent">Manual stage</Badge>}
