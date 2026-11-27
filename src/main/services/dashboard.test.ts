@@ -4,13 +4,15 @@ import { join, resolve } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { openDb } from '../db/client'
 import { eq } from 'drizzle-orm'
-import { activity, agentUsage, repos, reviewLatency, snapshots } from '../db/schema'
+import { activity, agentUsage, myReviews, repos, reviewLatency, snapshots } from '../db/schema'
 import type { Ctx } from './context'
 import {
   getDashboard,
   latencySamples,
   refreshActivity,
-  refreshLatency,
+  refreshDashboard,
+  refreshReviews,
+  reviewsDone,
   type TimelineItem,
 } from './dashboard'
 import { addDays, dayRange, lastDays, localDay } from './days'
@@ -60,6 +62,9 @@ function fakeApi(respond: (name: string, variables: Record<string, string>) => u
   }
   return { api, calls }
 }
+
+const getRepoRow = (ctx: Ctx, id: number) =>
+  ctx.db.select().from(repos).where(eq(repos.id, id)).get()!
 
 const requested = (at: string, reviewer: string, type: 'User' | 'Team' = 'User') =>
   ({
@@ -166,7 +171,7 @@ describe('refreshActivity', () => {
     const now = Date.parse('2026-11-16T14:00:00+01:00')
     await refreshActivity(ctx, api, app, now)
     expect(calls).toHaveLength(5)
-    expect(Object.keys(calls[0]!.variables)).toHaveLength(30)
+    expect(Object.keys(calls[0]!.variables)).toHaveLength(42)
     const end = '2026-11-16T23:59:59+01:00'
     const today = (index: number) => ({
       [`opened${index}`]: `repo:acme/app is:pr created:${dayRange('2026-11-16')}`,
@@ -174,11 +179,20 @@ describe('refreshActivity', () => {
       [`closed${index}`]: `repo:acme/app is:pr is:unmerged closed:${dayRange('2026-11-16')}`,
       [`openNow${index}`]: `repo:acme/app is:pr is:open created:<=${end}`,
       [`closedLater${index}`]: `repo:acme/app is:pr closed:>${end} created:<=${end}`,
+      [`myOpened${index}`]: `repo:acme/app is:pr author:@me created:${dayRange('2026-11-16')}`,
+      [`myMerged${index}`]: `repo:acme/app is:pr author:@me merged:${dayRange('2026-11-16')}`,
     })
     expect(calls[4]!.variables).toMatchObject(today(5))
     const rows = ctx.db.select().from(activity).all()
     expect(rows).toHaveLength(30)
-    expect(rows[0]).toMatchObject({ opened: 2, merged: 1, closed: 1, openPrs: 2 })
+    expect(rows[0]).toMatchObject({
+      opened: 2,
+      merged: 1,
+      closed: 1,
+      openPrs: 2,
+      myOpened: 1,
+      myMerged: 1,
+    })
 
     calls.length = 0
     await expect(refreshActivity(ctx, api, app, now + 10 * 60_000)).resolves.toBe(false)
@@ -192,6 +206,12 @@ describe('refreshActivity', () => {
     await refreshActivity(ctx, api, app, now + hour)
     expect(Object.keys(calls[0]!.variables)).toContain('openNow0')
     expect(calls[0]!.variables.openNow0).toContain('created:<=2026-11-01T23:59:59+01:00')
+
+    calls.length = 0
+    ctx.db.update(activity).set({ myMerged: null }).where(eq(activity.day, '2026-11-02')).run()
+    await refreshActivity(ctx, api, app, now + hour)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.variables.myMerged0).toContain(dayRange('2026-11-02'))
   })
 
   it('waits between fetches of a past day that is not final yet', async () => {
@@ -218,21 +238,96 @@ describe('refreshActivity', () => {
   })
 })
 
-describe('refreshLatency', () => {
-  it('replaces the samples of each reviewed pull request', async () => {
-    const { ctx, app } = await makeCtx()
+describe('reviewsDone', () => {
+  it('keeps submitted reviews and counts a dismissed approval as an approval', () => {
+    const at = (day: number) => `2026-11-${day}T12:00:00Z`
+    expect(
+      reviewsDone(
+        [
+          { id: 'A', state: 'APPROVED', submittedAt: at(10) },
+          { id: 'B', state: 'DISMISSED', submittedAt: at(11) },
+          { id: 'C', state: 'DISMISSED', submittedAt: at(12) },
+          { id: 'D', state: 'COMMENTED', submittedAt: at(13) },
+          { id: 'E', state: 'CHANGES_REQUESTED', submittedAt: at(14) },
+          { id: 'F', state: 'PENDING', submittedAt: null },
+        ],
+        [
+          { previousReviewState: 'APPROVED', review: { id: 'B' } },
+          { previousReviewState: 'CHANGES_REQUESTED', review: { id: 'C' } },
+          { previousReviewState: 'APPROVED', review: null },
+        ],
+      ),
+    ).toEqual([
+      { id: 'A', approved: true, submittedAt: Date.parse(at(10)) },
+      { id: 'B', approved: true, submittedAt: Date.parse(at(11)) },
+      { id: 'C', approved: false, submittedAt: Date.parse(at(12)) },
+      { id: 'D', approved: false, submittedAt: Date.parse(at(13)) },
+      { id: 'E', approved: false, submittedAt: Date.parse(at(14)) },
+    ])
+  })
+})
+
+describe('refreshReviews', () => {
+  const now = Date.parse('2026-11-16T14:00:00+01:00')
+  const query =
+    'repo:acme/app is:pr reviewed-by:@me -author:@me updated:>=2026-10-17 sort:updated-desc'
+
+  it('replaces the latency samples and reviews of each reviewed pull request, page by page', async () => {
+    const { ctx, app, docs } = await makeCtx()
+    const old = (id: string, repoId: number) => ({
+      id,
+      repoId,
+      prNodeId: 'PR_OLD',
+      approved: true,
+      submittedAt: Date.parse('2026-10-01T12:00:00Z'),
+    })
+    ctx.db
+      .insert(myReviews)
+      .values([old('R_OLD', app.id), old('R_DOCS', docs.id)])
+      .run()
     let items: TimelineItem[] = [
       requested('2026-11-10T10:00:00Z', me),
       review('2026-11-10T12:00:00Z', me),
     ]
-    const { api, calls } = fakeApi(() => ({
-      search: { nodes: [{ id: 'PR_1', timelineItems: { nodes: items } }, {}, null] },
-    }))
-    const now = Date.parse('2026-11-16T14:00:00+01:00')
-    await refreshLatency(ctx, api, app, me, now)
-    expect(calls[0]!.variables.q).toBe(
-      'repo:acme/app is:pr reviewed-by:@me -author:@me updated:>=2026-10-17 sort:updated-desc',
+    let reviews = [{ id: 'R1', state: 'APPROVED', submittedAt: '2026-11-10T12:00:00Z' }]
+    const { api, calls } = fakeApi((_, variables) =>
+      variables.after
+        ? {
+            search: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  id: 'PR_2',
+                  timelineItems: { nodes: [] },
+                  reviews: {
+                    nodes: [
+                      { id: 'R2', state: 'DISMISSED', submittedAt: '2026-11-12T09:00:00Z' },
+                      { id: 'R3', state: 'PENDING', submittedAt: null },
+                    ],
+                  },
+                  dismissals: {
+                    nodes: [{ previousReviewState: 'APPROVED', review: { id: 'R2' } }],
+                  },
+                },
+              ],
+            },
+          }
+        : {
+            search: {
+              pageInfo: { hasNextPage: true, endCursor: 'page-2' },
+              nodes: [
+                { id: 'PR_1', timelineItems: { nodes: items }, reviews: { nodes: reviews } },
+                {},
+                null,
+              ],
+            },
+          },
     )
+    await refreshReviews(ctx, api, app, me, now)
+    expect(calls.map((call) => call.variables)).toEqual([
+      { q: query, login: me, after: null },
+      { q: query, login: me, after: 'page-2' },
+    ])
     expect(ctx.db.select().from(reviewLatency).all()).toEqual([
       {
         repoId: app.id,
@@ -241,9 +336,61 @@ describe('refreshLatency', () => {
         reviewedAt: Date.parse('2026-11-10T12:00:00Z'),
       },
     ])
+    const mine = (id: string, prNodeId: string, approved: boolean, at: string) => ({
+      id,
+      repoId: app.id,
+      prNodeId,
+      approved,
+      submittedAt: Date.parse(at),
+    })
+    const stored = () => ctx.db.select().from(myReviews).orderBy(myReviews.id).all()
+    expect(stored()).toEqual([
+      mine('R1', 'PR_1', true, '2026-11-10T12:00:00Z'),
+      mine('R2', 'PR_2', true, '2026-11-12T09:00:00Z'),
+      old('R_DOCS', docs.id),
+    ])
+    expect(getRepoRow(ctx, app.id).reviewsFetchedAt).toBe(now)
+    expect(getRepoRow(ctx, docs.id).reviewsFetchedAt).toBeNull()
+
     items = [requested('2026-11-10T10:00:00Z', me), removed('2026-11-10T11:00:00Z', me)]
-    await refreshLatency(ctx, api, app, me, now)
+    reviews = [{ id: 'R4', state: 'CHANGES_REQUESTED', submittedAt: '2026-11-15T08:00:00Z' }]
+    await refreshReviews(ctx, api, app, me, now)
     expect(ctx.db.select().from(reviewLatency).all()).toEqual([])
+    expect(stored()).toEqual([
+      mine('R2', 'PR_2', true, '2026-11-12T09:00:00Z'),
+      mine('R4', 'PR_1', false, '2026-11-15T08:00:00Z'),
+      old('R_DOCS', docs.id),
+    ])
+  })
+})
+
+describe('refreshDashboard', () => {
+  it("fetches my reviews with today's activity, and right away when they were never fetched", async () => {
+    const { ctx, app } = await makeCtx()
+    const now = Date.parse('2026-11-16T14:00:00+01:00')
+    ctx.db
+      .insert(activity)
+      .values(
+        lastDays(localDay(now), 30).map((day) => ({
+          repoId: app.id,
+          day,
+          opened: 0,
+          merged: 0,
+          closed: 0,
+          openPrs: 0,
+          myOpened: 0,
+          myMerged: 0,
+          fetchedAt: now,
+        })),
+      )
+      .run()
+    const { api, calls } = fakeApi(() => ({ search: { nodes: [] } }))
+    await refreshDashboard(ctx, api, app, me, now)
+    expect(calls.map((call) => call.name)).toEqual(['Reviews'])
+    await refreshDashboard(ctx, api, app, me, now + 60_000)
+    expect(calls.map((call) => call.name)).toEqual(['Reviews'])
+    await refreshDashboard(ctx, api, app, me, now + 31 * 60_000)
+    expect(calls.map((call) => call.name)).toEqual(['Reviews', 'Activity', 'Reviews'])
   })
 })
 
@@ -373,6 +520,41 @@ describe('getDashboard', () => {
     })
   })
 
+  it('counts my reviews, reviewed pull requests and approvals once every picked repository was fetched', async () => {
+    const { ctx, app, docs } = await makeCtx()
+    const mine = (
+      id: string,
+      repoId: number,
+      prNodeId: string,
+      daysAgo: number,
+      approved: boolean,
+    ) => ({ id, repoId, prNodeId, approved, submittedAt: now - daysAgo * 24 * hour })
+    ctx.db
+      .insert(myReviews)
+      .values([
+        mine('R1', app.id, 'A', 1, false),
+        mine('R2', app.id, 'A', 2, true),
+        mine('R3', app.id, 'B', 5, true),
+        mine('R4', docs.id, 'C', 10, false),
+        mine('R5', docs.id, 'D', 40, true),
+      ])
+      .run()
+    const fetched = (repoId: number) =>
+      ctx.db.update(repos).set({ reviewsFetchedAt: now }).where(eq(repos.id, repoId)).run()
+    expect(getDashboard(ctx, { repoId: null }, now).myReviews).toBeNull()
+    fetched(app.id)
+    expect(getDashboard(ctx, { repoId: null }, now).myReviews).toBeNull()
+    expect(getDashboard(ctx, { repoId: app.id }, now).myReviews).toEqual({
+      week: { reviews: 3, pullRequests: 2, approvals: 2 },
+      month: { reviews: 3, pullRequests: 2, approvals: 2 },
+    })
+    fetched(docs.id)
+    expect(getDashboard(ctx, { repoId: null }, now).myReviews).toEqual({
+      week: { reviews: 3, pullRequests: 2, approvals: 2 },
+      month: { reviews: 4, pullRequests: 3, approvals: 2 },
+    })
+  })
+
   it('sums merged pull requests per week and month, empty while a day is missing', async () => {
     const { ctx, app, docs } = await makeCtx()
     const days = lastDays(localDay(now), 30)
@@ -403,6 +585,42 @@ describe('getDashboard', () => {
       week: total(appCounts.slice(-7)) + 7,
       previousWeek: total(appCounts.slice(-14, -7)) + 7,
       month: null,
+    })
+  })
+
+  it('sums the pull requests I opened and merged per week and month, empty while a day is missing', async () => {
+    const { ctx, app, docs } = await makeCtx()
+    const days = lastDays(localDay(now), 30)
+    const row = (
+      repoId: number,
+      day: string,
+      myOpened: number | null,
+      myMerged: number | null,
+    ) => ({
+      repoId,
+      day,
+      opened: 0,
+      merged: 0,
+      closed: 0,
+      openPrs: 0,
+      myOpened,
+      myMerged,
+      fetchedAt: now,
+    })
+    ctx.db
+      .insert(activity)
+      .values([
+        ...days.map((day) => row(app.id, day, 1, day === days[0] ? 2 : 0)),
+        ...days.map((day) => row(docs.id, day, 0, day === days[1] ? null : 1)),
+      ])
+      .run()
+    expect(getDashboard(ctx, { repoId: null }, now).myPullRequests).toEqual({
+      week: { opened: 7, merged: 7 },
+      month: { opened: 30, merged: null },
+    })
+    expect(getDashboard(ctx, { repoId: app.id }, now).myPullRequests).toEqual({
+      week: { opened: 7, merged: 0 },
+      month: { opened: 30, merged: 2 },
     })
   })
 

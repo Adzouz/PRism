@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import { errorMessage } from '@/lib/api'
+import { cn } from '@/lib/utils'
 
 export function Page({
   eyebrow,
@@ -76,18 +77,23 @@ export function Panel({
   description,
   status,
   disabled = false,
+  className,
   children,
 }: {
   title: string
   description?: ReactNode
   status?: ReactNode
   disabled?: boolean
+  className?: string
   children?: ReactNode
 }) {
   return (
     <section
       aria-disabled={disabled}
-      className="space-y-4 rounded-2xl bg-surface p-5 aria-disabled:pointer-events-none aria-disabled:opacity-50"
+      className={cn(
+        'space-y-4 rounded-2xl bg-surface p-5 aria-disabled:pointer-events-none aria-disabled:opacity-50',
+        className,
+      )}
     >
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">

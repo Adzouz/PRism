@@ -43,6 +43,7 @@ export const repos = sqliteTable(
     postMode: text('post_mode', { enum: ['submit', 'draft'] }),
     addedAt: integer('added_at').notNull(),
     lastSyncedAt: integer('last_synced_at'),
+    reviewsFetchedAt: integer('reviews_fetched_at'),
   },
   (t) => [uniqueIndex('repos_owner_name').on(t.owner, t.name)],
 )
@@ -157,6 +158,8 @@ export const activity = sqliteTable(
     merged: integer('merged').notNull(),
     closed: integer('closed').notNull(),
     openPrs: integer('open_prs'),
+    myOpened: integer('my_opened'),
+    myMerged: integer('my_merged'),
     fetchedAt: integer('fetched_at').notNull(),
   },
   (t) => [primaryKey({ columns: [t.repoId, t.day] })],
@@ -176,6 +179,20 @@ export const reviewLatency = sqliteTable(
     primaryKey({ columns: [t.prNodeId, t.requestedAt] }),
     index('review_latency_reviewed').on(t.reviewedAt),
   ],
+)
+
+export const myReviews = sqliteTable(
+  'my_reviews',
+  {
+    id: text('id').primaryKey(),
+    repoId: integer('repo_id')
+      .notNull()
+      .references(() => repos.id, { onDelete: 'cascade' }),
+    prNodeId: text('pr_node_id').notNull(),
+    approved: integer('approved', { mode: 'boolean' }).notNull(),
+    submittedAt: integer('submitted_at').notNull(),
+  },
+  (t) => [index('my_reviews_submitted').on(t.submittedAt)],
 )
 
 export const runs = sqliteTable(

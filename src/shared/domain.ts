@@ -756,6 +756,13 @@ const usageTotals = z.object({
   runs: z.number(),
 })
 export type UsageTotals = z.infer<typeof usageTotals>
+const reviewTotals = z.object({
+  reviews: z.number(),
+  pullRequests: z.number(),
+  approvals: z.number(),
+})
+export type ReviewTotals = z.infer<typeof reviewTotals>
+const pullRequestTotals = z.object({ opened: count, merged: count })
 
 export const dashboard = z.object({
   today: z.string(),
@@ -763,6 +770,8 @@ export const dashboard = z.object({
   trend: z.array(z.object({ day: z.string(), openPrs: count })),
   activity: z.array(z.object({ day: z.string(), opened: count, merged: count, closed: count })),
   latency: z.object({ week: latencyWindow, month: latencyWindow }),
+  myReviews: z.object({ week: reviewTotals, month: reviewTotals }).nullable(),
+  myPullRequests: z.object({ week: pullRequestTotals, month: pullRequestTotals }),
   merged: z.object({ week: count, previousWeek: count, month: count }),
   usage: z.object({
     week: usageTotals,

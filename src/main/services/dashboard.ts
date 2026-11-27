@@ -1,13 +1,14 @@
-import { and, eq, gte, inArray } from 'drizzle-orm'
+import { and, eq, gte, inArray, lt } from 'drizzle-orm'
 import {
   stages,
   type Dashboard,
   type DashboardMetric,
   type Repo,
+  type ReviewTotals,
   type Stage,
   type UsageTotals,
 } from '@shared/domain'
-import { activity, agentUsage, reviewLatency, snapshots } from '../db/schema'
+import { activity, agentUsage, myReviews, repos, reviewLatency, snapshots } from '../db/schema'
 import type { Ctx } from './context'
 import { addDays, dayEnd, dayRange, dayStart, lastDays, localDay } from './days'
 import type { GithubApi } from './gh-api'
@@ -27,6 +28,8 @@ const activityKinds = {
   closed: (day: string) => `is:pr is:unmerged closed:${dayRange(day)}`,
   openNow: (day: string) => `is:pr is:open created:<=${dayEnd(day)}`,
   closedLater: (day: string) => `is:pr closed:>${dayEnd(day)} created:<=${dayEnd(day)}`,
+  myOpened: (day: string) => `is:pr author:@me created:${dayRange(day)}`,
+  myMerged: (day: string) => `is:pr author:@me merged:${dayRange(day)}`,
 } as const
 
 type ActivityKind = keyof typeof activityKinds
@@ -58,7 +61,7 @@ export async function refreshActivity(ctx: Ctx, api: GithubApi, repo: Repo, now:
   )
   const due = days.filter((day) => {
     const row = known.get(day)
-    if (!row || row.openPrs === null) return true
+    if (!row || row.openPrs === null || row.myOpened === null || row.myMerged === null) return true
     if (now - row.fetchedAt < refreshEvery) return false
     return day === today || !isFinal(day, row.fetchedAt)
   })
@@ -83,6 +86,8 @@ export async function refreshActivity(ctx: Ctx, api: GithubApi, repo: Repo, now:
         merged: count('merged', index),
         closed: count('closed', index),
         openPrs: count('openNow', index) + count('closedLater', index),
+        myOpened: count('myOpened', index),
+        myMerged: count('myMerged', index),
         fetchedAt: now,
       }
       ctx.db
@@ -140,11 +145,32 @@ export function latencySamples(items: TimelineItem[], login: string) {
   return samples
 }
 
+export type MyReview = { id: string; state: string; submittedAt: string | null }
+
+export type ReviewDismissal = { previousReviewState?: string; review?: { id: string } | null }
+
+export function reviewsDone(reviews: MyReview[], dismissals: ReviewDismissal[]) {
+  const dismissedApprovals = new Set(
+    dismissals.flatMap((event) =>
+      event.previousReviewState === 'APPROVED' && event.review ? [event.review.id] : [],
+    ),
+  )
+  return reviews.flatMap((review) => {
+    const submittedAt = Date.parse(review.submittedAt ?? '')
+    if (review.state === 'PENDING' || Number.isNaN(submittedAt)) return []
+    const approved =
+      review.state === 'APPROVED' ||
+      (review.state === 'DISMISSED' && dismissedApprovals.has(review.id))
+    return [{ id: review.id, approved, submittedAt }]
+  })
+}
+
 const reviewerFields = `requestedReviewer { __typename ... on User { login } ... on Team { slug } }`
 
-const latencyQuery = `
-  query Latency($q: String!) {
-    search(query: $q, type: ISSUE, first: 50) {
+const reviewsQuery = `
+  query Reviews($q: String!, $login: String!, $after: String) {
+    search(query: $q, type: ISSUE, first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         ... on PullRequest {
           id
@@ -159,15 +185,31 @@ const latencyQuery = `
               ... on PullRequestReview { submittedAt author { login } }
             }
           }
+          reviews(author: $login, last: 50) { nodes { id state submittedAt } }
+          dismissals: timelineItems(last: 50, itemTypes: [REVIEW_DISMISSED_EVENT]) {
+            nodes { ... on ReviewDismissedEvent { previousReviewState review { id } } }
+          }
         }
       }
     }
   }
 `
 
-type LatencyPr = { id?: string; timelineItems?: { nodes: (TimelineItem | null)[] } }
+type Connection<T> = { nodes: (T | null)[] }
 
-export async function refreshLatency(
+type ReviewedPr = {
+  id?: string
+  timelineItems?: Connection<TimelineItem>
+  reviews?: Connection<MyReview>
+  dismissals?: Connection<ReviewDismissal>
+}
+
+const nodesOf = <T>(connection: Connection<T> | undefined) =>
+  (connection?.nodes ?? []).filter((node): node is T => !!node)
+
+const maxReviewPages = 10
+
+export async function refreshReviews(
   ctx: Ctx,
   api: GithubApi,
   repo: Repo,
@@ -175,23 +217,54 @@ export async function refreshLatency(
   now: number,
 ) {
   const since = addDays(localDay(now), -activityDays)
-  const data = await api.graphql<{ search: { nodes: (LatencyPr | null)[] } }>(latencyQuery, {
-    q: `repo:${slug(repo)} is:pr reviewed-by:@me -author:@me updated:>=${since} sort:updated-desc`,
-  })
-  const found = data.search.nodes.filter(
-    (node): node is Required<LatencyPr> => !!node?.id && !!node.timelineItems,
-  )
+  const q = `repo:${slug(repo)} is:pr reviewed-by:@me -author:@me updated:>=${since} sort:updated-desc`
+  const found: (ReviewedPr & { id: string })[] = []
+  let after: string | null = null
+  for (let page = 0; page < maxReviewPages; page++) {
+    const data: {
+      search: {
+        pageInfo?: { hasNextPage: boolean; endCursor: string | null }
+        nodes: (ReviewedPr | null)[]
+      }
+    } = await api.graphql(reviewsQuery, { q, login, after })
+    found.push(
+      ...data.search.nodes.filter(
+        (node): node is ReviewedPr & { id: string } => !!node?.id && !!node.timelineItems,
+      ),
+    )
+    const next = data.search.pageInfo
+    if (!next?.hasNextPage || !next.endCursor) break
+    after = next.endCursor
+  }
   ctx.db.transaction((tx) => {
     for (const pr of found) {
       tx.delete(reviewLatency).where(eq(reviewLatency.prNodeId, pr.id)).run()
-      const items = pr.timelineItems.nodes.filter((item): item is TimelineItem => !!item)
-      for (const sample of latencySamples(items, login)) {
+      for (const sample of latencySamples(nodesOf(pr.timelineItems), login)) {
         tx.insert(reviewLatency)
           .values({ repoId: repo.id, prNodeId: pr.id, ...sample })
           .run()
       }
+      tx.delete(myReviews).where(eq(myReviews.prNodeId, pr.id)).run()
+      for (const review of reviewsDone(nodesOf(pr.reviews), nodesOf(pr.dismissals))) {
+        tx.insert(myReviews)
+          .values({ repoId: repo.id, prNodeId: pr.id, ...review })
+          .run()
+      }
     }
+    tx.delete(myReviews)
+      .where(and(eq(myReviews.repoId, repo.id), lt(myReviews.submittedAt, dayStart(since))))
+      .run()
+    tx.update(repos).set({ reviewsFetchedAt: now }).where(eq(repos.id, repo.id)).run()
   })
+}
+
+function reviewsFetchedAt(ctx: Ctx, repoId: number) {
+  const row = ctx.db
+    .select({ at: repos.reviewsFetchedAt })
+    .from(repos)
+    .where(eq(repos.id, repoId))
+    .get()
+  return row?.at ?? null
 }
 
 export async function refreshDashboard(
@@ -201,7 +274,10 @@ export async function refreshDashboard(
   login: string,
   now: number,
 ) {
-  if (await refreshActivity(ctx, api, repo, now)) await refreshLatency(ctx, api, repo, login, now)
+  const todayFetched = await refreshActivity(ctx, api, repo, now)
+  if (todayFetched || reviewsFetchedAt(ctx, repo.id) === null) {
+    await refreshReviews(ctx, api, repo, login, now)
+  }
 }
 
 const metrics: DashboardMetric[] = ['openPrs', 'awaitingMe', 'myOpen', 'openIssues']
@@ -219,6 +295,8 @@ function median(values: number[]) {
 function windowSum(values: (number | null)[]) {
   return values.some((value) => value === null) ? null : sum(values as number[])
 }
+
+type ActivityRow = typeof activity.$inferSelect
 
 type UsageRow = typeof agentUsage.$inferSelect
 
@@ -305,11 +383,20 @@ export function getDashboard(
       closed: sum(rows.map((row) => row.closed)),
     }
   })
-  const trend = period.map((target) => {
+  const fetchedTotal = (target: string, pick: (row: ActivityRow) => number | null) => {
     const rows = rowsOf(target)
-    const open = rows.flatMap((row) => (row.openPrs === null ? [] : [row.openPrs]))
-    return { day: target, openPrs: open.length === rows.length ? sum(open) : null }
-  })
+    const values = rows.flatMap((row) => {
+      const value = pick(row)
+      return value === null ? [] : [value]
+    })
+    return values.length === rows.length ? sum(values) : null
+  }
+  const trend = period.map((target) => ({
+    day: target,
+    openPrs: fetchedTotal(target, (row) => row.openPrs),
+  }))
+  const myOpened = period.map((target) => fetchedTotal(target, (row) => row.myOpened))
+  const myMerged = period.map((target) => fetchedTotal(target, (row) => row.myMerged))
 
   const samples = ctx.db
     .select()
@@ -328,6 +415,28 @@ export function getDashboard(
     return { medianS: median(within), count: within.length }
   }
 
+  const reviewsFetched = ctx.db
+    .select({ at: repos.reviewsFetchedAt })
+    .from(repos)
+    .where(inArray(repos.id, repoIds))
+    .all()
+    .every((row) => row.at !== null)
+  const reviewRows = ctx.db
+    .select()
+    .from(myReviews)
+    .where(
+      and(inArray(myReviews.repoId, repoIds), gte(myReviews.submittedAt, dayStart(period[0]!))),
+    )
+    .all()
+  const reviewTotals = (days: string[]): ReviewTotals => {
+    const within = reviewRows.filter((row) => days.includes(localDay(row.submittedAt)))
+    return {
+      reviews: within.length,
+      pullRequests: new Set(within.map((row) => row.prNodeId)).size,
+      approvals: within.filter((row) => row.approved).length,
+    }
+  }
+
   const merged = activitySeries.map((entry) => entry.merged)
   const usageRows = ctx.db
     .select()
@@ -341,6 +450,13 @@ export function getDashboard(
     trend,
     activity: activitySeries,
     latency: { week: latency(7), month: latency(30) },
+    myReviews: reviewsFetched
+      ? { week: reviewTotals(period.slice(-7)), month: reviewTotals(period) }
+      : null,
+    myPullRequests: {
+      week: { opened: windowSum(myOpened.slice(-7)), merged: windowSum(myMerged.slice(-7)) },
+      month: { opened: windowSum(myOpened), merged: windowSum(myMerged) },
+    },
     merged: {
       week: windowSum(merged.slice(-7)),
       previousWeek: windowSum(merged.slice(-14, -7)),
